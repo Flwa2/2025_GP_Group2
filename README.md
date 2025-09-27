@@ -14,8 +14,8 @@ WeCast is an AI-powered web application designed to simplify the podcast creatio
 - Backend & Database: Flask, Firebase, Firebase Storage.
 - Authentication & Notifications: Firebase Authentication, Nodemailer.
 ## Launching Instructions
-- Accessing the Website: Users will be able to directly access WeCast through the hosted link we will provide. No installation or setup is required.
-- Viewing the Source Code:
+- **Accessing the Website:** Users will be able to directly access WeCast through the hosted link we will provide. No installation or setup is required.
+- **Viewing the Source Code:**
   
   1- Clone the repository and install dependencies
   
