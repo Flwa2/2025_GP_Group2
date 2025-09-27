@@ -16,5 +16,7 @@ WeCast is an AI-powered web application designed to simplify the podcast creatio
 ## Launching Instructions
 - Accessing the Website: Users will be able to directly access WeCast through the hosted link we will provide. No installation or setup is required.
 - Viewing the Source Code:
+  
   1- Clone the repository and install dependencies
+  
   2- Open the project in Visual Studio Code (or any IDE) to browse through the codebase.
