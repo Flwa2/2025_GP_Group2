@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WeCast • Home</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
+  <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="text-white bg-slate-900 bg-grid min-h-screen flex flex-col fade-in">
+
+  <!-- Header -->
+  <header class="app-header">
+    <a href="{{ url_for('home') }}" class="logo-link">
+      <img src="{{ url_for('static', filename='logo.png') }}" alt="WeCast Logo" class="app-logo">
+      <span class="logo-text">WeCast</span>
+    </a>
+  </header>
+
+ 
+  <section class="flex-grow flex flex-col justify-center items-center text-center px-6">
+    <h2 data-aos="fade-up" class="text-4xl md:text-6xl font-extrabold mb-6 leading-tight">
+      Create Engaging Podcasts<br>with <span class="text-emerald-400">AI-Generated Scripts</span>
+    </h2>
+    <p data-aos="fade-up" data-aos-delay="100" class="max-w-2xl text-slate-300 mb-12">
+      Turn your ideas into captivating podcast dialogues. Choose your speakers, define the tone, and let WeCast structure your content beautifully.
+    </p>
+    <div data-aos="zoom-in" data-aos-delay="200">
+<a href="{{ url_for('create_page') }}" class="start-btn page-link">Start Creating</a>
+    </div>
+  </section>
+
+  <footer class="text-center text-slate-400 py-6 text-sm">© 2025 WeCast • AI Podcast Generator</footer>
+
+  <script>AOS.init({ once:true, duration:600 });</script>
+</body>
+</html>
