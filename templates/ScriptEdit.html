@@ -41,15 +41,14 @@
       </div>
     </div>
 
-    <div class="form-card">
-      <div class="guidelines-box">
-        <h2>Editing Guidelines</h2>
-        <ul>
-          <li>Do not delete speaker names or their entire lines.</li>
-          <li>Do not clear the whole script.</li>
-          <li>You can only edit words after the speaker’s name.</li>
-        </ul>
-      </div>
+<div class="guidelines-box">
+  <h2>Editing Guidelines</h2>
+  <ul class="guidelines-list">
+    <li><span class="num">1</span> Keep speaker names (e.g., <code>Host:</code>, <code>Guest:</code>). Don’t delete or rename them.</li>
+    <li><span class="num">2</span> Edit only the words after the colon on each line. Keep one speaker per line.</li>
+    <li><span class="num">3</span> Don’t clear the whole script or remove an entire speaker’s part.</li>
+  </ul>
+</div>
 
       {% if error %}
         <div class="error-msg">{{ error }}</div>
@@ -64,13 +63,17 @@
           <textarea id="scriptEditor" name="edited_script" style="width:100%; min-height:48vh; line-height:1.55; resize:vertical; box-sizing:border-box;">{{ script or '' }}</textarea>
         </div>
 
-<div class="save-section" style="display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; margin-top:14px;">
-        <div class="flex-left" style="display:flex; gap:10px; align-items:center;">
-          <a href="{{ url_for('create_page') }}?step=2&restore=1" class="secondary-btn">Back to Text</a>
-          <button id="saveBtn" type="button" class="generate-btn">Save Script</button>
-        </div>
-        <span id="saveStatus" class="save-status">Not saved yet</span>
-      </div>
+<div class="save-section">
+  <div class="btn-row">
+    <a href="{{ url_for('create_page') }}?step=2&restore=1"
+       class="secondary-btn btn-equal">Back to Text</a>
+    <button id="saveBtn" type="button"
+            class="btn-primary btn-equal">Save Script</button>
+  </div>
+  <span id="saveStatus" class="save-status">Not saved yet</span>
+</div>
+
+
 
 
       </form>

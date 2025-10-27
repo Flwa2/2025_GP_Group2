@@ -6,6 +6,50 @@
   <title>WeCast • Create Podcast Script</title>
   <link rel="icon" type="image/png" href="{{ url_for('static', filename='logo.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+  <style>
+    /* tiny animation */
+    @keyframes popIn { from { transform: scale(.98); opacity: 0 } to { transform: scale(1); opacity: 1 } }
+
+    /* ===== Modal base ===== */
+    #confirmModal.hidden { display: none; }
+    #confirmModal.flex   { display: flex; }
+
+    /* prevent layout jump when modal opens (keeps space for scrollbar) */
+    body.modal-open {
+      overflow-y: hidden;
+      padding-right: var(--scrollbar-comp, 0);
+    }
+
+    /* full-screen overlay container (center the dialog) */
+    #confirmModal {
+      position: fixed; inset: 0; z-index: 50;
+      align-items: center; justify-content: center; /* center! */
+    }
+    #confirmModal .overlay {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,.6);
+      backdrop-filter: blur(2px);
+    }
+    #confirmModal .dialog {
+      position: relative;
+      width: 92%; max-width: 560px;
+      background: #1f2937;  /* slate-800 */
+      color: #e5e7eb;       /* slate-200 */
+      border-radius: 16px; padding: 24px;
+      border: 1px solid rgba(16,185,129,.3); /* emerald-500/30 */
+      box-shadow: 0 20px 50px rgba(0,0,0,.45);
+      animation: popIn .25s ease;
+    }
+    #confirmModal .brand { display:flex; align-items:center; gap:12px; margin-bottom:8px; }
+    #confirmModal .brand h2 { margin:0; font-size:18px; font-weight:600; color:#34d399; } /* emerald-400 */
+    #confirmModal .actions { display:flex; gap:10px; justify-content:flex-end; margin-top:18px; }
+    #confirmModal .btn { padding:10px 16px; border:0; border-radius:12px; cursor:pointer; font-weight:600; }
+    #confirmModal .btn-cancel { background:#374151; color:#e5e7eb; }      /* slate-700 */
+    #confirmModal .btn-cancel:hover { background:#4b5563; }               /* slate-600 */
+    #confirmModal .btn-confirm { background:#10b981; color:#0f172a; }     /* emerald-500 */
+    #confirmModal .btn-confirm:hover { background:#34d399; }              /* emerald-400 */
+  </style>
 </head>
 
 <body class="bg-app">
@@ -26,16 +70,12 @@
         <div id="wiz-1" class="wizard-dot wiz-active">1</div>
         <div class="wizard-label">Settings</div>
       </div>
-
       <div id="line-12" class="wizard-line wizard-line--on"></div>
-
       <div class="wizard-step">
         <div id="wiz-2" class="wizard-dot wiz-pending">2</div>
         <div class="wizard-label">Text</div>
       </div>
-
       <div id="line-23" class="wizard-line"></div>
-
       <div class="wizard-step">
         <div id="wiz-3" class="wizard-dot wiz-pending">3</div>
         <div class="wizard-label">Edit</div>
@@ -114,10 +154,10 @@
           {% endif %}
 
           <!-- Step 1 buttons -->
-          <div class="flex justify-between mt-8">
-            <span></span>
-            <button type="button" id="nextBtn" class="generate-btn">Next</button>
-          </div>
+      <div class="btn-row step1-actions">
+  <button type="button" id="nextBtn" class="btn btn--primary btn--lg">Next</button>
+</div>
+
         </section>
 
         <!-- ===================== STEP 2: TEXT ===================== -->
@@ -133,13 +173,39 @@
           <!-- Step 2 buttons -->
           <div class="flex justify-between mt-8">
             <button type="button" id="backBtn" class="secondary-btn">Back</button>
-            <button type="submit" id="generateBtn" class="btn-primary">Start Generating</button>
+            <!-- No immediate submit; we show the modal first -->
+            <button type="button" id="generateBtn" class="btn-primary">Start Generating</button>
           </div>
         </section>
       </form>
     </div>
   </div>
 
+  <!-- ===== Confirm Modal (inside body, centered, no jump) ===== -->
+  <div id="confirmModal" class="hidden">
+    <div class="overlay"></div>
+
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <div class="brand">
+        <img src="{{ url_for('static', filename='logo.png') }}" alt="" style="height:32px;width:32px;">
+        <h2 id="confirmTitle">WeCast</h2>
+      </div>
+
+      <p style="margin:0 0 14px 0;">
+        Are you sure you want to generate the script?
+      </p>
+      <p style="color:#9ca3af; font-size:12px; margin:0;">
+        Tip: Longer text may take a few seconds.
+      </p>
+
+      <div class="actions">
+        <button type="button" id="cancelGen" class="btn btn-cancel">Cancel</button>
+        <button type="button" id="confirmGen" class="btn btn-confirm">Yes, Generate</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ PAGE SCRIPT ============================ -->
   <script>
     // -------------------- Element refs --------------------
     const form          = document.getElementById('createForm');
@@ -163,7 +229,28 @@
     const wordCounter = document.getElementById('wordCounter');
     const descError   = document.getElementById('descError');
 
+    // Modal refs
+    const modal      = document.getElementById('confirmModal');
+    const confirmBtn = document.getElementById('confirmGen');
+    const cancelBtn  = document.getElementById('cancelGen');
+    const generateBtn= document.getElementById('generateBtn');
+
     const MIN = 500, MAX = 2500;
+
+    // -------------------- Modal helpers (no layout jump) --------------------
+    const openModal = () => {
+      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+      document.body.style.setProperty("--scrollbar-comp", scrollbarWidth + "px");
+      document.body.classList.add("modal-open");
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');   // flex centers dialog via CSS above
+    };
+    const closeModal = () => {
+      document.body.classList.remove("modal-open");
+      document.body.style.removeProperty("--scrollbar-comp");
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    };
 
     // -------------------- Config --------------------
     const styleLimits = {
@@ -172,58 +259,37 @@
       "Educational": [1, 2, 3],
       "Conversational": [2, 3]
     };
-
     const STYLE_GUIDELINES = {
-      "Interview": {
-        desc: `
-          <strong>Tone:</strong> Professional, journalistic, engaging.<br>
-          <strong>Flow:</strong> Q&A — host(s) ask thoughtful questions; guest answers with insights and short stories.<br>
-          <strong>Goal:</strong> Inform and connect through authentic dialogue.
-        `
-      },
-      "Storytelling": {
-        desc: `
-          <strong>Tone:</strong> Cinematic and narrative.<br>
-          <strong>Flow:</strong> Story told through voices; host introduces and guides, storyteller(s) bring scenes to life.<br>
-          <strong>Goal:</strong> Immerse the listener and paint visuals through voice.
-        `
-      },
-      "Educational": {
-        desc: `
-          <strong>Tone:</strong> Clear, structured, friendly.<br>
-          <strong>Flow:</strong> Host explains; guest(s) ask clarifying questions or add expertise.<br>
-          <strong>Goal:</strong> Help listeners learn with bite-sized, organized sections.
-        `
-      },
-      "Conversational": {
-        desc: `
-          <strong>Tone:</strong> Relaxed, natural, often funny.<br>
-          <strong>Flow:</strong> Co-hosts react, riff, and share stories together.<br>
-          <strong>Goal:</strong> Make the audience feel part of a real conversation.
-        `
-      }
+      "Interview": { desc: `
+        <strong>Tone:</strong> Professional, journalistic, engaging.<br>
+        <strong>Flow:</strong> Q&amp;A — host(s) ask thoughtful questions; guest answers with insights and short stories.<br>
+        <strong>Goal:</strong> Inform and connect through authentic dialogue.
+      `},
+      "Storytelling": { desc: `
+        <strong>Tone:</strong> Cinematic and narrative.<br>
+        <strong>Flow:</strong> Story told through voices; host introduces and guides, storyteller(s) bring scenes to life.<br>
+        <strong>Goal:</strong> Immerse the listener and paint visuals through voice.
+      `},
+      "Educational": { desc: `
+        <strong>Tone:</strong> Clear, structured, friendly.<br>
+        <strong>Flow:</strong> Host explains; guest(s) ask clarifying questions or add expertise.<br>
+        <strong>Goal:</strong> Help listeners learn with bite-sized, organized sections.
+      `},
+      "Conversational": { desc: `
+        <strong>Tone:</strong> Relaxed, natural, often funny.<br>
+        <strong>Flow:</strong> Co-hosts react, riff, and share stories together.<br>
+        <strong>Goal:</strong> Make the audience feel part of a real conversation.
+      `}
     };
 
-    // -------------------- Helpers (single versions) --------------------
-    function normalizeNameForCompare(str) {
-      return (str || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
-    }
-    function hasValidName(str) {
-      const s = (str || "").trim();
-      return /^[\p{L}]+(?:\s+[\p{L}]+)*$/u.test(s);
-    }
-    function markError(el, on) {
-      if (!el) return;
-      el.classList.toggle("field-error", !!on);
-    }
-    function countWords(str) {
-      return (str || "").trim().split(/\s+/).filter(Boolean).length;
-    }
+    // -------------------- Helpers --------------------
+    function normalizeNameForCompare(str) { return (str || "").trim().replace(/\s+/g, " ").toLocaleLowerCase(); }
+    function hasValidName(str) { const s=(str||"").trim(); return /^[\p{L}]+(?:\s+[\p{L}]+)*$/u.test(s); }
+    function markError(el, on) { if (!el) return; el.classList.toggle("field-error", !!on); }
+    function countWords(str) { return (str || "").trim().split(/\s+/).filter(Boolean).length; }
     function buildRoleGuidance(style) {
-      const roles = [...document.querySelectorAll("select[name^='speaker_role_']")].map(s => s.value);
-      const hosts = roles.filter(r => r === 'host').length;
-      const guests = roles.filter(r => r === 'guest').length;
-
+      const roles = [...document.querySelectorAll("select[name^='speaker_role_']")].map(s=>s.value);
+      const hosts = roles.filter(r=>r==='host').length; const guests = roles.filter(r=>r==='guest').length;
       const defaults = {
         "Interview": "Host leads with questions; guest provides stories and insights.",
         "Storytelling": "Guests are the storytellers; host guides, reacts, and frames transitions.",
@@ -231,27 +297,18 @@
         "Conversational": "All participants are hosts; it’s a balanced back-and-forth."
       };
       if (!roles.length) return defaults[style] || "";
-
-      if (style === "Interview") {
-        if (hosts === 1 && guests === 1) return "The host interviews; the guest answers with insights and short stories.";
-        if (hosts === 2 && guests === 1) return "Two hosts co-interview the guest, alternating questions and reactions.";
-        return "Interview supports either 2 speakers (1 host + 1 guest) or 3 speakers (2 hosts + 1 guest).";
-      }
-      if (style === "Storytelling") {
-        if (hosts === 1 && guests === 0) return "The host is the storyteller, carrying the narrative from start to finish.";
-        if (hosts === 1 && guests === 1) return "The guest is the main storyteller; the host guides, reacts, and bridges scenes.";
-        if (hosts === 1 && guests === 2) return "Both guests tell the story in parts; the host guides, reacts, and ties it together.";
-        return defaults[style];
-      }
-      if (style === "Educational") {
-        if (hosts === 1 && guests === 0) return "The host teaches the topic with a clear, structured flow.";
-        if (hosts === 1 && guests >= 1) return "The host explains; guest(s) ask questions and add examples to reinforce learning.";
-        return defaults[style];
-      }
-      if (style === "Conversational") {
-        if (guests === 0) return "Co-hosts share opinions, react, and keep the pace natural and fun.";
-        return "Conversational works best with co-hosts only; avoid guests here.";
-      }
+      if (style==="Interview"){ if(hosts===1&&guests===1)return"The host interviews; the guest answers with insights and short stories.";
+        if(hosts===2&&guests===1)return"Two hosts co-interview the guest, alternating questions and reactions.";
+        return"Interview supports either 2 speakers (1 host + 1 guest) or 3 speakers (2 hosts + 1 guest).";}
+      if (style==="Storytelling"){ if(hosts===1&&guests===0)return"The host is the storyteller, carrying the narrative from start to finish.";
+        if(hosts===1&&guests===1)return"The guest is the main storyteller; the host guides, reacts, and bridges scenes.";
+        if(hosts===1&&guests===2)return"Both guests tell the story in parts; the host guides, reacts, and ties it together.";
+        return defaults[style];}
+      if (style==="Educational"){ if(hosts===1&&guests===0)return"The host teaches the topic with a clear, structured flow.";
+        if(hosts===1&&guests>=1)return"The host explains; guest(s) ask questions and add examples to reinforce learning.";
+        return defaults[style];}
+      if (style==="Conversational"){ if(guests===0)return"Co-hosts share opinions, react, and keep the pace natural and fun.";
+        return"Conversational works best with co-hosts only; avoid guests here.";}
       return defaults[style];
     }
     function renderStyleHint(style) {
@@ -264,63 +321,38 @@
         "Educational": "Valid setups: 1 host solo, 1 host → 1 guest, or 1 host → 2 guests.",
         "Conversational": "Valid setups: Multiple hosts, no guests."
       }[style] || "";
-
-      return `
-        <div class="hint-text" style="color:#10b981; line-height:1.6;">
-          ${desc}
-          <div style="margin-top:6px;"><strong>Roles:</strong> ${role}</div>
-          <div style="margin-top:4px; opacity:.9;">${validText}</div>
-        </div>
-      `;
+      return `<div class="hint-text" style="color:#10b981; line-height:1.6;">${desc}
+              <div style="margin-top:6px;"><strong>Roles:</strong> ${role}</div>
+              <div style="margin-top:4px; opacity:.9;">${validText}</div></div>`;
     }
 
     // -------------------- Speaker grid builder --------------------
     function buildSpeakerGrid(style, count) {
       speakerGrid.innerHTML = "";
-
-      if (!style) {
-        styleMessage.innerHTML = `<p class="error-msg">Please select a podcast style first.</p>`;
-        return false;
-      }
-
+      if (!style) { styleMessage.innerHTML = `<p class="error-msg">Please select a podcast style first.</p>`; return false; }
       const validCounts = styleLimits[style] || [];
       if (!validCounts.includes(count)) {
-        speakerGrid.innerHTML = "";
         let countMsg = "";
-        if (style === "Interview") countMsg = "Interview requires 2 or 3 speakers.";
-        else if (style === "Conversational") countMsg = "Conversational works best with 2 or more co-hosts; guests are not used.";
-        else countMsg = "Please choose 1, 2, or 3 speakers for this style.";
-
+        if (style==="Interview") countMsg="Interview requires 2 or 3 speakers.";
+        else if (style==="Conversational") countMsg="Conversational works best with 2 or more co-hosts; guests are not used.";
+        else countMsg="Please choose 1, 2, or 3 speakers for this style.";
         styleMessage.innerHTML = `<p class="error-msg">${countMsg}</p>${renderStyleHint(style)}`;
         return false;
       }
-
-      for (let i = 1; i <= count; i++) {
-        const card = document.createElement('div');
-        card.className = 'speaker-box';
+      for (let i=1;i<=count;i++){
+        const card=document.createElement('div'); card.className='speaker-box';
         card.innerHTML = `
           <h3 class="speaker-title">Speaker ${i}</h3>
-          <div class="speaker-field">
-            <label>Name</label>
-            <input type="text" name="speaker_name_${i}" class="input-field" placeholder="Speaker ${i} name" title="Letters and spaces only">
-          </div>
-          <div class="speaker-field">
-            <label>Gender</label>
+          <div class="speaker-field"><label>Name</label>
+            <input type="text" name="speaker_name_${i}" class="input-field" placeholder="Speaker ${i} name" title="Letters and spaces only"></div>
+          <div class="speaker-field"><label>Gender</label>
             <select name="speaker_gender_${i}" class="select-field black-text">
-              <option value="Male">Male</option>
-              <option value="Female">Female</option>
-            </select>
-          </div>
-          <div class="speaker-field">
-            <label>Role</label>
+              <option value="Male">Male</option><option value="Female">Female</option></select></div>
+          <div class="speaker-field"><label>Role</label>
             <select name="speaker_role_${i}" class="select-field black-text">
-              <option value="host">Host</option>
-              <option value="guest">Guest</option>
-            </select>
-          </div>`;
+              <option value="host">Host</option><option value="guest">Guest</option></select></div>`;
         speakerGrid.appendChild(card);
       }
-
       styleMessage.innerHTML = renderStyleHint(style);
       return true;
     }
@@ -329,117 +361,41 @@
     function validateStep1() {
       const style = styleSelect.value;
       const count = parseInt(speakerSelect.value, 10);
-
-      if (!style) {
-        styleMessage.innerHTML = `<p class="error-msg">Please select a podcast style.</p>`;
-        return false;
-      }
+      if (!style) { styleMessage.innerHTML = `<p class="error-msg">Please select a podcast style.</p>`; return false; }
       const validCounts = styleLimits[style] || [];
       if (!validCounts.includes(count)) {
-        let countMsg = "";
-        if (style === "Interview") {
-          countMsg = "Interview requires either 2 speakers (1 host + 1 guest) or 3 speakers (2 hosts + 1 guest).";
-        } else if (style === "Conversational") {
-          countMsg = "Conversational uses 2 or 3 co-hosts (no guests).";
-        } else {
-          countMsg = "Choose 1, 2, or 3 speakers for this style.";
-        }
+        let countMsg="";
+        if(style==="Interview"){countMsg="Interview requires either 2 speakers (1 host + 1 guest) or 3 speakers (2 hosts + 1 guest).";}
+        else if(style==="Conversational"){countMsg="Conversational uses 2 or 3 co-hosts (no guests).";}
+        else {countMsg="Choose 1, 2, or 3 speakers for this style.";}
         styleMessage.innerHTML = `<p class="error-msg">${countMsg}</p>${renderStyleHint(style)}`;
         return false;
       }
-
-      if (!speakerGrid.children.length) {
-        const built = buildSpeakerGrid(style, count);
-        if (!built) return false;
-      }
+      if (!speakerGrid.children.length) { const built=buildSpeakerGrid(style,count); if(!built) return false; }
 
       // Names: letters+spaces only, unique
-      const nameEls = [...document.querySelectorAll("input[name^='speaker_name_']")];
-      const cleaned = nameEls.map(el => (el.value || "").trim());
-
-      let firstBad = null;
-      for (const el of nameEls) {
-        const ok = hasValidName(el.value);
-        markError(el, !ok);
-        if (!ok && !firstBad) firstBad = el;
-      }
-      if (firstBad) {
-        styleMessage.innerHTML = `
-          <p class="error-msg">
-            Each speaker name must use <strong>letters and spaces only</strong>. No numbers or symbols.
-          </p>`;
-        firstBad.focus();
-        return false;
-      }
-
-      const keys = cleaned.map(normalizeNameForCompare);
-      const seen = new Map();
-      let dupA = -1, dupB = -1;
-      keys.forEach((k, idx) => {
-        if (seen.has(k) && dupA === -1) { dupA = seen.get(k); dupB = idx; }
-        if (!seen.has(k)) seen.set(k, idx);
-      });
-      if (dupA !== -1) {
-        const els = [...document.querySelectorAll("input[name^='speaker_name_']")];
-        markError(els[dupA], true);
-        markError(els[dupB], true);
-        styleMessage.innerHTML = `<p class="error-msg">Speaker names must be <strong>unique</strong> within the podcast.</p>`;
-        els[dupB].focus();
-        return false;
-      }
+      const nameEls=[...document.querySelectorAll("input[name^='speaker_name_']")];
+      const cleaned=nameEls.map(el=>(el.value||"").trim());
+      let firstBad=null;
+      for(const el of nameEls){ const ok=hasValidName(el.value); markError(el,!ok); if(!ok && !firstBad) firstBad=el; }
+      if(firstBad){ styleMessage.innerHTML=`<p class="error-msg">Each speaker name must use <strong>letters and spaces only</strong>. No numbers or symbols.</p>`; firstBad.focus(); return false; }
+      const keys=cleaned.map(normalizeNameForCompare); const seen=new Map(); let dupA=-1, dupB=-1;
+      keys.forEach((k,idx)=>{ if(seen.has(k) && dupA===-1){dupA=seen.get(k); dupB=idx;} if(!seen.has(k)) seen.set(k,idx); });
+      if(dupA!==-1){ const els=[...document.querySelectorAll("input[name^='speaker_name_']")]; markError(els[dupA],true); markError(els[dupB],true);
+        styleMessage.innerHTML=`<p class="error-msg">Speaker names must be <strong>unique</strong> within the podcast.</p>`; els[dupB].focus(); return false; }
 
       // Role layouts
-      const roles  = [...document.querySelectorAll("select[name^='speaker_role_']")].map(s => s.value);
-      const hosts  = roles.filter(r => r === 'host').length;
-      const guests = roles.filter(r => r === 'guest').length;
-
-      if (style === 'Interview') {
-        let ok = false;
-        if (count === 2) ok = (hosts === 1 && guests === 1);
-        if (count === 3) ok = (hosts === 2 && guests === 1);
-        if (!ok) {
-          styleMessage.innerHTML = `
-            <p class="error-msg">
-              Interview requires exactly one of these:
-              <br>• <strong>2 speakers</strong>: 1 host + 1 guest
-              <br>• <strong>3 speakers</strong>: 2 hosts + 1 guest
-            </p>`;
-          return false;
-        }
-      }
-
-      if (style === 'Storytelling' || style === 'Educational') {
-        let ok = false;
-        if (count === 1) ok = (hosts === 1 && guests === 0);
-        if (count === 2) ok = (hosts === 1 && guests === 1);
-        if (count === 3) ok = (hosts === 1 && guests === 2);
-        if (!ok) {
-          styleMessage.innerHTML = `
-            <p class="error-msg">
-              ${style} requires:
-              <br>• <strong>1 speaker</strong>: 1 host (solo)
-              <br>• <strong>2 speakers</strong>: 1 host + 1 guest
-              <br>• <strong>3 speakers</strong>: 1 host + 2 guests
-            </p>`;
-          return false;
-        }
-      }
-
-      if (style === 'Conversational') {
-        let ok = false;
-        if (count === 2) ok = (hosts === 2 && guests === 0);
-        if (count === 3) ok = (hosts === 3 && guests === 0);
-        if (!ok) {
-          styleMessage.innerHTML = `
-            <p class="error-msg">
-              Conversational requires co-hosts only:
-              <br>• <strong>2 speakers</strong>: 2 hosts
-              <br>• <strong>3 speakers</strong>: 3 hosts
-              <br>(No guests.)
-            </p>`;
-          return false;
-        }
-      }
+      const roles=[...document.querySelectorAll("select[name^='speaker_role_']")].map(s=>s.value);
+      const hosts=roles.filter(r=>r==='host').length; const guests=roles.filter(r=>r==='guest').length;
+      if(style==='Interview'){ let ok=false; if(count===2) ok=(hosts===1&&guests===1); if(count===3) ok=(hosts===2&&guests===1);
+        if(!ok){ styleMessage.innerHTML=`<p class="error-msg">Interview requires exactly one of these:<br>• <strong>2 speakers</strong>: 1 host + 1 guest<br>• <strong>3 speakers</strong>: 2 hosts + 1 guest</p>`; return false; } }
+      if(style==='Storytelling'||style==='Educational'){ let ok=false;
+        if(count===1) ok=(hosts===1&&guests===0);
+        if(count===2) ok=(hosts===1&&guests===1);
+        if(count===3) ok=(hosts===1&&guests===2);
+        if(!ok){ styleMessage.innerHTML=`<p class="error-msg">${style} requires:<br>• <strong>1 speaker</strong>: 1 host (solo)<br>• <strong>2 speakers</strong>: 1 host + 1 guest<br>• <strong>3 speakers</strong>: 1 host + 2 guests</p>`; return false; } }
+      if(style==='Conversational'){ let ok=false; if(count===2) ok=(hosts===2&&guests===0); if(count===3) ok=(hosts===3&&guests===0);
+        if(!ok){ styleMessage.innerHTML=`<p class="error-msg">Conversational requires co-hosts only:<br>• <strong>2 speakers</strong>: 2 hosts<br>• <strong>3 speakers</strong>: 3 hosts<br>(No guests.)</p>`; return false; } }
 
       styleMessage.innerHTML = renderStyleHint(style);
       return true;
@@ -448,123 +404,86 @@
     // -------------------- Wizard state --------------------
     function goToStep(step) {
       if (step === 1) {
-        step1.classList.remove('step-hidden');
-        step2.classList.add('step-hidden');
-
+        step1.classList.remove('step-hidden'); step2.classList.add('step-hidden');
         wiz1.classList.add('wiz-active');  wiz1.classList.remove('wiz-done','wiz-pending');
         wiz2.classList.add('wiz-pending'); wiz2.classList.remove('wiz-active','wiz-done');
         wiz3.classList.add('wiz-pending'); wiz3.classList.remove('wiz-active','wiz-done');
-
-        line12.classList.add('wizard-line--on');
-        line23.classList.remove('wizard-line--on');
+        line12.classList.add('wizard-line--on'); line23.classList.remove('wizard-line--on');
       } else {
-        step1.classList.add('step-hidden');
-        step2.classList.remove('step-hidden');
-
+        step1.classList.add('step-hidden'); step2.classList.remove('step-hidden');
         wiz1.classList.add('wiz-done');    wiz1.classList.remove('wiz-active','wiz-pending');
         wiz2.classList.add('wiz-active');  wiz2.classList.remove('wiz-done','wiz-pending');
         wiz3.classList.add('wiz-pending'); wiz3.classList.remove('wiz-active','wiz-done');
-
-        line12.classList.add('wizard-line--on');
-        line23.classList.remove('wizard-line--on');
+        line12.classList.add('wizard-line--on'); line23.classList.remove('wizard-line--on');
       }
     }
 
-    // -------------------- Event wiring --------------------
-    // Style change → hint + reset grid
+    // -------------------- Validate description before modal --------------------
+    function validateBeforeGenerate() {
+      const n = countWords(textArea.value);
+      const showDescError = (msg) => {
+        descError.textContent = msg;
+        descError.style.display = 'block';
+        textArea.classList.add('field-invalid');
+        goToStep(2);
+        textArea.focus();
+      };
+      if (n < MIN) { showDescError(`Your text must be at least ${MIN} words. Current length: ${n}.`); return false; }
+      if (n > MAX) { showDescError(`The text exceeds the ${MAX}-word limit. Current length: ${n}.`); return false; }
+      return true;
+    }
+
+    // -------------------- Events --------------------
     styleSelect?.addEventListener('change', () => {
       const selected = styleSelect.value;
-      styleMessage.innerHTML = selected
-        ? renderStyleHint(selected)
-        : `<p class="error-msg">Please select a podcast style.</p>`;
-      speakerSelect.value = "";
-      speakerGrid.innerHTML = "";
+      styleMessage.innerHTML = selected ? renderStyleHint(selected) : `<p class="error-msg">Please select a podcast style.</p>`;
+      speakerSelect.value = ""; speakerGrid.innerHTML = "";
     });
-
-    // Speaker count change → build grid
     speakerSelect?.addEventListener('change', () => {
       const style = styleSelect.value;
       const count = parseInt(speakerSelect.value);
       if (!Number.isInteger(count)) return;
       buildSpeakerGrid(style, count);
     });
-
-    // Role change → refresh hint
     document.addEventListener('change', (e) => {
       if (e.target && e.target.name && e.target.name.startsWith('speaker_role_')) {
         const style = styleSelect.value;
         styleMessage.innerHTML = renderStyleHint(style);
       }
     });
-
-    // Name input: sanitize and clear error
     document.addEventListener("input", (e) => {
       if (e.target && e.target.name && e.target.name.startsWith("speaker_name_")) {
         const cleaned = e.target.value.replace(/[^\p{L}\s]/gu, "").replace(/\s{2,}/g, " ");
-        e.target.value = cleaned;
-        markError(e.target, false);
+        e.target.value = cleaned; markError(e.target, false);
       }
     });
 
-    // Step nav buttons
-    nextBtn?.addEventListener('click', () => {
-      if (validateStep1()) goToStep(2);
-    });
+    nextBtn?.addEventListener('click', () => { if (validateStep1()) goToStep(2); });
     backBtn?.addEventListener('click', () => goToStep(1));
 
-    // Live word counter
     if (textArea && wordCounter){
       const update = () => {
         const n = countWords(textArea.value);
         wordCounter.textContent = `${n} / ${MAX} words`;
         const bad = (n < MIN || n > MAX);
         wordCounter.style.color = bad ? "#ff5e5e" : "#10b981";
-        if (!bad) {
-          descError.textContent = "";
-          descError.style.display = "none";
-          textArea.classList.remove("field-invalid");
-        }
+        if (!bad) { descError.textContent = ""; descError.style.display = "none"; textArea.classList.remove("field-invalid"); }
       };
       textArea.addEventListener('input', update);
       update();
     }
 
-    // Submit: validate 500–2500 BEFORE confirmation
-    form.addEventListener('submit', function(e){
-      const n = countWords(textArea.value);
-      const showDescError = (msg) => {
-        descError.textContent = msg;
-        descError.style.display = 'block';
-        textArea.classList.add('field-invalid');
-      };
+    // Click "Start Generating" -> validate -> open modal
+    generateBtn.addEventListener('click', (e) => { e.preventDefault(); if (validateBeforeGenerate()) openModal(); });
 
-      if (n < MIN){
-        e.preventDefault();
-        goToStep(2);
-        showDescError(`Your text must be at least ${MIN} words. Current length: ${n}.`);
-        textArea.focus();
-        return;
-      }
-      if (n > MAX){
-        e.preventDefault();
-        goToStep(2);
-        showDescError(`The text exceeds the ${MAX}-word limit. Current length: ${n}.`);
-        textArea.focus();
-        return;
-      }
+    // Modal actions
+    confirmBtn.addEventListener('click', () => { closeModal(); form.submit(); });
+    cancelBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeModal(); });
 
-      // Only confirm AFTER word-count is valid
-      if (!window.confirm("Are you sure you want to generate the script?")){
-        e.preventDefault();
-      }
-    });
-
-    // Boot into correct step on server postback
-    {% if errors.get('description') %}
-      goToStep(2);
-    {% else %}
-      goToStep(1);
-    {% endif %}
+    // Boot step on server postback
+    {% if errors.get('description') %} goToStep(2); {% else %} goToStep(1); {% endif %}
   </script>
 </body>
 </html>

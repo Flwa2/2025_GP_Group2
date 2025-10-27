@@ -166,7 +166,7 @@ def validate_roles(style, speakers_info):
 
 @app.route("/", methods=["GET"])
 def index():
-    return redirect(url_for("create_page"))
+    return render_template("index.html")
 
 
 @app.route("/home")
