@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>WeCast • Create Podcast Script</title>
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='logo.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 
@@ -41,7 +42,6 @@
       </div>
     </div>
 
-
     <div class="form-card">
       <!-- One form, two visible steps -->
       <form id="createForm" method="POST" action="{{ url_for('create_page') }}" novalidate>
@@ -51,10 +51,10 @@
           <label for="script_style">Podcast Style</label>
           <select name="script_style" id="script_style" class="select-field black-text">
             <option value="">Select style</option>
-            <option value="Interview"   {% if script_style == "Interview" %}selected{% endif %}>Interview</option>
-            <option value="Storytelling"{% if script_style == "Storytelling" %}selected{% endif %}>Storytelling</option>
-            <option value="Educational" {% if script_style == "Educational" %}selected{% endif %}>Educational</option>
-            <option value="Conversational"{% if script_style == "Conversational" %}selected{% endif %}>Conversational</option>
+            <option value="Interview"    {% if script_style == "Interview" %}selected{% endif %}>Interview</option>
+            <option value="Storytelling" {% if script_style == "Storytelling" %}selected{% endif %}>Storytelling</option>
+            <option value="Educational"  {% if script_style == "Educational" %}selected{% endif %}>Educational</option>
+            <option value="Conversational" {% if script_style == "Conversational" %}selected{% endif %}>Conversational</option>
           </select>
 
           <!-- Style Error / Hint -->
@@ -128,6 +128,7 @@
             <p class="error-msg">{{ errors['description'] }}</p>
           {% endif %}
           <p id="wordCounter" style="color:#10b981; text-align:right;">0 / 2500 words</p>
+          <p id="descError" class="error-msg" style="display:none;"></p>
 
           <!-- Step 2 buttons -->
           <div class="flex justify-between mt-8">
@@ -140,7 +141,8 @@
   </div>
 
   <script>
-    // Elements
+    // -------------------- Element refs --------------------
+    const form          = document.getElementById('createForm');
     const styleSelect   = document.getElementById('script_style');
     const speakerSelect = document.getElementById('speakers');
     const styleMessage  = document.getElementById('style-message');
@@ -151,12 +153,19 @@
     const nextBtn = document.getElementById('nextBtn');
     const backBtn = document.getElementById('backBtn');
 
-    // Wizard bits
     const wiz1 = document.getElementById('wiz-1');
     const wiz2 = document.getElementById('wiz-2');
     const wiz3 = document.getElementById('wiz-3');
     const line12 = document.getElementById('line-12');
     const line23 = document.getElementById('line-23');
+
+    const textArea    = document.getElementById('description');
+    const wordCounter = document.getElementById('wordCounter');
+    const descError   = document.getElementById('descError');
+
+    const MIN = 500, MAX = 2500;
+
+    // -------------------- Config --------------------
     const styleLimits = {
       "Interview": [2, 3],
       "Storytelling": [1, 2, 3],
@@ -195,23 +204,21 @@
       }
     };
 
-    // Normalize a name for comparison/display
+    // -------------------- Helpers (single versions) --------------------
     function normalizeNameForCompare(str) {
-      return str.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+      return (str || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
     }
-
-    // Does the string contain at least one letter (any language)?
-    function hasLetter(str) {
-      return /\p{L}/u.test(str);
+    function hasValidName(str) {
+      const s = (str || "").trim();
+      return /^[\p{L}]+(?:\s+[\p{L}]+)*$/u.test(s);
     }
-
-    // Mark/unmark a field error
     function markError(el, on) {
-      if (on) el.classList.add("field-error");
-      else el.classList.remove("field-error");
+      if (!el) return;
+      el.classList.toggle("field-error", !!on);
     }
-
-// Builds role guidance text based on style, count, and selected roles
+    function countWords(str) {
+      return (str || "").trim().split(/\s+/).filter(Boolean).length;
+    }
     function buildRoleGuidance(style) {
       const roles = [...document.querySelectorAll("select[name^='speaker_role_']")].map(s => s.value);
       const hosts = roles.filter(r => r === 'host').length;
@@ -247,7 +254,6 @@
       }
       return defaults[style];
     }
-
     function renderStyleHint(style) {
       if (!style) return "";
       const desc = STYLE_GUIDELINES[style]?.desc || "";
@@ -268,27 +274,7 @@
       `;
     }
 
-    // ---- Name validation helpers (frontend) ----
-
-    // Unicode-safe: letters and spaces only, at least one letter word
-    function hasValidName(str) {
-      const s = (str || "").trim();
-      // one or more letter blocks separated by single/multiple spaces
-      return /^[\p{L}]+(?:\s+[\p{L}]+)*$/u.test(s);
-    }
-
-    // Normalize for duplicate detection: collapse spaces, lowercase
-    function normalizeNameForCompare(str) {
-      return (str || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
-    }
-
-    // Visual error helper
-    function markError(el, on) {
-      if (!el) return;
-      el.classList.toggle("field-error", !!on);
-    }
-
-    // Build speaker cards safely
+    // -------------------- Speaker grid builder --------------------
     function buildSpeakerGrid(style, count) {
       speakerGrid.innerHTML = "";
 
@@ -299,20 +285,15 @@
 
       const validCounts = styleLimits[style] || [];
       if (!validCounts.includes(count)) {
-        // Clear the grid and give a clear, style-specific count error
         speakerGrid.innerHTML = "";
         let countMsg = "";
         if (style === "Interview") countMsg = "Interview requires 2 or 3 speakers.";
         else if (style === "Conversational") countMsg = "Conversational works best with 2 or more co-hosts; guests are not used.";
         else countMsg = "Please choose 1, 2, or 3 speakers for this style.";
 
-        styleMessage.innerHTML = `
-          <p class="error-msg">${countMsg}</p>
-          ${renderStyleHint(style)}
-        `;
+        styleMessage.innerHTML = `<p class="error-msg">${countMsg}</p>${renderStyleHint(style)}`;
         return false;
       }
-
 
       for (let i = 1; i <= count; i++) {
         const card = document.createElement('div');
@@ -344,63 +325,17 @@
       return true;
     }
 
-    // Style select → show hint and reset grid
-    styleSelect?.addEventListener('change', () => {
-      const selected = styleSelect.value;
-      styleMessage.innerHTML = selected
-        ? renderStyleHint(selected)
-        : `<p class="error-msg">Please select a podcast style.</p>`;
-      speakerSelect.value = "";
-      speakerGrid.innerHTML = "";
-    });
-
-
-    // Speakers select → build grid
-    speakerSelect?.addEventListener('change', () => {
-      const style = styleSelect.value;
-      const count = parseInt(speakerSelect.value);
-      if (!Number.isInteger(count)) return;
-      buildSpeakerGrid(style, count);
-    });
-
-      // When a role changes, refresh the hint to explain who does what
-    document.addEventListener('change', (e) => {
-      if (e.target && e.target.name && e.target.name.startsWith('speaker_role_')) {
-        const style = styleSelect.value;
-        styleMessage.innerHTML = renderStyleHint(style);
-      }
-    });
-
-    document.addEventListener("input", (e) => {
-      if (e.target && e.target.name && e.target.name.startsWith("speaker_name_")) {
-        markError(e.target, false);
-      }
-    });
-
-    document.addEventListener("input", (e) => {
-      if (e.target && e.target.name && e.target.name.startsWith("speaker_name_")) {
-        // strip non-letters and non-spaces
-        const cleaned = e.target.value.replace(/[^\p{L}\s]/gu, "");
-        // collapse multiple spaces
-        e.target.value = cleaned.replace(/\s{2,}/g, " ");
-        // clear red outline while typing
-        markError(e.target, false);
-      }
-    });
-
-    // Validation before moving to step 2
+    // -------------------- Step 1 validation --------------------
     function validateStep1() {
       const style = styleSelect.value;
       const count = parseInt(speakerSelect.value, 10);
 
-      // Base presence checks
       if (!style) {
         styleMessage.innerHTML = `<p class="error-msg">Please select a podcast style.</p>`;
         return false;
       }
       const validCounts = styleLimits[style] || [];
       if (!validCounts.includes(count)) {
-        // mirror buildSpeakerGrid message so users aren't confused
         let countMsg = "";
         if (style === "Interview") {
           countMsg = "Interview requires either 2 speakers (1 host + 1 guest) or 3 speakers (2 hosts + 1 guest).";
@@ -413,68 +348,52 @@
         return false;
       }
 
-      // Ensure the grid exists (user might have hit Next too fast)
       if (!speakerGrid.children.length) {
         const built = buildSpeakerGrid(style, count);
         if (!built) return false;
       }
 
-      // Names required
-      // ---- Names: letters + spaces only, non-empty, and unique ----
-    const nameEls = [...document.querySelectorAll("input[name^='speaker_name_']")];
-    const cleaned = nameEls.map(el => (el.value || "").trim());
+      // Names: letters+spaces only, unique
+      const nameEls = [...document.querySelectorAll("input[name^='speaker_name_']")];
+      const cleaned = nameEls.map(el => (el.value || "").trim());
 
-    // 1) syntax validity
-    let firstBad = null;
-    for (const el of nameEls) {
-      const ok = hasValidName(el.value);
-      markError(el, !ok);
-      if (!ok && !firstBad) firstBad = el;
-    }
-    if (firstBad) {
-      styleMessage.innerHTML = `
-        <p class="error-msg">
-          Each speaker name must use <strong>letters and spaces only</strong>. No numbers or symbols.
-        </p>`;
-      firstBad.focus();
-      return false;
-    }
-
-    // 2) uniqueness (case- and space-insensitive)
-    const keys = cleaned.map(normalizeNameForCompare);
-    const seen = new Map();
-    let dupIndexA = -1, dupIndexB = -1;
-    keys.forEach((k, idx) => {
-      if (seen.has(k) && dupIndexA === -1) {
-        dupIndexA = seen.get(k);
-        dupIndexB = idx;
+      let firstBad = null;
+      for (const el of nameEls) {
+        const ok = hasValidName(el.value);
+        markError(el, !ok);
+        if (!ok && !firstBad) firstBad = el;
       }
-      if (!seen.has(k)) seen.set(k, idx);
-    });
-    if (dupIndexA !== -1) {
-      markError(nameEls[dupIndexA], true);
-      markError(nameEls[dupIndexB], true);
-      styleMessage.innerHTML = `
-        <p class="error-msg">
-          Speaker names must be <strong>unique</strong> within the podcast.
-        </p>`;
-      nameEls[dupIndexB].focus();
-      return false;
-    }
+      if (firstBad) {
+        styleMessage.innerHTML = `
+          <p class="error-msg">
+            Each speaker name must use <strong>letters and spaces only</strong>. No numbers or symbols.
+          </p>`;
+        firstBad.focus();
+        return false;
+      }
 
-    // clear any old error outline if all good
-    nameEls.forEach(el => markError(el, false));
+      const keys = cleaned.map(normalizeNameForCompare);
+      const seen = new Map();
+      let dupA = -1, dupB = -1;
+      keys.forEach((k, idx) => {
+        if (seen.has(k) && dupA === -1) { dupA = seen.get(k); dupB = idx; }
+        if (!seen.has(k)) seen.set(k, idx);
+      });
+      if (dupA !== -1) {
+        const els = [...document.querySelectorAll("input[name^='speaker_name_']")];
+        markError(els[dupA], true);
+        markError(els[dupB], true);
+        styleMessage.innerHTML = `<p class="error-msg">Speaker names must be <strong>unique</strong> within the podcast.</p>`;
+        els[dupB].focus();
+        return false;
+      }
 
-
-      // Role counts
+      // Role layouts
       const roles  = [...document.querySelectorAll("select[name^='speaker_role_']")].map(s => s.value);
       const hosts  = roles.filter(r => r === 'host').length;
       const guests = roles.filter(r => r === 'guest').length;
 
-      // Exact layout rules
       if (style === 'Interview') {
-        // 2 speakers: 1 host + 1 guest
-        // 3 speakers: 2 hosts + 1 guest
         let ok = false;
         if (count === 2) ok = (hosts === 1 && guests === 1);
         if (count === 3) ok = (hosts === 2 && guests === 1);
@@ -490,7 +409,6 @@
       }
 
       if (style === 'Storytelling' || style === 'Educational') {
-        // Exact: 1 host solo OR 1 host + 1 guest OR 1 host + 2 guests
         let ok = false;
         if (count === 1) ok = (hosts === 1 && guests === 0);
         if (count === 2) ok = (hosts === 1 && guests === 1);
@@ -508,7 +426,6 @@
       }
 
       if (style === 'Conversational') {
-        // Exact: 2 hosts OR 3 hosts (no guests)
         let ok = false;
         if (count === 2) ok = (hosts === 2 && guests === 0);
         if (count === 3) ok = (hosts === 3 && guests === 0);
@@ -524,13 +441,11 @@
         }
       }
 
-      // If we get here, Step 1 is valid
       styleMessage.innerHTML = renderStyleHint(style);
       return true;
     }
 
-
-    // Wizard state
+    // -------------------- Wizard state --------------------
     function goToStep(step) {
       if (step === 1) {
         step1.classList.remove('step-hidden');
@@ -555,59 +470,101 @@
       }
     }
 
-    // Buttons
+    // -------------------- Event wiring --------------------
+    // Style change → hint + reset grid
+    styleSelect?.addEventListener('change', () => {
+      const selected = styleSelect.value;
+      styleMessage.innerHTML = selected
+        ? renderStyleHint(selected)
+        : `<p class="error-msg">Please select a podcast style.</p>`;
+      speakerSelect.value = "";
+      speakerGrid.innerHTML = "";
+    });
+
+    // Speaker count change → build grid
+    speakerSelect?.addEventListener('change', () => {
+      const style = styleSelect.value;
+      const count = parseInt(speakerSelect.value);
+      if (!Number.isInteger(count)) return;
+      buildSpeakerGrid(style, count);
+    });
+
+    // Role change → refresh hint
+    document.addEventListener('change', (e) => {
+      if (e.target && e.target.name && e.target.name.startsWith('speaker_role_')) {
+        const style = styleSelect.value;
+        styleMessage.innerHTML = renderStyleHint(style);
+      }
+    });
+
+    // Name input: sanitize and clear error
+    document.addEventListener("input", (e) => {
+      if (e.target && e.target.name && e.target.name.startsWith("speaker_name_")) {
+        const cleaned = e.target.value.replace(/[^\p{L}\s]/gu, "").replace(/\s{2,}/g, " ");
+        e.target.value = cleaned;
+        markError(e.target, false);
+      }
+    });
+
+    // Step nav buttons
     nextBtn?.addEventListener('click', () => {
       if (validateStep1()) goToStep(2);
     });
     backBtn?.addEventListener('click', () => goToStep(1));
 
-    // Word counter (kept short)
-    // ---- Word counter + 500-word minimum enforcement ----
-    const textArea = document.getElementById('description');
-    const wordCounter = document.getElementById('wordCounter');
-
-    function countWords(str) {
-      return str.trim().split(/\s+/).filter(Boolean).length;
-    }
-
-    if (textArea && wordCounter) {
+    // Live word counter
+    if (textArea && wordCounter){
       const update = () => {
         const n = countWords(textArea.value);
-        wordCounter.textContent = `${n} / 2500 words`;
-        wordCounter.style.color = n < 500 ? "#ff5e5e" : n > 2500 ? "#ff5e5e" : "#10b981";
+        wordCounter.textContent = `${n} / ${MAX} words`;
+        const bad = (n < MIN || n > MAX);
+        wordCounter.style.color = bad ? "#ff5e5e" : "#10b981";
+        if (!bad) {
+          descError.textContent = "";
+          descError.style.display = "none";
+          textArea.classList.remove("field-invalid");
+        }
       };
       textArea.addEventListener('input', update);
       update();
     }
 
-    // Extend your existing "Next" or "Generate" validation
-    // Inside validateStep1() or right before final submission:
-    function validateTextInput() {
+    // Submit: validate 500–2500 BEFORE confirmation
+    form.addEventListener('submit', function(e){
       const n = countWords(textArea.value);
-      if (n < 500) {
-        styleMessage.innerHTML = `
-          <p class="error-msg">
-            Please write at least <strong>500 words</strong> before continuing. You currently have ${n}.
-          </p>`;
-        textArea.focus();
-        return false;
-      }
-      return true;
-    }
+      const showDescError = (msg) => {
+        descError.textContent = msg;
+        descError.style.display = 'block';
+        textArea.classList.add('field-invalid');
+      };
 
-    // Boot into correct step (server postback)
+      if (n < MIN){
+        e.preventDefault();
+        goToStep(2);
+        showDescError(`Your text must be at least ${MIN} words. Current length: ${n}.`);
+        textArea.focus();
+        return;
+      }
+      if (n > MAX){
+        e.preventDefault();
+        goToStep(2);
+        showDescError(`The text exceeds the ${MAX}-word limit. Current length: ${n}.`);
+        textArea.focus();
+        return;
+      }
+
+      // Only confirm AFTER word-count is valid
+      if (!window.confirm("Are you sure you want to generate the script?")){
+        e.preventDefault();
+      }
+    });
+
+    // Boot into correct step on server postback
     {% if errors.get('description') %}
       goToStep(2);
     {% else %}
       goToStep(1);
     {% endif %}
-
-    document.getElementById("generateBtn").addEventListener("click", function(event) {
-        const confirmGenerate = confirm("Are you sure you want to generate the script?");
-        if (!confirmGenerate) {
-            event.preventDefault(); // stop the form from submitting
-        }
-    });
   </script>
 </body>
 </html>

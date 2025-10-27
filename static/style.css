@@ -442,3 +442,87 @@ label {
   outline: 2px solid #ff5e5e !important;
   box-shadow: 0 0 0 3px rgba(255, 94, 94, 0.25);
 }
+
+/* ====== Mobile tweaks (≤ 640px) ====== */
+@media (max-width: 640px){
+
+  /* Header: shorter & wraps nicely */
+  .app-header{
+    height: 64px;
+    padding: 0 1rem;
+  }
+  .app-logo{ height: 44px; }
+  .logo-text{ font-size: 1.2rem; }
+
+  /* Container spacing below fixed header */
+  .main-container{
+    margin: 88px auto 36px;   /* down from 120px */
+    padding: 0 1rem;          /* tighter side padding */
+    max-width: 100%;
+  }
+
+  /* Card padding */
+  .form-card{ padding: 1.25rem; border-radius: 16px; }
+
+  /* Inputs / labels spacing */
+  label{ margin-top: 0.9rem; }
+  .input-field, .select-field, .textarea-field{
+    font-size: 0.95rem;
+    padding: 0.75rem 0.9rem;
+    margin-bottom: 12px;
+  }
+
+  /* Speakers: stack vertically */
+  .speaker-grid{
+    flex-wrap: wrap;   /* was nowrap */
+    gap: 1rem;
+  }
+  .speaker-box{
+    flex: 1 1 100%;
+    padding: 1rem;
+  }
+
+  /* Wizard: shrink dots, allow wrapping, flex lines */
+  .wizard{
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    padding: 0 0.25rem;
+  }
+  .wizard-dot{
+    width: 28px; height: 28px; font-size: 0.85rem;
+    box-shadow: 0 0 14px rgba(16,185,129,0.3);
+  }
+  .wizard-label{ font-size: 0.8rem; }
+  .wizard-line{
+    width: auto;       /* override 90px */
+    flex: 1 1 32px;    /* stretch but can shrink */
+    height: 4px;       /* slimmer line on phones */
+  }
+
+  /* Save section: wrap buttons + status */
+  .save-section{
+    flex-wrap: wrap;
+    gap: 0.6rem;
+  }
+  .save-section .btn-primary{
+    width: 100%;
+    justify-content: center;
+    padding: 0.8rem 1rem;
+  }
+  .save-status{
+    width: 100%;
+    text-align: center;
+    font-size: 0.9rem;
+  }
+
+  /* Editor: taller and comfy to type */
+  #scriptEditor{
+    min-height: 50vh;   /* taller on phones */
+    font-size: 0.95rem;
+    padding: 0.9rem;
+  }
+
+  /* Progress bar: easier to fit */
+  .progress-bar{ width: 100%; }
+  #progressText{ font-size: 0.85rem; }
+}

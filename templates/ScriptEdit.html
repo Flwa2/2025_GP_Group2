@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>WeCast • Edit Script</title>
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='logo.png') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body class="bg-app">
@@ -60,10 +61,10 @@
       <form method="POST" action="{{ url_for('edit') }}">
         <div class="script-container">
           <label for="scriptEditor">Your Script</label>
-          <textarea id="scriptEditor" name="edited_script">{{ script or '' }}</textarea>
+          <textarea id="scriptEditor" name="edited_script" style="width:100%; min-height:48vh; line-height:1.55; resize:vertical; box-sizing:border-box;">{{ script or '' }}</textarea>
         </div>
 
-      <div class="save-section" style="display:flex; align-items:center; gap:12px; justify-content:space-between; margin-top:14px;">
+<div class="save-section" style="display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; margin-top:14px;">
         <div class="flex-left" style="display:flex; gap:10px; align-items:center;">
           <a href="{{ url_for('create_page') }}?step=2&restore=1" class="secondary-btn">Back to Text</a>
           <button id="saveBtn" type="button" class="generate-btn">Save Script</button>
