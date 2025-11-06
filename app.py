@@ -2,6 +2,8 @@ from flask import Flask, render_template, request, redirect, url_for, session
 from openai import OpenAI
 import os
 from dotenv import load_dotenv
+from elevenlabs import ElevenLabs
+
 
 app = Flask(__name__)
 load_dotenv()
@@ -10,6 +12,8 @@ app.secret_key = "supersecretkey"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")
+voice_client = ElevenLabs(api_key=ELEVEN_API_KEY)
 
 def is_arabic(text):
     """Detect if input text is Arabic."""
@@ -345,6 +349,32 @@ def edit():
                                error="You must keep speaker lines (like 'Host:' or 'Guest:').")
 
     return render_template("ScriptEdit.html", script=edited_script, success="Script saved successfully!")
+
+@app.route("/generate_audio", methods=["POST"])
+def generate_audio():
+    script = request.form.get("scriptText", "").strip()
+    if not script:
+        return {"error": "Script is empty."}, 400
+
+    try:
+        # Generate audio file (MP3)
+        output_path = os.path.join("static", "output.mp3")
+
+        # ElevenLabs returns an iterator (stream) — so write each chunk
+        with open(output_path, "wb") as f:
+            for chunk in voice_client.text_to_speech.convert(
+                voice_id="Rachel",  # pick your voice
+                model_id="eleven_turbo_v2",
+                text=script,
+            ):
+                if chunk:  # ensure not None
+                    f.write(chunk)
+
+        # Return the URL for playback in the browser
+        return {"url": url_for("static", filename="output.mp3")}
+    except Exception as e:
+        return {"error": str(e)}, 500
+
 
 if __name__ == "__main__":
     app.run(debug=True)
