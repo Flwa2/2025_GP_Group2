@@ -69,12 +69,14 @@
        class="secondary-btn btn-equal">Back to Text</a>
     <button id="saveBtn" type="button"
             class="btn-primary btn-equal">Save Script</button>
+            <button id="audioBtn" type="button" class="btn-primary btn-equal">
+Generate Audio
+</button>
+<audio id="audioPlayer" controls style="display:none; margin-top:1rem; width:100%;"></audio>
+
   </div>
   <span id="saveStatus" class="save-status">Not saved yet</span>
 </div>
-
-
-
 
       </form>
     </div>
@@ -112,6 +114,41 @@
     } catch (err) {
       saveStatus.textContent = 'Error saving script.';
       saveStatus.style.color = '#ff6b6b';
+    }
+  });
+
+   const audioBtn = document.getElementById('audioBtn');
+  const audioPlayer = document.getElementById('audioPlayer');
+
+  audioBtn.addEventListener('click', async () => {
+    const content = editor.value.trim();
+    if (!content) return alert('Script is empty.');
+
+    audioBtn.textContent = 'Generating...';
+    audioBtn.disabled = true;
+
+    try {
+      const response = await fetch('/generate_audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ scriptText: content })
+      });
+
+      const data = await response.json();
+      if (data.url) {
+        audioPlayer.src = data.url + '?t=' + new Date().getTime(); // prevent cache
+        audioPlayer.style.display = 'block';
+        audioPlayer.play();
+        audioBtn.textContent = ' Regenerate Audio';
+      } else {
+        alert('Error: ' + (data.error || 'Unknown error'));
+        audioBtn.textContent = ' Generate Audio';
+      }
+    } catch (err) {
+      alert('Error generating audio.');
+      audioBtn.textContent = ' Generate Audio';
+    } finally {
+      audioBtn.disabled = false;
     }
   });
 </script>
