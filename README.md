@@ -9,7 +9,6 @@ WeCast is an AI-powered web application designed to simplify the podcast creatio
 - Development Tools: Visual Studio Code, Postman.
 - Frontend: HTML, CSS.
 - AI & NLP Frameworks: Python, TTS libraries.
-- Audio & Media Tools: FFmpeg, WaveSurfer.js.
 - Visual & Design Tools: Figma, Three.js, DALL·E by OpenAI.
 - Backend & Database: Flask, Firebase, Firebase Storage.
 - Authentication & Notifications: Firebase Authentication, Nodemailer.
