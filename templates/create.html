@@ -205,8 +205,18 @@
     </div>
   </div>
 
+   <!-- ===== Loading Overlay ===== -->
+  <div id="waitOverlay" class="hidden">
+  <div class="wait-backdrop"></div>
+  <div class="wait-content">
+    <p class="wait-text">Generating your podcast...</p>
+    <img src="{{ url_for('static', filename='logo.png') }}" class="wait-logo" alt="Loading...">
+  </div>
+</div>
+
   <!-- ============================ PAGE SCRIPT ============================ -->
   <script>
+  
     // -------------------- Element refs --------------------
     const form          = document.getElementById('createForm');
     const styleSelect   = document.getElementById('script_style');
@@ -477,7 +487,16 @@
     generateBtn.addEventListener('click', (e) => { e.preventDefault(); if (validateBeforeGenerate()) openModal(); });
 
     // Modal actions
-    confirmBtn.addEventListener('click', () => { closeModal(); form.submit(); });
+  confirmBtn.addEventListener('click', () => {
+  closeModal();
+  const wait = document.getElementById('waitOverlay');
+  if (wait) {
+    wait.classList.remove('hidden');
+  }
+  // give browser a moment to render overlay before submitting
+  setTimeout(() => form.submit(), 200);
+});
+
     cancelBtn.addEventListener('click', closeModal);
     modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
     window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeModal(); });
