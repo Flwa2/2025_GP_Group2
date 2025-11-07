@@ -1,5 +1,38 @@
-Flask==3.0.3
-gunicorn
-openai==1.40.1
-python-dotenv==1.0.1
-httpx<0.28
+# ==============================================
+# 🧠 WeCast — Quick Setup & Run Instructions
+# ==============================================
+# 1️⃣ Create and activate the virtual environment
+# python -m venv venv
+# venv\Scripts\activate (Windows)
+# source venv/bin/activate (Mac/Linux)
+# 2️⃣ Install all Python dependencies
+# pip install -r requirements.txt
+# 3️⃣ Start the Flask backend
+# python app.py
+# → Backend runs at: http://127.0.0.1:5000
+# → NOTE: This route redirects automatically to React (http://localhost:5173
+# )
+# 4️⃣ Setup React (Frontend)
+# cd static/frontend
+# npm install
+# 5️⃣ Run the React development server
+# npm run dev
+# → Frontend runs at: http://localhost:5173
+# 6️⃣ How the system works (development mode)
+# ✅ React = frontend (UI)
+# ✅ Flask = backend (API)
+# ✅ Both must run at the same time
+# ✅ Visiting Flask root (http://127.0.0.1:5000
+# ) redirects to React
+# ✅ React connects to Flask APIs through /api/ routes
+# 7️⃣ (Optional) Build React for production
+# npm run build
+# → Creates "dist/" folder (used only for deployment, not needed for local dev)
+# 8️⃣ Stop servers
+# Press CTRL+C in each terminal
+# ==============================================
+# Flask==3.0.3
+# gunicorn
+# openai==1.40.1
+# python-dotenv==1.0.1
+# httpx<0.28

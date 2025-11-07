@@ -1,0 +1,241 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800;900&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Manrope', sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* Custom circular motion animations */
+@keyframes circularMotion {
+  0% {
+    transform: rotate(0deg) translateX(15px) rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg) translateX(15px) rotate(-360deg);
+  }
+}
+
+@keyframes reverseCircularMotion {
+  0% {
+    transform: rotate(0deg) translateX(12px) rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(-360deg) translateX(12px) rotate(360deg);
+  }
+}
+
+/* Apply circular motion to specific elements */
+.animate-circular {
+  animation: circularMotion 3s linear infinite;
+}
+
+.animate-circular-reverse {
+  animation: reverseCircularMotion 2.5s linear infinite;
+}
+
+/* Enhanced pulse animation */
+@keyframes enhancedPulse {
+
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.7;
+    transform: scale(1.1);
+  }
+}
+
+.animate-enhanced-pulse {
+  animation: enhancedPulse 2s ease-in-out infinite;
+}
+
+/* === Curved "WeCast" animated logo === */
+.curved-wecast {
+  font-family: "Playfair Display", Georgia, "Times New Roman", serif;
+  font-weight: 700;
+  font-style: italic;
+  color: #111;
+  letter-spacing: 0.03em;
+  text-shadow: 0 3px 6px rgba(0, 0, 0, 0.25);
+}
+
+.curved-letter {
+  display: inline-block;
+  transform: translateY(var(--y)) rotate(var(--r));
+  animation: slightMove 3.2s ease-in-out infinite;
+  animation-delay: var(--delay);
+  will-change: transform;
+}
+
+@keyframes slightMove {
+
+  0%,
+  100% {
+    transform: translateY(var(--y)) rotate(var(--r));
+  }
+
+  50% {
+    transform: translateY(calc(var(--y) - 15px)) rotate(calc(var(--r) * 1.50));
+  }
+}
+
+/* ===== Top-left animated logo (WeCast text) ===== */
+.corner-logo {
+  opacity: 1;
+  animation: none; /* 🛑 stop floating animation */
+  transform: none; /* reset any tilt or shift */
+}
+
+.corner-logo:hover {
+  animation-play-state: paused;
+}
+
+/* === Pulse effect for the small logo image === */
+@keyframes pulseSlow {
+  0%,100% { opacity: .9; transform: scale(1); }
+  50%     { opacity: .7; transform: scale(1.05); }
+}
+
+.animate-pulse-slow {
+  animation: pulseSlow 4s ease-in-out infinite;
+}
+/* gentle back-and-forth rotation for the icon */
+@keyframes tilt {
+  0%   { transform: rotate(0deg) scale(1);   opacity: .9; }
+  50%  { transform: rotate(-6deg) scale(1.40); opacity: .8; }
+  100% { transform: rotate(0deg) scale(1);   opacity: .9; }
+}
+.rotate-gentle {
+  animation: tilt 4.5s ease-in-out infinite;
+  transform-origin: 50% 55%; /* feels more natural for circular marks */
+}
+.curved-wecast {
+  display: inline-block;
+  transform: rotate(-3deg);
+  letter-spacing: 1px;
+}
+
+@layer components {
+  /* === Global CTA button (exact "Let’s WeCast It" look) === */
+  .btn-cta {
+    @apply relative bg-black text-white font-bold text-lg
+           rounded-lg px-8 py-4 transition-colors duration-300
+           overflow-hidden border-none;
+  }
+
+  .btn-cta:hover {
+    @apply bg-gray-800;
+  }
+
+  /* Gradient highlight that fades in on hover */
+  .btn-cta::after {
+    content: "";
+    @apply absolute inset-0 bg-gradient-to-r from-pink-bright to-purple-medium
+           opacity-0 transition-opacity duration-300;
+  }
+  .btn-cta:hover::after {
+    @apply opacity-20;
+  }
+
+  /* Dark mode */
+  .dark .btn-cta {
+    @apply bg-white text-black;
+  }
+  .dark .btn-cta:hover {
+    @apply bg-gray-100;
+  }
+
+  /* Disabled */
+  .btn-cta:disabled {
+    @apply opacity-60 cursor-not-allowed;
+  }
+}
+
+@layer components {
+  /* --- Cards --- */
+  .ui-card       { @apply bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 shadow-sm; }
+  .ui-card-title { @apply text-lg font-semibold mb-4; }
+
+  /* --- Labels & help --- */
+  .form-label    { @apply text-sm font-medium text-neutral-700 dark:text-neutral-300; }
+  .form-help     { @apply text-xs text-neutral-500 dark:text-neutral-400 mt-1; }
+
+  /* --- Inputs --- */
+  .form-input {
+    @apply w-full rounded-xl px-3.5 py-2.5
+           bg-white dark:bg-neutral-900
+           text-neutral-900 dark:text-neutral-100
+           placeholder:text-neutral-400 dark:placeholder:text-neutral-500
+           border border-neutral-300 dark:border-neutral-700
+           shadow-sm outline-none
+           focus:border-purple-500 focus:ring-4 focus:ring-purple-500/20
+           transition;
+  }
+
+  /* --- Textareas --- */
+  .form-textarea {
+    @apply w-full min-h-[132px] rounded-xl px-3.5 py-3
+           bg-white dark:bg-neutral-900
+           text-neutral-900 dark:text-neutral-100
+           placeholder:text-neutral-400 dark:placeholder:text-neutral-500
+           border border-neutral-300 dark:border-neutral-700
+           shadow-sm outline-none resize-y
+           focus:border-purple-500 focus:ring-4 focus:ring-purple-500/20
+           transition;
+  }
+
+  /* --- Readonly/disabled --- */
+  .form-input[readonly], .form-textarea[readonly] {
+    @apply opacity-80 cursor-default;
+  }
+  .form-input:disabled, .form-textarea:disabled {
+    @apply opacity-60 cursor-not-allowed;
+  }
+}
+
+/* === extra animated shapes === */
+@keyframes morphBlob {
+  0%   { border-radius: 38% 62% 53% 47% / 40% 42% 58% 60%; transform: translateZ(0) scale(1); }
+  50%  { border-radius: 60% 40% 38% 62% / 48% 58% 42% 52%; transform: translateZ(0) scale(1.06); }
+  100% { border-radius: 38% 62% 53% 47% / 40% 42% 58% 60%; transform: translateZ(0) scale(1); }
+}
+.blob-morph {
+  background: radial-gradient(60% 60% at 35% 35%, rgba(255,0,128,.18), transparent 60%),
+              radial-gradient(60% 60% at 70% 70%, rgba(124,58,237,.22), transparent 60%),
+              radial-gradient(60% 60% at 20% 80%, rgba(99,102,241,.18), transparent 60%);
+  filter: blur(4px);
+  animation: morphBlob 12s ease-in-out infinite;
+}
+
+@keyframes spinSlow { to { transform: rotate(360deg); } }
+.ring-dash {
+  border: 2px dashed rgba(124,58,237,.45); /* purple-700-ish */
+  animation: spinSlow 14s linear infinite;
+  border-radius: 9999px;
+  box-shadow: 0 0 40px rgba(124,58,237,.12) inset;
+}
+
+@keyframes panStripes { to { background-position: 200% 0; } }
+.stripes-move {
+  background-image: repeating-linear-gradient( -45deg,
+    rgba(124,58,237,.10) 0px, rgba(124,58,237,.10) 8px,
+    rgba(124,58,237,0) 8px, rgba(124,58,237,0) 24px
+  );
+  background-size: 200% 100%;
+  animation: panStripes 12s linear infinite;
+  mask-image: radial-gradient(closest-side, rgba(0,0,0,.8), transparent);
+}
+

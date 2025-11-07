@@ -1,4 +1,5 @@
-from flask import Flask, render_template, request, redirect, url_for, session
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify  # ← add jsonify
+from flask_cors import CORS  # ← add this
 from openai import OpenAI
 import os
 from dotenv import load_dotenv
@@ -6,6 +7,7 @@ from elevenlabs import ElevenLabs
 
 
 app = Flask(__name__)
+CORS(app, origins=["http://localhost:5173"], supports_credentials=True)
 load_dotenv()
 app.secret_key = "supersecretkey"
 
@@ -168,9 +170,14 @@ def validate_roles(style, speakers_info):
 
 # ---------------------- ROUTES ----------------------
 
+@app.get("/api/health")
+def health():
+    return jsonify(status="ok")
+
+
 @app.route("/", methods=["GET"])
 def index():
-    return render_template("index.html")
+    return redirect("http://localhost:5173/", code=302)
 
 
 @app.route("/home")
