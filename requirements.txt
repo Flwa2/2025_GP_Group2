@@ -31,8 +31,9 @@
 # 8️⃣ Stop servers
 # Press CTRL+C in each terminal
 # ==============================================
-# Flask==3.0.3
-# gunicorn
-# openai==1.40.1
-# python-dotenv==1.0.1
-# httpx<0.28
+Flask==3.0.3
+gunicorn
+openai==1.40.1
+python-dotenv==1.0.1
+httpx<0.28
+elevenlabs

@@ -4,7 +4,7 @@ import CurvedWeCast from "./CurvedWeCast";
 
 function HeroSection() {
   return (
-<section className="bg-cream dark:bg-[#0a0a1a] text-black dark:text-white transition-colors duration-500 py-20 px-6 pt-24">
+    <section className="bg-cream dark:bg-[#0a0a1a] text-black dark:text-white transition-colors duration-500 py-20 px-6 pt-24">
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
         <div className="space-y-8">
           <h1>
@@ -47,10 +47,16 @@ function HeroSection() {
 
           <p className="text-lg text-black dark:text-gray-100 leading-relaxed">
             Whether it’s a blog post, essay, or research paper, WeCast transforms your text into a lifelike podcast episode ready to play in seconds.</p>
-          <button className="btn-cta">
+          <button
+            onClick={() => {
+              window.location.hash = '#/create';
+            }}
+            className="relative inline-flex items-center justify-center px-8 py-3 font-semibold text-white rounded-full overflow-hidden group btn-cta"
+          >
             <span className="relative z-10">Let’s WeCast It</span>
             <div className="absolute inset-0 bg-gradient-to-r from-pink-bright to-purple-medium opacity-0 group-hover:opacity-20 transition-opacity duration-300"></div>
           </button>
+
         </div>
       </div>
 

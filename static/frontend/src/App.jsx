@@ -8,7 +8,10 @@ import AboutSection from './components/AboutSection';
 import FooterArt from './components/FooterArt';
 import Footer from './components/Footer';
 import Account from './components/Account';
-import Signup from "./components/Signup"; // ✅
+import Signup from './components/Signup';
+import Login from './components/Login';
+import EditScript from './components/EditScript';
+import Create from './components/CreatePro'; // or './pages/CreatePro'
 
 function useHashRoute() {
   const [hash, setHash] = useState(window.location.hash || '#/');
@@ -23,18 +26,28 @@ function useHashRoute() {
 export default function App() {
   const hash = useHashRoute();
   const isAccount = hash.startsWith('#/account');
-  const isSignup  = hash.startsWith('#/signup');   // ✅
+  const isSignup = hash.startsWith('#/signup');
+  const isLogin = hash.startsWith('#/login');
+  const isCreate = hash.startsWith('#/create'); // same route
+  const isEdit = hash.startsWith('#/edit');
+
 
   return (
     <div className="min-h-screen bg-cream dark:bg-[#0a0a1a] text-black dark:text-white overflow-x-hidden transition-colors duration-500">
       <div className="h-2 bg-purple-gradient"></div>
-      <Header />  {/* stays on all pages */}
+      <Header />
 
       <main className="pt-20">
         {isAccount ? (
           <Account />
         ) : isSignup ? (
-          <Signup />   // ✅ render Sign Up page
+          <Signup />
+        ) : isLogin ? (
+          <Login />
+        ) : isCreate ? (
+          <Create />
+        ) : isEdit ? (
+          <EditScript />
         ) : (
           <>
             <HeroSection />

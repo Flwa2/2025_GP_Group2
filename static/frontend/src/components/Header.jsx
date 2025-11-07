@@ -58,9 +58,7 @@ export default function Header() {
           </li>
         </ul>
 
-        {/* RIGHT: CTA + (optional) auth link */}
         <div className="flex items-center gap-3">
-          {/* Optional: keep login as a light link */}
           <a
             href="#/login"
             className="px-3 py-1.5 rounded-lg text-black dark:text-gray-100 font-normal transition-all duration-300 hover:font-semibold hover:underline underline-offset-4"
@@ -69,7 +67,6 @@ export default function Header() {
             Log in
           </a>
 
-          {/* Main CTA — opens Flask create page */}
           <a
             href="#/signup"
             className="px-3 py-1.5 rounded-lg bg-black text-white font-bold border-2 border-black transition-all duration-300 hover:bg-pink-200 hover:text-black"

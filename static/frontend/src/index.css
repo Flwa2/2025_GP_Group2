@@ -239,3 +239,6 @@ html {
   mask-image: radial-gradient(closest-side, rgba(0,0,0,.8), transparent);
 }
 
+@keyframes spin { to { transform: rotate(360deg); } }
+.animate-spin-slow { animation: spin 2.2s linear infinite; }
+
