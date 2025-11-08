@@ -119,7 +119,7 @@ export default function HowItWorks() {
         {/* CTA (unchanged size) */}
         <div className="mt-10 flex flex-col items-center gap-3">
           <a
-            href="http://127.0.0.1:5000/create"
+            href="'#/create'"
             className="btn-cta
                        "
           >
