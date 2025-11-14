@@ -20,6 +20,7 @@ import re
 # 🔥 Firebase / Firestore
 import firebase_admin
 from firebase_admin import credentials, firestore
+import json
 
 
 # ------------------------------------------------------------
@@ -68,9 +69,42 @@ if not ELEVENLABS_API_KEY:
 voice_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
 # === Firestore init ===
-cred = credentials.Certificate("config/service_account.json")  # make sure this path is correct
-firebase_admin.initialize_app(cred)
-db = firestore.client()
+def init_firestore():
+    """
+    Use local service_account.json when running locally.
+    Use FIREBASE_SERVICE_ACCOUNT env variable on Render.
+    If neither exists → Firestore is disabled (db=None).
+    """
+    try:
+        local_path = "config/service_account.json"
+
+        # 1) LOCAL development → use file
+        if os.path.exists(local_path):
+            print("🔥 Using local Firestore credentials")
+            cred = credentials.Certificate(local_path)
+            firebase_admin.initialize_app(cred)
+            return firestore.client()
+
+        # 2) RENDER deployment → use environment variable
+        env_json = os.getenv("FIREBASE_SERVICE_ACCOUNT")
+        if env_json:
+            print("🔥 Using Render FIREBASE_SERVICE_ACCOUNT")
+            cred_dict = json.loads(env_json)
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+            return firestore.client()
+
+        # 3) No credentials found
+        print("⚠ Firestore disabled — no credentials found.")
+        return None
+
+    except Exception as e:
+        print("❌ Firestore init FAILED:", e)
+        return None
+
+
+# Initialize Firestore
+db = init_firestore()
 
 
 # ------------------------------------------------------------
