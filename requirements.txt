@@ -34,7 +34,9 @@
 Flask==3.0.3
 Flask-Cors
 gunicorn
+Flask-Session
 openai==1.40.1
 python-dotenv==1.0.1
 httpx<0.28
 elevenlabs
+firebase-admin
