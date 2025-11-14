@@ -1,19 +1,41 @@
 // src/components/CreatePro.jsx
 import React, { useEffect, useMemo, useState } from "react";
-import { Mic2, Users, NotebookPen, ChevronRight, Check, Plus, Info, Wand2, AlertCircle } from "lucide-react";
+import {
+    Mic2,
+    Users,
+    NotebookPen,
+    ChevronRight,
+    Check,
+    Plus,
+    Info,
+    Wand2,
+    AlertCircle,
+    Play,
+} from "lucide-react";
 
 /* -------------------- overlay: rotating logo -------------------- */
 function LoadingOverlay({ show, logoSrc = "/logo.png" }) {
     if (!show) return null;
     return (
-        <div className="fixed inset-0 z-[9999] grid place-items-center bg-black/70 backdrop-blur-sm" role="dialog" aria-modal="true">
+        <div
+            className="fixed inset-0 z-[9999] grid place-items-center bg-black/70 backdrop-blur-sm"
+            role="dialog"
+            aria-modal="true"
+        >
             <div className="w-[min(92vw,480px)] rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xl p-6">
                 <div className="flex items-center gap-4">
-                    <img src={logoSrc} alt="WeCast logo" className="w-12 h-12 rounded-full animate-[spin_6s_linear_infinite]" />
+                    <img
+                        src={logoSrc}
+                        alt="WeCast logo"
+                        className="w-12 h-12 rounded-full animate-[spin_6s_linear_infinite]"
+                    />
                     <div>
-                        <p className="font-extrabold text-black dark:text-white">Generating your podcast…</p>
+                        <p className="font-extrabold text-black dark:text-white">
+                            Generating your podcast…
+                        </p>
                         <p className="text-sm text-neutral-600 dark:text-neutral-400">
-                            We’re crafting your script and setting up the editor. This may take a few seconds.
+                            We’re crafting your script and setting up the editor. This may
+                            take a few seconds.
                         </p>
                     </div>
                 </div>
@@ -40,7 +62,12 @@ function Toast({ toast, onClose }) {
                 <div className="flex items-start gap-2">
                     <Info className="w-4 h-4 mt-0.5" />
                     <div className="text-sm font-medium">{toast.message}</div>
-                    <button onClick={onClose} className="ml-3 opacity-60 hover:opacity-90">✕</button>
+                    <button
+                        onClick={onClose}
+                        className="ml-3 opacity-60 hover:opacity-90"
+                    >
+                        ✕
+                    </button>
                 </div>
             </div>
         </div>
@@ -63,8 +90,26 @@ export default function CreatePro() {
     const [toast, setToast] = useState(null);
     const [hoverKey, setHoverKey] = useState(null); // for hover guidelines
 
+    // 🔊 ElevenLabs voices
+    const [voices, setVoices] = useState([]);
+    const [loadingVoices, setLoadingVoices] = useState(true);
+
     const MIN = 500;
     const MAX = 2500;
+
+    // Group voices by gender label (if ElevenLabs provides it)
+    const voiceGroups = useMemo(() => {
+        const groups = { male: [], female: [], other: [] };
+
+        voices.forEach((v) => {
+            const g = (v.labels?.gender || v.labels?.Gender || "").toLowerCase();
+            if (g === "male") groups.male.push(v);
+            else if (g === "female") groups.female.push(v);
+            else groups.other.push(v);
+        });
+
+        return groups;
+    }, [voices]);
 
     /* ---------- rules ---------- */
     const styleLimits = {
@@ -77,29 +122,37 @@ export default function CreatePro() {
     const STYLE_GUIDELINES = {
         Interview: (
             <>
-                <strong>Tone:</strong> Professional &amp; curious.<br />
-                <strong>Flow:</strong> Host asks, guest answers (Q&amp;A).<br />
+                <strong>Tone:</strong> Professional &amp; curious.
+                <br />
+                <strong>Flow:</strong> Host asks, guest answers (Q&amp;A).
+                <br />
                 <strong>Goal:</strong> Insight through dialogue.
             </>
         ),
         Storytelling: (
             <>
-                <strong>Tone:</strong> Engaging &amp; narrative.<br />
-                <strong>Flow:</strong> Chronological story with transitions.<br />
+                <strong>Tone:</strong> Engaging &amp; narrative.
+                <br />
+                <strong>Flow:</strong> Chronological story with transitions.
+                <br />
                 <strong>Goal:</strong> Immerse the listener.
             </>
         ),
         Educational: (
             <>
-                <strong>Tone:</strong> Clear &amp; structured.<br />
-                <strong>Flow:</strong> Explain, then clarify with examples.<br />
+                <strong>Tone:</strong> Clear &amp; structured.
+                <br />
+                <strong>Flow:</strong> Explain, then clarify with examples.
+                <br />
                 <strong>Goal:</strong> Teach effectively.
             </>
         ),
         Conversational: (
             <>
-                <strong>Tone:</strong> Relaxed &amp; authentic.<br />
-                <strong>Flow:</strong> Co-host banter and reactions.<br />
+                <strong>Tone:</strong> Relaxed &amp; authentic.
+                <br />
+                <strong>Flow:</strong> Co-host banter and reactions.
+                <br />
                 <strong>Goal:</strong> Natural, friendly talk.
             </>
         ),
@@ -139,6 +192,42 @@ export default function CreatePro() {
     const defaultCount = (style) =>
         style === "Interview" ? 2 : style === "Conversational" ? 2 : 1;
 
+    /* ---------- load voices from backend ---------- */
+    useEffect(() => {
+        async function loadVoices() {
+            try {
+                const res = await fetch("/api/voices");
+                const data = await res.json();
+
+                // ✅ handle { voices: [...] }  OR  [...] directly
+                if (Array.isArray(data.voices)) {
+                    setVoices(data.voices);
+                } else if (Array.isArray(data)) {
+                    setVoices(data);
+                } else {
+                    setVoices([]);
+                }
+            } catch (e) {
+                console.error("Failed to load voices", e);
+                setVoices([]);
+            } finally {
+                setLoadingVoices(false);
+            }
+        }
+        loadVoices();
+    }, []);
+
+
+
+    const defaultVoiceForGender = (gender = "Male") => {
+        const key = (gender || "").toLowerCase() === "female" ? "female" : "male";
+
+        // Prefer voices that match the gender label, otherwise fall back to all voices.
+        const pool = voiceGroups[key].length ? voiceGroups[key] : voices;
+        return pool[0]?.id || "";
+    };
+
+
     /* ---------- when style changes: reset speakers ---------- */
     useEffect(() => {
         if (!scriptStyle) return;
@@ -147,20 +236,60 @@ export default function CreatePro() {
 
         if (scriptStyle === "Interview") {
             setSpeakers([
-                { name: "", gender: "Male", role: "host" },
-                { name: "", gender: "Female", role: "guest" },
+                {
+                    name: "",
+                    gender: "Male",
+                    role: "host",
+                    voiceId: defaultVoiceForGender("Male"),
+                },
+                {
+                    name: "",
+                    gender: "Female",
+                    role: "guest",
+                    voiceId: defaultVoiceForGender("Female"),
+                },
             ]);
         } else if (scriptStyle === "Conversational") {
             setSpeakers([
-                { name: "", gender: "Male", role: "host" },
-                { name: "", gender: "Female", role: "host" },
+                {
+                    name: "",
+                    gender: "Male",
+                    role: "host",
+                    voiceId: defaultVoiceForGender("Male"),
+                },
+                {
+                    name: "",
+                    gender: "Female",
+                    role: "host",
+                    voiceId: defaultVoiceForGender("Female"),
+                },
             ]);
         } else {
-            setSpeakers([{ name: "", gender: "Male", role: "host" }]);
+            setSpeakers([
+                {
+                    name: "",
+                    gender: "Male",
+                    role: "host",
+                    voiceId: defaultVoiceForGender("Male"),
+                },
+            ]);
         }
         setErrors({});
         setStep(1);
-    }, [scriptStyle]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scriptStyle, voices.length]); // re-run when style or voice list ready
+
+    /* ---------- when voices finish loading, fill missing voiceIds ---------- */
+    useEffect(() => {
+        if (loadingVoices || !voices.length || !speakers.length) return;
+        setSpeakers((prev) =>
+            prev.map((s) => ({
+                ...s,
+                voiceId: s.voiceId || defaultVoiceForGender(s.gender),
+            }))
+        );
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [loadingVoices, voices.length]);
 
     /* ---------- when count changes: rebuild array & roles ---------- */
     useEffect(() => {
@@ -170,9 +299,16 @@ export default function CreatePro() {
         if (!limits.includes(count)) return;
 
         setSpeakers((prev) => {
-            const next = Array.from({ length: count }).map(
-                (_, i) => prev[i] || { name: "", gender: "Male", role: "host" }
-            );
+            const next = Array.from({ length: count }).map((_, i) => {
+                const old = prev[i] || {};
+                const gender = old.gender || "Male";
+                return {
+                    name: old.name || "",
+                    gender,
+                    role: old.role || "host",
+                    voiceId: old.voiceId || defaultVoiceForGender(gender),
+                };
+            });
 
             if (scriptStyle === "Interview") {
                 if (count === 2) {
@@ -187,28 +323,48 @@ export default function CreatePro() {
                 next.forEach((s) => (s.role = "host"));
             } else {
                 if (count === 1) next[0].role = "host";
-                if (count === 2) { next[0].role = "host"; next[1].role = "guest"; }
-                if (count === 3) { next[0].role = "host"; next[1].role = "guest"; next[2].role = "guest"; }
+                if (count === 2) {
+                    next[0].role = "host";
+                    next[1].role = "guest";
+                }
+                if (count === 3) {
+                    next[0].role = "host";
+                    next[1].role = "guest";
+                    next[2].role = "guest";
+                }
             }
             return next;
         });
-    }, [speakersCount, scriptStyle]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [speakersCount, scriptStyle, voices.length]);
 
     /* ---------- helpers ---------- */
-    const allowedCounts = useMemo(() => styleLimits[scriptStyle] || [], [scriptStyle]);
-    const showRoleSelect = scriptStyle !== "Conversational" && scriptStyle !== "Interview";
-    const anyEmptySpeakerName = speakers.some((s) => !String(s.name || "").trim());
+    const allowedCounts = useMemo(
+        () => styleLimits[scriptStyle] || [],
+        [scriptStyle]
+    );
+    const showRoleSelect =
+        scriptStyle !== "Conversational" && scriptStyle !== "Interview";
+    const anyEmptySpeakerName = speakers.some(
+        (s) => !String(s.name || "").trim()
+    );
 
     const continueFromStyle = () => {
         if (!scriptStyle) {
             setErrors({ script_style: "Choose a podcast style first." });
-            setToast({ type: "error", message: "Please choose a podcast style to continue." });
+            setToast({
+                type: "error",
+                message: "Please choose a podcast style to continue.",
+            });
             setTimeout(() => setToast(null), 2600);
             return;
         }
         setErrors({});
         setStep(2);
-        setToast({ type: "success", message: "Style selected. Now configure speakers." });
+        setToast({
+            type: "success",
+            message: "Style selected. Now configure speakers.",
+        });
         setTimeout(() => setToast(null), 2400);
     };
 
@@ -218,12 +374,16 @@ export default function CreatePro() {
         if (!allowedCounts.includes(Number(speakersCount)))
             errs.speakers = "Invalid number of speakers for this style.";
         if (anyEmptySpeakerName)
-            errs.speaker_names = "Please enter a name for every speaker before continuing.";
+            errs.speaker_names =
+                "Please enter a name for every speaker before continuing.";
 
         setErrors(errs);
         if (Object.keys(errs).length === 0) {
             setStep(3);
-            setToast({ type: "success", message: "Speakers set. Paste your text to generate the script." });
+            setToast({
+                type: "success",
+                message: "Speakers set. Paste your text to generate the script.",
+            });
             setTimeout(() => setToast(null), 2400);
         } else {
             setToast({ type: "error", message: Object.values(errs)[0] });
@@ -231,45 +391,48 @@ export default function CreatePro() {
         }
     };
 
-const API = "http://localhost:5000";
+    const handleGenerate = async () => {
+        // basic validations you already had…
+        const words = description.trim().split(/\s+/).filter(Boolean).length;
+        if (words < MIN) {
+            setErrors({ description: `At least ${MIN} words.` });
+            return;
+        }
+        if (words > MAX) {
+            setErrors({ description: `Max ${MAX} words.` });
+            return;
+        }
 
-const handleGenerate = async () => {
-  // basic validations you already had…
-  const words = description.trim().split(/\s+/).filter(Boolean).length;
-  if (words < MIN) { setErrors({ description: `At least ${MIN} words.` }); return; }
-  if (words > MAX) { setErrors({ description: `Max ${MAX} words.` }); return; }
+        setSubmitting(true);
+        setErrors({}); // clear old errors
 
-  setSubmitting(true);
-  setErrors({}); // clear old errors
+        try {
+            const res = await fetch("/api/generate", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    script_style: scriptStyle,
+                    speakers: Number(speakersCount),
+                    speakers_info: speakers, // includes voiceId now
+                    description,
+                }),
+            });
 
-  try {
-    const res = await fetch(`${API}/api/generate`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        script_style: scriptStyle,
-        speakers: speakersCount,
-        speakers_info: speakers,
-        description,
-      }),
-    });
+            const data = await res.json();
+            if (!res.ok || !data.script) {
+                setErrors({ server: data.error || "Generation failed." });
+                setSubmitting(false);
+                return;
+            }
 
-    const data = await res.json();
-    if (!res.ok || !data.script) {
-      setErrors({ server: data.error || "Generation failed." });
-      setSubmitting(false);
-      return;
-    }
-
-    // success → go to React editor route
-    window.location.hash = "#/edit";
-  } catch (e) {
-    setErrors({ server: "Generation failed. Please check backend." });
-    setSubmitting(false);
-  }
-};
-
+            // success → go to React editor route
+            window.location.hash = "#/edit";
+        } catch (e) {
+            setErrors({ server: "Generation failed. Please check backend." });
+            setSubmitting(false);
+        }
+    };
 
     /* ---------- stepper (done=gray) ---------- */
     const StepDot = ({ n, label }) => {
@@ -288,13 +451,22 @@ const handleGenerate = async () => {
                     : "text-black/60 dark:text-white/60";
         return (
             <div className="flex items-center gap-3">
-                <div className={`w-8 h-8 rounded-full grid place-items-center text-sm font-bold ${dot}`}>{n}</div>
+                <div
+                    className={`w-8 h-8 rounded-full grid place-items-center text-sm font-bold ${dot}`}
+                >
+                    {n}
+                </div>
                 <div className={`text-sm font-semibold ${labelCls}`}>{label}</div>
             </div>
         );
     };
     const StepLine = ({ on }) => (
-        <div className={`h-[3px] flex-1 rounded-full ${on ? "bg-gradient-to-r from-purple-600 to-pink-500" : "bg-black/10 dark:bg-white/10"}`} />
+        <div
+            className={`h-[3px] flex-1 rounded-full ${on
+                ? "bg-gradient-to-r from-purple-600 to-pink-500"
+                : "bg-black/10 dark:bg-white/10"
+                }`}
+        />
     );
 
     /* ---------- layout ---------- */
@@ -311,9 +483,12 @@ const handleGenerate = async () => {
                         {step === 3 && "Paste your text"}
                     </h1>
                     <p className="mt-2 text-black/70 dark:text-white/70">
-                        {step === 1 && "Pick a style first. Hover a card to preview the style guidelines."}
-                        {step === 2 && "Choose how many speakers and fill their details."}
-                        {step === 3 && "Provide your content to generate the script."}
+                        {step === 1 &&
+                            "Pick a style first. Hover a card to preview the style guidelines."}
+                        {step === 2 &&
+                            "Choose how many speakers and fill their details (name, role, voice)."}
+                        {step === 3 &&
+                            "Provide your content to generate the script, then move to audio."}
                     </p>
                 </header>
 
@@ -342,14 +517,21 @@ const handleGenerate = async () => {
                                     key={s.key}
                                     onClick={() => setScriptStyle(s.key)}
                                     onMouseEnter={() => setHoverKey(s.key)}
-                                    onMouseLeave={() => setHoverKey((k) => (k === s.key ? null : k))}
+                                    onMouseLeave={() =>
+                                        setHoverKey((k) => (k === s.key ? null : k))
+                                    }
                                     className={`group relative w-full max-w-xl p-4 rounded-xl border transition cursor-pointer ${scriptStyle === s.key
                                         ? "border-purple-400/60 bg-purple-500/10"
                                         : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
                                         }`}
                                 >
                                     <div className="flex items-start gap-3">
-                                        <input type="radio" checked={scriptStyle === s.key} readOnly className="accent-purple-600 mt-1" />
+                                        <input
+                                            type="radio"
+                                            checked={scriptStyle === s.key}
+                                            readOnly
+                                            className="accent-purple-600 mt-1"
+                                        />
                                         <div className="w-full">
                                             <div className="flex items-center gap-2 font-bold">
                                                 <span className="truncate">{s.title}</span>
@@ -363,18 +545,23 @@ const handleGenerate = async () => {
                                             <p className="text-sm mt-1">{s.caption}</p>
                                             <ul className="flex flex-wrap gap-2 mt-2 text-xs text-black/70 dark:text-white/70">
                                                 {s.bullets.map((b, i) => (
-                                                    <li key={i} className="px-2 py-1 rounded bg-black/5 dark:bg-white/5">
+                                                    <li
+                                                        key={i}
+                                                        className="px-2 py-1 rounded bg-black/5 dark:bg-white/5"
+                                                    >
                                                         {b}
                                                     </li>
                                                 ))}
                                             </ul>
-                                            <p className="text-xs text-purple-500 mt-2">Valid: {s.valid}</p>
+                                            <p className="text-xs text-purple-500 mt-2">
+                                                Valid: {s.valid}
+                                            </p>
                                         </div>
                                     </div>
 
                                     {/* Hover guidelines popover (glass look + arrow) */}
                                     {hoverKey === s.key && (
-                                        <div className="absolute left-5 right-5-top-[calc(100%+30px)] z-40">
+                                        <div className="absolute left-5 right-5 top-[calc(100%+30px)] z-40">
                                             <div
                                                 className="
         relative rounded-2xl
@@ -388,7 +575,6 @@ const handleGenerate = async () => {
                                                 <div className="flex items-center gap-2 font-semibold tracking-wide">
                                                     <Info className="w-4 h-4 opacity-90" />
                                                     <span>Style guidelines</span>
-
                                                 </div>
                                                 <div className="mt-2 leading-relaxed text-[0.95rem]">
                                                     {STYLE_GUIDELINES[s.key]}
@@ -474,14 +660,18 @@ const handleGenerate = async () => {
                                         key={i}
                                         className="rounded-xl border border-neutral-300 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 w-full"
                                     >
-                                        <h3 className="text-sm font-bold text-black/80 dark:text-white/80">Speaker {i + 1}</h3>
+                                        <h3 className="text-sm font-bold text-black/80 dark:text-white/80">
+                                            Speaker {i + 1}
+                                        </h3>
                                         <div className="mt-3 space-y-3">
                                             <div>
                                                 <label className="form-label">Name</label>
                                                 <input
                                                     value={sp.name}
                                                     onChange={(e) => {
-                                                        const cleaned = e.target.value.replace(/[^\p{L}\s]/gu, "").replace(/\s{2,}/g, " ");
+                                                        const cleaned = e.target.value
+                                                            .replace(/[^\p{L}\s]/gu, "")
+                                                            .replace(/\s{2,}/g, " ");
                                                         setSpeakers((arr) => {
                                                             const next = [...arr];
                                                             next[i] = { ...next[i], name: cleaned };
@@ -489,9 +679,13 @@ const handleGenerate = async () => {
                                                         });
                                                     }}
                                                     placeholder={`Speaker ${i + 1} name`}
-                                                    className={`form-input ${errors.speaker_names && !sp.name.trim() ? "border-rose-400" : ""}`}
+                                                    className={`form-input ${errors.speaker_names && !sp.name.trim()
+                                                        ? "border-rose-400"
+                                                        : ""
+                                                        }`}
                                                 />
                                             </div>
+
                                             <div className="grid grid-cols-2 gap-3">
                                                 <div>
                                                     <label className="form-label">Gender</label>
@@ -500,7 +694,14 @@ const handleGenerate = async () => {
                                                         onChange={(e) =>
                                                             setSpeakers((arr) => {
                                                                 const n = [...arr];
-                                                                n[i] = { ...n[i], gender: e.target.value };
+                                                                const gender = e.target.value;
+                                                                n[i] = {
+                                                                    ...n[i],
+                                                                    gender,
+                                                                    voiceId:
+                                                                        n[i].voiceId ||
+                                                                        defaultVoiceForGender(gender),
+                                                                };
                                                                 return n;
                                                             })
                                                         }
@@ -522,15 +723,102 @@ const handleGenerate = async () => {
                                                                 return n;
                                                             })
                                                         }
-                                                        className={`form-input ${!showRoleSelect ? "opacity-60 cursor-not-allowed" : ""}`}
+                                                        className={`form-input ${!showRoleSelect
+                                                            ? "opacity-60 cursor-not-allowed"
+                                                            : ""
+                                                            }`}
                                                     >
                                                         <option value="host">Host</option>
                                                         <option value="guest">Guest</option>
                                                     </select>
-                                                    {scriptStyle === "Conversational" && <p className="form-help">Conversational uses hosts only.</p>}
-                                                    {scriptStyle === "Interview" && <p className="form-help">Interview roles are fixed by layout.</p>}
+                                                    {scriptStyle === "Conversational" && (
+                                                        <p className="form-help">
+                                                            Conversational uses hosts only.
+                                                        </p>
+                                                    )}
+                                                    {scriptStyle === "Interview" && (
+                                                        <p className="form-help">
+                                                            Interview roles are fixed by layout.
+                                                        </p>
+                                                    )}
                                                 </div>
                                             </div>
+
+                                            {/* 🔊 Voice selection */}
+                                            <div>
+                                                <label className="form-label">Voice</label>
+
+                                                {loadingVoices ? (
+                                                    <p className="text-sm text-black/60 dark:text-white/60">
+                                                        Loading voices…
+                                                    </p>
+                                                ) : voices.length === 0 ? (
+                                                    <p className="text-sm text-rose-500">
+                                                        No voices found. Check ElevenLabs config.
+                                                    </p>
+                                                ) : (
+                                                    (() => {
+                                                        // Decide which pool to use based on the speaker's gender
+                                                        const genderKey =
+                                                            (sp.gender || "").toLowerCase() === "female" ? "female" : "male";
+
+                                                        // Prefer same-gender voices; if none, fall back to all voices
+                                                        const pool =
+                                                            voiceGroups[genderKey].length ? voiceGroups[genderKey] : voices;
+
+                                                        const currentId = sp.voiceId || pool[0]?.id || "";
+
+                                                        return (
+                                                            <div className="flex items-center gap-3">
+                                                                <select
+                                                                    value={currentId}
+                                                                    onChange={(e) =>
+                                                                        setSpeakers((arr) => {
+                                                                            const n = [...arr];
+                                                                            n[i] = { ...n[i], voiceId: e.target.value };
+                                                                            return n;
+                                                                        })
+                                                                    }
+                                                                    className="form-input flex-1"
+                                                                >
+                                                                    {pool.map((v) => (
+                                                                        <option key={v.id} value={v.id}>
+                                                                            {v.name}
+                                                                        </option>
+                                                                    ))}
+                                                                </select>
+
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => {
+                                                                        const selected =
+                                                                            pool.find((v) => v.id === currentId) || pool[0];
+                                                                        if (selected?.preview_url) {
+                                                                            const audio = new Audio(selected.preview_url);
+                                                                            audio.play().catch((err) =>
+                                                                                console.error("Preview failed", err)
+                                                                            );
+                                                                        } else {
+                                                                            alert("No preview available for this voice.");
+                                                                        }
+                                                                    }}
+                                                                    className="inline-flex items-center justify-center gap-2 px-5 h-[44px]
+           rounded-xl border border-purple-500 text-purple-600 font-semibold
+           hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                                                >
+                                                                    <Play className="w-4 h-4" />
+                                                                    Preview
+                                                                </button>
+                                                            </div>
+                                                        );
+                                                    })()
+                                                )}
+
+                                                <p className="form-help text-xs mt-1">
+                                                    This voice will be used when generating audio for this speaker.
+                                                </p>
+                                            </div>
+
                                         </div>
                                     </div>
                                 ))}
@@ -546,10 +834,16 @@ const handleGenerate = async () => {
                         )}
 
                         <div className="mt-6 flex justify-between">
-                            <button onClick={() => setStep(1)} className="px-4 py-2 border rounded-xl">
+                            <button
+                                onClick={() => setStep(1)}
+                                className="px-4 py-2 border rounded-xl"
+                            >
                                 Back
                             </button>
-                            <button onClick={onContinueFromSpeakers} className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold">
+                            <button
+                                onClick={onContinueFromSpeakers}
+                                className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
+                            >
                                 Continue <ChevronRight className="w-4 h-4" />
                             </button>
                         </div>
@@ -572,12 +866,17 @@ const handleGenerate = async () => {
                         />
                         <div className="mt-2 text-sm flex justify-between">
                             <span
-                                className={`${description.trim().split(/\s+/).filter(Boolean).length < MIN ? "text-rose-500" : "text-purple-500"
+                                className={`${description.trim().split(/\s+/).filter(Boolean).length < MIN
+                                    ? "text-rose-500"
+                                    : "text-purple-500"
                                     }`}
                             >
-                                {description.trim().split(/\s+/).filter(Boolean).length} / {MAX} words
+                                {description.trim().split(/\s+/).filter(Boolean).length} / {MAX}{" "}
+                                words
                             </span>
-                            {errors.description && <span className="text-rose-500">{errors.description}</span>}
+                            {errors.description && (
+                                <span className="text-rose-500">{errors.description}</span>
+                            )}
                         </div>
 
                         {errors.server && (
@@ -588,11 +887,23 @@ const handleGenerate = async () => {
                         )}
 
                         <div className="mt-6 flex justify-between">
-                            <button onClick={() => setStep(2)} className="px-4 py-2 border rounded-xl">
+                            <button
+                                onClick={() => setStep(2)}
+                                className="px-4 py-2 border rounded-xl"
+                            >
                                 Back
                             </button>
-                            <button onClick={handleGenerate} className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold">
-                                {submitting ? "Please wait…" : <>Start Generating <Wand2 className="w-4 h-4" /></>}
+                            <button
+                                onClick={handleGenerate}
+                                className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
+                            >
+                                {submitting ? (
+                                    "Please wait…"
+                                ) : (
+                                    <>
+                                        Start Generating <Wand2 className="w-4 h-4" />
+                                    </>
+                                )}
                             </button>
                         </div>
                     </section>
@@ -602,6 +913,6 @@ const handleGenerate = async () => {
             {/* overlays */}
             <LoadingOverlay show={submitting} />
             <Toast toast={toast} onClose={() => setToast(null)} />
-        </div >
+        </div>
     );
 }

@@ -1,3 +1,5 @@
+# app.py
+
 from flask import (
     Flask,
     render_template,
@@ -6,27 +8,76 @@ from flask import (
     url_for,
     session,
     jsonify,
-)  # ← add jsonify
-from flask_cors import CORS  # ← add this
-from openai import OpenAI
-import os
+)
+from flask_cors import CORS
+from flask_session import Session
 from dotenv import load_dotenv
-from elevenlabs import ElevenLabs
+from openai import OpenAI
+from elevenlabs.client import ElevenLabs
+import os
+import requests
+import re
+# 🔥 Firebase / Firestore
+import firebase_admin
+from firebase_admin import credentials, firestore
 
+
+# ------------------------------------------------------------
+# App + Config
+# ------------------------------------------------------------
 
 app = Flask(__name__)
-CORS(app, origins=["http://localhost:5173", "http://127.0.0.1:5173"], supports_credentials=True)
+
+# CORS so React (localhost:5173) can call Flask
+CORS(
+    app,
+    origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    supports_credentials=True,
+)
+
+# Server-side sessions (for create_draft, etc.)
+app.config.update(
+    SESSION_TYPE="filesystem",  # store sessions on disk
+    SESSION_FILE_DIR="./.flask_session",
+    SESSION_PERMANENT=False,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=False,  # HTTP, not HTTPS
+)
+Session(app)
+
+# Load .env
 load_dotenv()
 app.secret_key = "supersecretkey"
+
+# ------------------------------------------------------------
+# API Clients (OpenAI + ElevenLabs)
+# ------------------------------------------------------------
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")
-voice_client = ElevenLabs(api_key=ELEVEN_API_KEY)
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+print("ELEVENLABS_API_KEY present?", bool(ELEVENLABS_API_KEY))
+
+if not ELEVENLABS_API_KEY:
+    raise RuntimeError(
+        "ELEVENLABS_API_KEY is missing. Add it to .env next to app.py:\n"
+        "ELEVENLABS_API_KEY=xi_************************"
+    )
+
+voice_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+
+# === Firestore init ===
+cred = credentials.Certificate("config/service_account.json")  # make sure this path is correct
+firebase_admin.initialize_app(cred)
+db = firestore.client()
 
 
-def is_arabic(text):
+# ------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------
+
+def is_arabic(text: str) -> bool:
     """Detect if input text is Arabic."""
     for c in text:
         if "\u0600" <= c <= "\u06ff" or "\u0750" <= c <= "\u08ff":
@@ -34,119 +85,267 @@ def is_arabic(text):
     return False
 
 
+def rebalance_script_speakers(script: str, speakers_info: list) -> str:
+    """
+    Re-label dialogue lines so that *all* speakers in speakers_info
+    actually get turns, بدون ما نخرب عناوين الأقسام والمؤثرات.
+    """
+    if not script or not speakers_info:
+        return script
+
+    names = []
+    for i, s in enumerate(speakers_info):
+        nm = (s.get("name") or "").strip()
+        if not nm:
+            nm = (s.get("role") or "").strip() or f"Speaker {i+1}"
+        names.append(nm)
+
+    if not names:
+        return script
+
+    n = len(names)
+    idx = 0
+    new_lines = []
+
+    for ln in script.splitlines():
+        original = ln
+        stripped = ln.strip()
+
+        if not stripped:
+            new_lines.append(original)
+            continue
+
+        if re.fullmatch(r"\[[^\]]+\]", stripped):
+            new_lines.append(original)
+            continue
+
+        if re.fullmatch(r"[-_=*~•·]+", stripped):
+            new_lines.append(original)
+            continue
+
+        if re.fullmatch(r"(intro|body|outro)[:：]?\s*$", stripped, re.IGNORECASE):
+            new_lines.append(original)
+            continue
+
+        m_head = re.match(
+            r"^([^:：]+)[:：]\s*(intro|body|outro)\s*$",
+            stripped,
+            re.IGNORECASE,
+        )
+        if m_head:
+            new_lines.append(original)
+            continue
+
+        m = re.match(r"^([^:：]+)[:：]\s*(.+)$", stripped)
+        if m:
+            text_after = m.group(2).strip()
+            if not text_after:
+                new_lines.append(original)
+                continue
+
+            new_speaker = names[idx % n]
+            idx += 1
+            leading_ws = original[: len(original) - len(original.lstrip())]
+            new_lines.append(f"{leading_ws}{new_speaker}: {text_after}")
+            continue
+
+        if re.search(r"\w", stripped, re.UNICODE):
+            new_speaker = names[idx % n]
+            idx += 1
+            leading_ws = original[: len(original) - len(original.lstrip())]
+            new_lines.append(f"{leading_ws}{new_speaker}: {stripped}")
+        else:
+            new_lines.append(original)
+
+    return "\n".join(new_lines)
+
+
+
 def generate_podcast_script(description: str, speakers_info: list, script_style: str):
-    """Generate a structured podcast script combining accuracy rules and style-based creativity."""
+    """Generate a structured podcast script where ALL speakers talk,
+    and remove only headings and bracket lines without touching the real script content.
+    """
+
+    # Detect Arabic
     arabic_instruction = (
         "Please write the script in Arabic." if is_arabic(description) else ""
     )
+
+    # Format speakers list for GPT
     num_speakers = len(speakers_info)
     speaker_info_text = "\n".join(
         [f"- {s['name']} ({s['gender']}, {s['role']})" for s in speakers_info]
     )
 
-    # ---- Style specific writing behavior ----
+    # Style guidelines used in prompt
     style_guidelines = {
         "Interview": """
-• Tone: Professional, journalistic, and engaging.
-• Flow: Q&A format — the host(s) ask thoughtful questions, guests answer with insights and short stories.
-• Pacing: Dynamic but realistic, maintaining curiosity.
-• Goal: Inform and connect through authentic dialogue.
+• Tone: Professional, journalistic.
+• Flow: Host asks, guest answers.
+• Turn-taking: MUST alternate speakers.
+• Goal: Insightful conversation.
 """,
         "Storytelling": """
-• Tone: Cinematic and narrative — it should feel like telling a story through voices.
-• Flow: 
-   - If there is **one host**, the host tells the story.  
-   - If there is **one host and one guest**, the guest tells the story while the host guides or reacts.  
-   - If there is **one host and two guests**, the guests tell the story while the host guides or reacts.  
-• Goal: Emotionally immerse the listener and bring visuals to life through voice.
+• Tone: Cinematic and narrative.
+• Flow: Story with emotional beats.
+• Turn-taking: All speakers appear in intro, body, outro.
+• Goal: Immersive storytelling.
 """,
         "Educational": """
-• Tone: Clear, structured, and friendly.  
-• Flow: The host explains the topic, and the guests ask questions to guide understanding.  
-• Pacing: Logical and organized — break concepts into small, easy-to-follow sections.  
-• Goal: Help listeners learn while keeping the flow interactive and engaging.
+• Tone: Clear and helpful.
+• Flow: Explain → clarify → examples.
+• Turn-taking: Host + guests engage.
+• Goal: Learn through dialogue.
 """,
         "Conversational": """
-• Tone: Relaxed, funny, and natural — like friends chatting over coffee.
-• Flow: Both speakers share personal thoughts, reactions, and stories.
-• Pacing: Casual with natural pauses, some humor, and occasional laughter.
-• Goal: Make the audience feel part of a real conversation.
+• Tone: Friendly and natural.
+• Flow: Co-host casual conversation.
+• Turn-taking: Hosts react and alternate often.
+• Goal: Feel like real conversation.
 """,
     }
 
     style_rules = style_guidelines.get(script_style, "")
 
-    # ---- prompt ----
+    # FULL PROMPT FOR GPT
     prompt = f"""
 You are a professional podcast scriptwriter.
 
-There should be {num_speakers} speaker(s) in the dialogue.
-The following are the speakers:
+There should be exactly {num_speakers} speaker(s). Use these exact labels:
+
 {speaker_info_text}
 
-The script style should be: {script_style}
+Format the content into a natural podcast script. Do not exceed or invent story details.
 
-Your task is to transform the following text into a podcast script.
+STYLE: {script_style}
 
-[START TEXT]
-{description}
-[END TEXT]
+Follow these requirements:
+
+--------------------
+INTRO
+--------------------
+- Greet listeners.
+- Introduce topic + speakers.
+- Include one sound cue in square brackets.
+
+--------------------
+BODY
+--------------------
+- Natural dialogue.
+- All speakers MUST speak multiple times.
+- Turn-taking is REQUIRED.
+- Use smooth transitions like [music fades out] or [pause].
+
+--------------------
+OUTRO
+--------------------
+- Summary or closing thoughts.
+- One closing sound cue.
+
+--------------------
+RULES
+--------------------
+- Every spoken line MUST begin with: SpeakerName:
+- Do NOT use bullet points inside the script.
+- Do NOT use markdown (#, ##, ### headings).
+- Sound cues must be inside square brackets.
+- Keep the script natural and flowing.
 
 {arabic_instruction}
 
------------------------------
-STRUCTURE & SOUND RULES
------------------------------
-Every podcast must include:
+Transform the following text into a structured podcast script:
 
-### INTRO
-- Greet the audience and introduce the topic and speakers.
-- Add [Soft intro music fades in].
-
-### BODY
-- Present the main dialogue naturally, following the text’s main ideas.
-- Include transitions like [Music fades out], [Soft background music resumes], [Pause effect].
-
-### OUTRO
-- Summarize key takeaways or closing thoughts.
-- Add [Outro music fades out] at the end.
-
------------------------------
-WRITING RULES
------------------------------
-- Use ONLY the provided text as your content base.
-- Do NOT add or remove any factual information.
-- Make it sound natural, flowing, and conversational.
-- Keep speaker labels clear (e.g., Host:, Guest:).
-- Avoid narration or stage directions outside [sound tags].
-- Do not use bullet points or markdown formatting.
-- Every line must start with a speaker’s name followed by a colon.
-- The dialogue must feel authentic and realistic.
-
------------------------------
-STYLE PERSONALITY
------------------------------
-Adapt your tone, phrasing, and rhythm according to the selected style:
-{style_rules}
-
-Now generate the full podcast script following all these instructions faithfully.
+[TEXT START]
+{description}
+[TEXT END]
 """
 
+    # ---- Call GPT ----
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
             {
                 "role": "system",
-                "content": "You are a creative, structured, and professional podcast scriptwriter.",
+                "content": "You write natural, structured podcast scripts with correct speaker dialogue."
             },
             {"role": "user", "content": prompt},
         ],
         temperature=0.75,
     )
-    return response.choices[0].message.content.strip()
+
+    raw_script = response.choices[0].message.content.strip()
+
+    # ============================================================
+    # 🧹 CLEAN ONLY BAD LINES — DO NOT DELETE MAIN SCRIPT
+    # ============================================================
+    cleaned_lines = []
+    for ln in raw_script.splitlines():
+        stripped = ln.strip()
+
+        # remove markdown headings like "# Intro", "### BODY"
+        if re.match(r"^#{1,6}\s+\w+", stripped):
+            continue
+
+        # remove standalone sound bracket lines:
+        # [Soft intro], [Music fades], [Applause], etc.
+        if re.match(r"^\[[^\]]+\]$", stripped):
+            continue
+
+        cleaned_lines.append(ln)
+
+    cleaned_raw = "\n".join(cleaned_lines)
+
+    # ============================================================
+    # 🔄 FINAL STEP: REBALANCE SPEAKERS
+    # ============================================================
+    final_script = rebalance_script_speakers(cleaned_raw, speakers_info)
+
+    return final_script
 
 
-def validate_roles(style, speakers_info):
+
+
+def generate_title_from_script(script: str, script_style: str = "") -> str:
+    """Generate a short, catchy podcast episode title (4–8 words)."""
+    if not script.strip():
+        return "Untitled Episode"
+
+    style_label = script_style or "General"
+
+    prompt = f"""
+You are an assistant helping to name a podcast episode.
+
+Write ONE short, catchy podcast episode title in 4–8 words.
+
+Style: {style_label}
+
+Rules:
+- No quotation marks.
+- No episode numbers.
+- No emojis.
+- Title case (Capitalize Major Words).
+- Return ONLY the title text, nothing else.
+
+Script:
+\"\"\"{script[:4000]}\"\"\"
+"""
+
+    resp = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "system",
+                "content": "You write concise, catchy podcast titles."
+            },
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.7,
+    )
+    return (resp.choices[0].message.content or "").strip()
+
+
+
+def validate_roles(style: str, speakers_info: list):
     roles = [s["role"] for s in speakers_info]
 
     if style == "Interview":
@@ -168,7 +367,6 @@ def validate_roles(style, speakers_info):
         )
 
     if style == "Conversational":
-        # hosts only: allow 2 or 3 hosts
         return (
             roles in [["host", "host"], ["host", "host", "host"]],
             "For 'Conversational', use 2–3 hosts (no guests).",
@@ -176,10 +374,58 @@ def validate_roles(style, speakers_info):
 
     return (True, "")
 
+# ------------------------------------------------------------
+# API endpoints for React (CreatePro, EditScript, Account)
+# ------------------------------------------------------------
 
-# === React-friendly JSON endpoints (for CreatePro.jsx & EditScript.jsx) ===
-from flask import jsonify, request, session, url_for
+@app.get("/api/health")
+def health():
+    return jsonify(status="ok")
 
+@app.get("/api/voices")
+def api_voices():
+    """
+    Return all available ElevenLabs voices.
+    Shape: { "voices": [ { "id", "name", "labels", "preview_url" }, ... ] }
+    """
+    try:
+        res = voice_client.voices.get_all()
+        voices = []
+        for v in getattr(res, "voices", []):
+            # Try preview_url or first sample
+            preview = getattr(v, "preview_url", None)
+            if not preview and getattr(v, "samples", None):
+                if v.samples:
+                    preview = getattr(v.samples[0], "preview_url", None)
+
+            voices.append(
+                {
+                    "id": v.voice_id,
+                    "name": v.name,
+                    "labels": getattr(v, "labels", {}),
+                    "preview_url": preview,
+                }
+            )
+        return jsonify(voices=voices)
+    except Exception as e:
+        print("ELEVENLABS /api/voices ERROR:", e)
+        return jsonify(error=str(e), voices=[]), 500
+
+
+
+@app.get("/api/me")
+def api_me():
+    """
+    Simple fake user profile for Account.jsx (can be replaced later with real auth).
+    """
+    return jsonify(
+        displayName="WeCast User",
+        handle="@wecast",
+        bio="I create AI-powered podcasts with WeCast.",
+        avatarUrl="",
+        email="user@example.com",
+        settings={"darkMode": False},
+    )
 
 @app.post("/api/generate")
 def api_generate():
@@ -199,16 +445,25 @@ def api_generate():
     if len(description.split()) < 500:
         return jsonify(ok=False, error="Your text must be at least 500 words."), 400
 
+    # 1) Generate the script
     script = generate_podcast_script(description, speakers_info, script_style)
 
+    # 2) Generate a short AI title for this episode
+    title = generate_title_from_script(script, script_style)
+
+    # 3) Store everything in the session draft
     session["create_draft"] = {
         "script_style": script_style,
         "speakers_count": speakers,
         "speakers_info": speakers_info,
         "description": description,
         "script": script,
+        "title": title,
     }
-    return jsonify(ok=True, script=script)
+
+    # 4) Return both script + title to the frontend
+    return jsonify(ok=True, script=script, title=title)
+
 
 
 @app.get("/api/draft")
@@ -216,59 +471,289 @@ def api_draft():
     # React editor uses this to prefill the textarea
     return jsonify(session.get("create_draft", {}))
 
-
 @app.post("/api/edit/save")
 def api_edit_save():
     payload = request.get_json(silent=True) or {}
     edited = (
         payload.get("edited_script") or request.form.get("edited_script") or ""
     ).strip()
+
     if not edited:
         return jsonify(error="Script cannot be empty."), 400
-    session["create_draft"] = {**session.get("create_draft", {}), "script": edited}
+
+    # Update session draft but KEEP existing title
+    draft = session.get("create_draft", {})
+    draft["script"] = edited
+    session["create_draft"] = draft
+
+    # ---- Firestore save (you already have db configured above) ----
+    try:
+        user_id = session.get("user_id", "anonymous")
+        doc_ref = db.collection("scripts").add(
+            {
+                "user_id": user_id,
+                "script_style": draft.get("script_style"),
+                "title": draft.get("title"),          # 👈 save episode title
+                "script": edited,
+                "speakers_info": draft.get("speakers_info"),
+                "description": draft.get("description"),
+                "saved_at": firestore.SERVER_TIMESTAMP,
+            }
+        )
+        print("✅ Firestore save OK",
+              "user_id=", user_id,
+              "doc_id=", doc_ref[1].id)
+    except Exception as e:
+        print("⚠ Firestore save FAILED:", e)
+
     return jsonify(ok=True)
 
 
+def clean_script_for_tts(script: str) -> str:
+    """
+    Create a clean text version for TTS:
+    - Remove section headers (INTRO, BODY, OUTRO)
+    - Remove markdown headings (#, ##...)
+    - Remove sound lines like [music fades]
+    - Remove speaker names
+    - Remove divider lines (-----)
+    - Keep only actual spoken text
+    """
+    cleaned_lines = []
+
+    for raw in script.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+
+        # Remove markdown headings (# Title)
+        if line.startswith("#"):
+            continue
+
+        # Remove INTRO / BODY / OUTRO
+        if re.fullmatch(r"(intro|body|outro)[:：]?\s*$", line, re.IGNORECASE):
+            continue
+
+        # Remove "Mike: INTRO"
+        if re.match(
+            r"^([^:：]+)[:：]\s*(intro|body|outro)\s*$",
+            line,
+            re.IGNORECASE,
+        ):
+            continue
+
+        # Remove standalone sound effect lines
+        if re.fullmatch(r"\[[^\]]+\]", line):
+            continue
+
+        # Remove inline sound effects
+        line = re.sub(r"\[[^\]]*\]", "", line)
+
+        # Remove speaker names ("Mike: Hello" → "Hello")
+        m = re.match(r"^([^:：]+)[:：]\s*(.*)$", line)
+        if m:
+            line = m.group(2).strip()
+
+        # Remove lines like '-----'
+        if re.fullmatch(r"[-_=*~•·]+", line):
+            continue
+
+        # Cleanup extra spaces
+        line = re.sub(r"\s{2,}", " ", line).strip()
+        if not line:
+            continue
+
+        cleaned_lines.append(line)
+
+    return "\n".join(cleaned_lines)
+
+
+
+def build_speaker_voice_map():
+    """
+    Build a mapping: speaker_name -> voiceId
+    plus a default voice (host voice if available).
+    """
+    draft = session.get("create_draft") or {}
+    speakers_info = draft.get("speakers_info") or []
+
+    mapping = {}
+    host_voice = None
+    any_voice = None
+
+    for s in speakers_info:
+        name = (s.get("name") or "").strip()
+        vid = (s.get("voiceId") or "").strip()
+        if not name or not vid:
+            continue
+
+        mapping[name] = vid
+        if not any_voice:
+            any_voice = vid
+        if s.get("role") == "host" and not host_voice:
+            host_voice = vid
+
+    default_voice = host_voice or any_voice or "21m00Tcm4TlvDq8ikWAM"
+    return mapping, default_voice
+
+
+def parse_script_into_segments(script: str):
+    """
+    Turn the script into segments: [(speaker_name, text), ...]
+    - ignore markdown headings (#..)
+    - ignore INTRO/BODY/OUTRO headers
+    - ignore separator lines (----)
+    - ignore pure [sound] lines
+    - remove inline [sound] / (stage) tags from spoken text
+    - lines without label keep the previous speaker
+    """
+    segments = []
+    last_speaker = None
+
+    for raw in script.splitlines():
+        original = raw
+        stripped = original.strip()
+        if not stripped:
+            continue
+
+        # skip markdown headings
+        if stripped.startswith("#"):
+            continue
+
+        # skip INTRO/BODY/OUTRO lines
+        if re.fullmatch(r"(intro|body|outro)[:：]?\s*$", stripped, re.IGNORECASE):
+            continue
+
+        # skip 'Mike: INTRO'
+        if re.match(
+            r"^([^:：]+)[:：]\s*(intro|body|outro)\s*$",
+            stripped,
+            re.IGNORECASE,
+        ):
+            continue
+
+        # skip pure sound effect lines
+        if re.fullmatch(r"\[[^\]]+\]", stripped):
+            continue
+
+        # skip lines like '--------'
+        if re.fullmatch(r"[-_=*~•·]+", stripped):
+            continue
+
+        m = re.match(r"^([^:：]+)[:：]\s*(.*)$", stripped)
+        if m:
+            speaker = m.group(1).strip()
+            text = m.group(2).strip()
+            last_speaker = speaker
+        else:
+            # continuation of last speaker
+            if not last_speaker:
+                continue
+            speaker = last_speaker
+            text = stripped
+
+        # remove inline [sound] and (stage) tags
+        text = re.sub(r"\[[^\]]*\]", "", text)
+        text = re.sub(r"\([^\)]*\)", "", text)
+        text = re.sub(r"\s{2,}", " ", text).strip()
+        if not text:
+            continue
+
+        segments.append((speaker, text))
+
+    return segments
+
+
+def synthesize_audio_from_script(script: str):
+    """
+    Core TTS logic.
+    - If we have multiple distinct voices → multi-speaker generation.
+    - Otherwise → single-voice fallback.
+    Returns (ok: bool, result: url_or_error_message)
+    """
+    script = (script or "").strip()
+    if not script:
+        return False, "Script is empty."
+
+    segments = parse_script_into_segments(script)
+    if not segments:
+        return False, "Nothing to read after cleaning script."
+
+    speaker_to_voice, default_voice = build_speaker_voice_map()
+    distinct_voices = set(speaker_to_voice.values())
+
+    output_path = os.path.join("static", "output.mp3")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    try:
+        with open(output_path, "wb") as f:
+            # 🔊 Single-voice fallback
+            if len(distinct_voices) <= 1:
+                # collapse all text into one big chunk
+                tts_text = " ".join(text for _, text in segments)
+                for chunk in voice_client.text_to_speech.convert(
+                    voice_id=default_voice,
+                    model_id="eleven_turbo_v2",
+                    text=tts_text,
+                ):
+                    if chunk:
+                        f.write(chunk)
+            else:
+                # 🔊 Multi-voice: one request per segment
+                for speaker, text in segments:
+                    voice_id = speaker_to_voice.get(speaker, default_voice)
+                    for chunk in voice_client.text_to_speech.convert(
+                        voice_id=voice_id,
+                        model_id="eleven_turbo_v2",
+                        text=text,
+                    ):
+                        if chunk:
+                            f.write(chunk)
+
+        file_url = url_for("static", filename="output.mp3", _external=True)
+        return True, file_url
+
+    except Exception as e:
+        print("ELEVENLABS ERROR (synthesize_audio_from_script):", e)
+        return False, str(e)
+    
+    
 @app.post("/api/audio")
 def api_audio():
+    """
+    React endpoint – generate audio for the current script
+    using per-speaker ElevenLabs voices.
+    """
     payload = request.get_json(silent=True) or {}
     script = (payload.get("scriptText") or request.form.get("scriptText") or "").strip()
-    if not script:
-        return jsonify(error="Script is empty."), 400
-    try:
-        output_path = os.path.join("static", "output.mp3")
-        with open(output_path, "wb") as f:
-            for chunk in voice_client.text_to_speech.convert(
-                voice_id="Rachel",
-                model_id="eleven_turbo_v2",
-                text=script,
-            ):
-                if chunk:
-                    f.write(chunk)
-        return jsonify(url=url_for("static", filename="output.mp3"))
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+
+    ok, result = synthesize_audio_from_script(script)
+    if not ok:
+        # result is an error message
+        return jsonify(error=result), 400
+
+    # ✅ remember the last audio URL in session
+    session["last_audio_url"] = result
+    session.modified = True
+
+    # result is the URL to output.mp3
+    return jsonify(url=result)
 
 
-# ---------------------- ROUTES ----------------------
 
-
-@app.get("/api/health")
-def health():
-    return jsonify(status="ok")
-
+# ------------------------------------------------------------
+# HTML/Jinja routes (legacy /create flow)
+# ------------------------------------------------------------
 
 @app.route("/", methods=["GET"])
 def index():
+    # For React SPA
     return redirect("http://localhost:5173/", code=302)
 
 
 @app.route("/home")
 def home():
     return render_template("index.html")
-
-
-from flask import render_template, request
 
 
 @app.route("/create", methods=["GET", "POST"], endpoint="create_page")
@@ -282,15 +767,12 @@ def create_page():
     script = None
 
     if request.method == "POST":
-        # --------- Read inputs once ---------
         script_style = (request.form.get("script_style") or "").strip()
         speakers_count_raw = (request.form.get("speakers") or "").strip()
         description = (request.form.get("description") or "").strip()
 
-        # Precompute word count once
         word_count = len([w for w in description.split() if w.strip()])
 
-        # --------- Basic validations ---------
         if not script_style:
             errors["script_style"] = "Please select a podcast style."
 
@@ -304,7 +786,6 @@ def create_page():
         elif word_count > 2500:
             errors["description"] = "The text exceeds the 2500-word limit."
 
-        # --------- Speaker data collection ---------
         if speakers_count_raw.isdigit():
             speakers_info = []
             for i in range(1, int(speakers_count_raw) + 1):
@@ -313,26 +794,16 @@ def create_page():
                 role = request.form.get(f"speaker_role_{i}", "host")
                 speakers_info.append({"name": name, "gender": gender, "role": role})
 
-            # Missing names (kept, but stricter rules below will handle too)
             if any(s["name"] == "" for s in speakers_info):
                 errors["speaker_names"] = "Please provide a name for all speakers."
 
-            # --------- Speaker name validation (letters + spaces only, unique) ---------
-            import re
-
             def _is_valid_name(s: str) -> bool:
-                """
-                Allow only letters (any language) and single/multiple spaces between words.
-                Requires at least one letter per word.
-                """
                 s = (s or "").strip()
-                # [^\W\d_] == letter, so require 1+ letters, then groups of (spaces + 1+ letters)
                 return bool(s) and bool(
                     re.fullmatch(r"[^\W\d_]+(?:\s+[^\W\d_]+)*", s, re.UNICODE)
                 )
 
             def _normalize_for_compare(s: str) -> str:
-                """Lowercase and collapse multiple spaces to detect duplicates sanely."""
                 return " ".join((s or "").strip().split()).lower()
 
             invalid_names = [
@@ -349,7 +820,6 @@ def create_page():
                     "Speaker names must be unique within the podcast."
                 )
 
-            # --------- Role/style validation ---------
             if not errors.get("speakers") and not errors.get("speaker_names"):
                 valid, message = validate_roles(script_style, speakers_info)
                 if not valid:
@@ -357,15 +827,12 @@ def create_page():
                 else:
                     valid_hint = message.replace("valid setups:", "Valid setups:")
 
-        # --------- 500-word minimum (don’t override earlier description errors) ---------
         if "description" not in errors and word_count < 500:
             errors["description"] = (
                 f"Your text must be at least 500 words. Current length: {word_count}."
             )
 
-        # --------- Any errors? Re-render create with the right step open ---------
         if errors:
-            # Open Step 2 if the description/text failed, else Step 1
             open_step = 2 if errors.get("description") else 1
             return (
                 render_template(
@@ -382,13 +849,13 @@ def create_page():
                 400,
             )
 
-        # --------- Success: generate and go to Step 3 (Edit) ---------
         script = generate_podcast_script(description, speakers_info, script_style)
         session["create_draft"] = {
             "script_style": script_style,
             "speakers_count": speakers_count,
-            "speakers_info": speakers_info,  # list of dicts: [{"name":..., "gender":..., "role":...}, ...]
+            "speakers_info": speakers_info,
             "description": description,
+            "script": script,
         }
         return render_template(
             "ScriptEdit.html",
@@ -397,7 +864,6 @@ def create_page():
             success="Your script is ready! You can edit and export it now.",
         )
 
-    # --------- GET: allow /create?step=2 to open Step 2, and restore if asked ---------
     step = request.args.get("step", default="1")
     restore = request.args.get("restore", default="0") == "1"
 
@@ -412,7 +878,6 @@ def create_page():
         speakers_count = draft.get("speakers_count", 0)
         speakers_info = draft.get("speakers_info", [])
         description = draft.get("description", "")
-        # force Step 2 open when restoring
         open_step = 2
 
     return render_template(
@@ -461,29 +926,35 @@ def edit():
 
 @app.route("/generate_audio", methods=["POST"])
 def generate_audio():
-    script = request.form.get("scriptText", "").strip()
-    if not script:
-        return {"error": "Script is empty."}, 400
+    """
+    Legacy HTML route for audio generation (ScriptEdit.html form).
+    Uses the same multi-voice logic as /api/audio.
+    """
+    script = (request.form.get("scriptText") or "").strip()
 
-    try:
-        # Generate audio file (MP3)
-        output_path = os.path.join("static", "output.mp3")
+    ok, result = synthesize_audio_from_script(script)
+    if not ok:
+        return {"error": result}, 400
 
-        # ElevenLabs returns an iterator (stream) — so write each chunk
-        with open(output_path, "wb") as f:
-            for chunk in voice_client.text_to_speech.convert(
-                voice_id="Rachel",  # pick your voice
-                model_id="eleven_turbo_v2",
-                text=script,
-            ):
-                if chunk:  # ensure not None
-                    f.write(chunk)
+    # ✅ store for legacy flow as well
+    session["last_audio_url"] = result
+    session.modified = True
 
-        # Return the URL for playback in the browser
-        return {"url": url_for("static", filename="output.mp3")}
-    except Exception as e:
-        return {"error": str(e)}, 500
+    return {"url": result}
 
+@app.get("/api/audio/last")
+def api_audio_last():
+    """
+    Return the last generated audio URL for this session, if any.
+    Used so the audio does not 'disappear' after refresh or navigation.
+    """
+    url = session.get("last_audio_url")
+    return jsonify(url=url or None)
+
+
+# ------------------------------------------------------------
+# Main
+# ------------------------------------------------------------
 
 if __name__ == "__main__":
     app.run(debug=True)
