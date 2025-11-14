@@ -32,6 +32,7 @@
 # Press CTRL+C in each terminal
 # ==============================================
 Flask==3.0.3
+Flask-Cors
 gunicorn
 openai==1.40.1
 python-dotenv==1.0.1
