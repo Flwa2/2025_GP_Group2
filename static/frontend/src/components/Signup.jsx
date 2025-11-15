@@ -1,8 +1,12 @@
 import React, { useMemo, useState } from "react";
 
+const API_BASE = "http://127.0.0.1:5000";
+
 export default function Signup() {
     const [form, setForm] = useState({ username: "", email: "", password: "" });
     const [showPw, setShowPw] = useState(false);
+    const [error, setError] = useState("");
+    const [loading, setLoading] = useState(false);
 
     const passwordScore = useMemo(() => {
         const p = form.password || "";
@@ -16,10 +20,57 @@ export default function Signup() {
     }, [form.password]);
 
     const pwLabel = ["Very weak", "Weak", "Okay", "Good", "Strong", "Very strong"][passwordScore];
-    const onChange = (e) => setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
-    const onSubmit = (e) => {
+
+    const onChange = (e) =>
+        setForm((f) => ({
+            ...f,
+            [e.target.name]: e.target.value,
+        }));
+
+    const onSubmit = async (e) => {
         e.preventDefault();
-        alert(`Welcome, ${form.username}! (UI demo only)`);
+        setError("");
+        setLoading(true);
+
+        try {
+            const res = await fetch(`${API_BASE}/api/signup`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    name: form.username,      // backend expects "name"
+                    email: form.email,
+                    password: form.password,
+                }),
+            });
+
+            const data = await res.json();
+
+            if (!res.ok) {
+                // backend sends { error: "message" }
+                setError(data.error || "Signup failed. Please try again.");
+                setLoading(false);
+                return;
+            }
+
+            // store token + user in localStorage
+            if (data.token) {
+                localStorage.setItem("token", data.token);
+            }
+            if (data.user) {
+                localStorage.setItem("user", JSON.stringify(data.user));
+            }
+
+            // redirect to dashboard/home (#/)
+            window.location.hash = "#/";
+
+        } catch (err) {
+            console.error("SIGNUP ERROR:", err);
+            setError(err.message || "Something went wrong. Please check your connection and try again.");
+            setLoading(false);
+        }
+
     };
 
     return (
@@ -38,10 +89,9 @@ export default function Signup() {
                 }}
             />
 
-            {/* ===== Animated Accent Shapes (around bulb area) ===== */}
+            {/* ===== Animated Accent Shapes (Blah blah, leaving your UI as-is) ===== */}
             <div className="pointer-events-none absolute z-0 right-[30px] bottom-[60px] hidden md:block">
                 <div className="relative h-[200px] w-[200px]">
-                    {/* Orbiting dots */}
                     <span className="absolute left-1/2 top-1/2 -ml-2 -mt-2 h-4 w-4 rounded-full bg-purple-600/80 dark:bg-purple-400/80 animate-circular" />
                     <span className="absolute left-1/2 top-1/2 -ml-1.5 -mt-1.5 h-3 w-3 rounded-full bg-black/60 dark:bg-white/70 animate-circular-reverse" />
                     <span className="absolute inset-0 rounded-full ring-1 ring-purple-500/20"></span>
@@ -50,33 +100,26 @@ export default function Signup() {
                     <span className="absolute inset-0 rounded-full ring-1 ring-purple-500/20"></span>
                 </div>
             </div>
-            {/* ===== Animated Accent Shapes (Left side) ===== */}
+
             <div className="pointer-events-none absolute z-0 left-[30px] top-[120px] hidden md:block">
                 <div className="relative h-[200px] w-[200px]">
-                    {/* left orbit dots */}
                     <span className="absolute left-1/2 top-1/2 -ml-2 -mt-2 h-4 w-4 rounded-full bg-purple-700/80 dark:bg-purple-400/80 animate-circular-reverse shadow" />
                     <span className="absolute left-1/2 top-1/2 -ml-1.5 -mt-1.5 h-3 w-3 rounded-full bg-black/60 dark:bg-white/70 animate-circular shadow" />
-                    {/* faint ring for glow */}
                     <span className="absolute inset-0 rounded-full ring-1 ring-purple-500/20"></span>
                 </div>
             </div>
 
-            {/* ===== New Animated Shapes (LEFT side) ===== */}
-{/* A) Morphing gradient blob (bottom-left) */}
-<div className="pointer-events-none absolute z-0 left-[-80px] bottom-[-60px] hidden md:block">
-  <div className="blob-morph h-[320px] w-[360px] opacity-90"></div>
-</div>
+            <div className="pointer-events-none absolute z-0 left-[-80px] bottom-[-60px] hidden md:block">
+                <div className="blob-morph h-[320px] w-[360px] opacity-90"></div>
+            </div>
 
-{/* B) Rotating dashed ring (top-left) */}
-<div className="pointer-events-none absolute z-0 left-[24px] top-[100px] hidden md:block">
-  <div className="ring-dash h-[180px] w-[180px]"></div>
-</div>
+            <div className="pointer-events-none absolute z-0 left-[24px] top-[100px] hidden md:block">
+                <div className="ring-dash h-[180px] w-[180px]"></div>
+            </div>
 
-{/* C) Soft moving stripes (fading mask) */}
-<div className="pointer-events-none absolute z-0 left-[-40px] top-[280px] hidden md:block">
-  <div className="stripes-move h-[220px] w-[260px] rounded-3xl opacity-70"></div>
-</div>
-
+            <div className="pointer-events-none absolute z-0 left-[-40px] top-[280px] hidden md:block">
+                <div className="stripes-move h-[220px] w-[260px] rounded-3xl opacity-70"></div>
+            </div>
 
             {/* ===== Signup Card ===== */}
             <div className="ui-card relative z-10 w-full max-w-md p-8 backdrop-blur">
@@ -148,8 +191,8 @@ export default function Signup() {
                                             passwordScore >= 4
                                                 ? "#22c55e"
                                                 : passwordScore >= 3
-                                                    ? "#f59e0b"
-                                                    : "#ef4444",
+                                                ? "#f59e0b"
+                                                : "#ef4444",
                                     }}
                                 />
                             </div>
@@ -159,8 +202,18 @@ export default function Signup() {
                         </div>
                     </div>
 
-                    <button type="submit" className="btn-cta w-full">
-                        Create account
+                    {error && (
+                        <p className="text-sm text-red-500 text-center">
+                            {error}
+                        </p>
+                    )}
+
+                    <button
+                        type="submit"
+                        className="btn-cta w-full disabled:opacity-60"
+                        disabled={loading}
+                    >
+                        {loading ? "Creating account..." : "Create account"}
                     </button>
 
                     <p className="text-center text-sm text-neutral-600 dark:text-neutral-300">

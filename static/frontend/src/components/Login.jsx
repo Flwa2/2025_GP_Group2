@@ -1,17 +1,117 @@
 // src/components/Login.jsx
 import React, { useState } from "react";
 import { Eye, EyeOff, Mail, Lock } from "lucide-react";
+import { signInWithPopup } from "firebase/auth";
+import { auth, googleProvider, githubProvider } from "../firebaseClient"; // adjust path if needed
+
+const API_BASE = "http://127.0.0.1:5000";
 
 export default function Login() {
     const [email, setEmail] = useState("");
     const [pwd, setPwd] = useState("");
     const [showPwd, setShowPwd] = useState(false);
+    const [error, setError] = useState("");
+    const [loading, setLoading] = useState(false);
 
-    const handleSubmit = (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault();
-        alert("Logged in (demo). Hook to real auth later.");
+        setError("");
+        setLoading(true);
+
+        try {
+            const res = await fetch(`${API_BASE}/api/login`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    email,
+                    password: pwd,
+                }),
+            });
+
+            const data = await res.json().catch(() => ({}));
+
+            if (!res.ok) {
+                setError(data.error || "Invalid email or password.");
+                setLoading(false);
+                return;
+            }
+
+            // Save token + user
+            if (data.token) {
+                localStorage.setItem("token", data.token);
+            }
+            if (data.user) {
+                localStorage.setItem("user", JSON.stringify(data.user));
+            }
+
+            // Redirect to dashboard/home
+            window.location.hash = "#/";
+
+        } catch (err) {
+            console.error("LOGIN ERROR:", err);
+            setError("Failed to connect to the server. Please try again.");
+            setLoading(false);
+        }
+    };
+        const handleGoogleLogin = async () => {
+    setError("");
+    setLoading(true);
+    try {
+        const result = await signInWithPopup(auth, googleProvider);
+        const user = result.user;
+        const idToken = await user.getIdToken();
+
+        // Optional: send idToken to Flask to create a session/JWT
+        // const res = await fetch("http://127.0.0.1:5000/api/firebase-login", { ... })
+
+        // For now: just store basic info locally
+        localStorage.setItem("token", idToken);
+        localStorage.setItem(
+        "user",
+        JSON.stringify({
+            email: user.email,
+            name: user.displayName,
+            authProvider: "google",
+        })
+        );
+
+        window.location.hash = "#/";
+    } catch (err) {
+        console.error("GOOGLE LOGIN ERROR:", err);
+        setError("Google login failed. Please try again.");
+    } finally {
+        setLoading(false);
+    }
     };
 
+    const handleGithubLogin = async () => {
+    setError("");
+    setLoading(true);
+    try {
+        const result = await signInWithPopup(auth, githubProvider);
+        const user = result.user;
+        const idToken = await user.getIdToken();
+
+        localStorage.setItem("token", idToken);
+        localStorage.setItem(
+        "user",
+        JSON.stringify({
+            email: user.email,
+            name: user.displayName,
+            authProvider: "github",
+        })
+        );
+
+        window.location.hash = "#/";
+    } catch (err) {
+        console.error("GITHUB LOGIN ERROR:", err);
+        setError("GitHub login failed. Please try again.");
+    } finally {
+        setLoading(false);
+    }
+    };
     return (
         <div className="min-h-screen relative overflow-hidden flex items-center justify-center bg-cream dark:bg-[#0a0a1a] transition-colors  pb-20 md:pb-28">
             {/* RIGHT animated shapes (optional, subtle in dark) */}
@@ -23,7 +123,7 @@ export default function Login() {
                 aria-hidden
                 className="hidden md:block absolute left-[-6vw] lg:left-[-9vw] top-1/2 -translate-y-1/2 w-[68vw] max-w-[620px] h-[70vh] max-h-[560px] opacity-90 rotate-[-2deg] z-0"
                 style={{
-                    backgroundImage: "url('/img3.png')", // place img3.png in /public
+                    backgroundImage: "url('/img3.png')",
                     backgroundRepeat: "no-repeat",
                     backgroundSize: "contain",
                     backgroundPosition: "left center",
@@ -94,6 +194,13 @@ export default function Login() {
                             </div>
                         </div>
 
+                        {/* Error message */}
+                        {error && (
+                            <p className="text-sm text-red-500 text-center">
+                                {error}
+                            </p>
+                        )}
+
                         {/* Remember + Forgot */}
                         <div className="flex items-center justify-between text-sm">
                             <label className="inline-flex items-center gap-2 select-none">
@@ -112,9 +219,10 @@ export default function Login() {
                         {/* Submit */}
                         <button
                             type="submit"
-                            className="w-full btn-cta font-bold py-3 rounded-lg transition"
+                            className="w-full btn-cta font-bold py-3 rounded-lg transition disabled:opacity-60"
+                            disabled={loading}
                         >
-                            Log In
+                            {loading ? "Logging in..." : "Log In"}
                         </button>
 
                         {/* Divider */}
@@ -124,18 +232,18 @@ export default function Login() {
                             <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
                         </div>
 
-                        {/* Social sign-in (stacked) */}
+                        {/* Social sign-in (still fake, don’t touch it) */}
                         <div className="mt-4 space-y-3">
-                            {/* Google */}
                             <button
                                 type="button"
-                                onClick={() => alert("Google login (demo)")}
+                                onClick={handleGoogleLogin}
+                                disabled={loading}
                                 className="w-full inline-flex items-center justify-center gap-3 border rounded-lg py-2.5 font-medium transition
                hover:bg-black/5 dark:hover:bg-white/10
                border-black/10 dark:border-white/15
                text-black dark:text-white"
                             >
-                                {/* Google icon (SVG) */}
+                                {/* Google icon */}
                                 <svg viewBox="0 0 48 48" className="w-5 h-5" aria-hidden>
                                     <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12S17.373 12 24 12c3.059 0 5.84 1.154 7.957 3.043l5.657-5.657C34.842 6.053 29.704 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.345-.138-2.655-.389-3.917z" />
                                     <path fill="#FF3D00" d="M6.306 14.691l6.571 4.814C14.4 16.042 18.844 12 24 12c3.059 0 5.84 1.154 7.957 3.043l5.657-5.657C34.842 6.053 29.704 4 24 4 16.318 4 9.656 8.337 6.306 14.691z" />
@@ -145,16 +253,16 @@ export default function Login() {
                                 Continue with Google
                             </button>
 
-                            {/* GitHub */}
                             <button
                                 type="button"
-                                onClick={() => alert("GitHub login (demo)")}
+                                onClick={handleGithubLogin}
+                                disabled={loading}
                                 className="w-full inline-flex items-center justify-center gap-3 border rounded-lg py-2.5 font-medium transition
                hover:bg-black/5 dark:hover:bg-white/10
                border-black/10 dark:border-white/15
                text-black dark:text-white"
                             >
-                                {/* GitHub icon (SVG) */}
+                                {/* GitHub icon */}
                                 <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor" aria-hidden>
                                     <path d="M12 .5a12 12 0 0 0-3.793 23.4c.6.11.82-.26.82-.58v-2.02c-3.338.73-4.04-1.61-4.04-1.61-.546-1.39-1.333-1.76-1.333-1.76-1.09-.75.083-.734.083-.734 1.205.086 1.84 1.238 1.84 1.238 1.07 1.835 2.807 1.305 3.492.998.108-.79.418-1.305.76-1.604-2.665-.304-5.467-1.333-5.467-5.93 0-1.31.47-2.38 1.236-3.22-.124-.304-.536-1.527.117-3.183 0 0 1.008-.322 3.303 1.23a11.5 11.5 0 0 1 6.006 0c2.294-1.552 3.301-1.23 3.301-1.23.655 1.656.243 2.879.12 3.183.77.84 1.235 1.91 1.235 3.22 0 4.61-2.807 5.624-5.48 5.922.43.37.816 1.102.816 2.222v3.293c0 .322.216.696.826.578A12 12 0 0 0 12 .5z" />
                                 </svg>
@@ -174,4 +282,5 @@ export default function Login() {
             </div>
         </div>
     );
+
 }

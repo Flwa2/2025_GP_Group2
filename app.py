@@ -21,7 +21,12 @@ import re
 import firebase_admin
 from firebase_admin import credentials, firestore
 import json
+from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime, timedelta
+import jwt
 
+from firebase_init import db  
+print("🔍 DEBUG in app.py:", db)
 
 # ------------------------------------------------------------
 # App + Config
@@ -38,6 +43,7 @@ CORS(
 
 # Server-side sessions (for create_draft, etc.)
 app.config.update(
+    SECRET_KEY= "WeCast2025",
     SESSION_TYPE="filesystem",  # store sessions on disk
     SESSION_FILE_DIR="./.flask_session",
     SESSION_PERMANENT=False,
@@ -49,6 +55,15 @@ Session(app)
 # Load .env
 load_dotenv()
 app.secret_key = "supersecretkey"
+
+def create_token(user_id, email):
+    payload = {
+        "user_id": user_id,
+        "email": email,
+        "exp": datetime.utcnow() + timedelta(days=7),
+    }
+    token = jwt.encode(payload, app.config["SECRET_KEY"], algorithm="HS256")
+    return token
 
 # ------------------------------------------------------------
 # API Clients (OpenAI + ElevenLabs)
@@ -67,44 +82,6 @@ if not ELEVENLABS_API_KEY:
     )
 
 voice_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
-
-# === Firestore init ===
-def init_firestore():
-    """
-    Use local service_account.json when running locally.
-    Use FIREBASE_SERVICE_ACCOUNT env variable on Render.
-    If neither exists → Firestore is disabled (db=None).
-    """
-    try:
-        local_path = "config/service_account.json"
-
-        # 1) LOCAL development → use file
-        if os.path.exists(local_path):
-            print("🔥 Using local Firestore credentials")
-            cred = credentials.Certificate(local_path)
-            firebase_admin.initialize_app(cred)
-            return firestore.client()
-
-        # 2) RENDER deployment → use environment variable
-        env_json = os.getenv("FIREBASE_SERVICE_ACCOUNT")
-        if env_json:
-            print("🔥 Using Render FIREBASE_SERVICE_ACCOUNT")
-            cred_dict = json.loads(env_json)
-            cred = credentials.Certificate(cred_dict)
-            firebase_admin.initialize_app(cred)
-            return firestore.client()
-
-        # 3) No credentials found
-        print("⚠ Firestore disabled — no credentials found.")
-        return None
-
-    except Exception as e:
-        print("❌ Firestore init FAILED:", e)
-        return None
-
-
-# Initialize Firestore
-db = init_firestore()
 
 
 # ------------------------------------------------------------
@@ -985,6 +962,89 @@ def api_audio_last():
     url = session.get("last_audio_url")
     return jsonify(url=url or None)
 
+@app.route("/api/signup", methods=["POST"])
+def signup():
+    data = request.get_json()
+
+    email = data.get("email")
+    password = data.get("password")
+    name = data.get("name")
+
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
+
+    # collection: users, document id = email
+    user_ref = db.collection("users").document(email)
+    if user_ref.get().exists:
+        return jsonify({"error": "User already exists"}), 409
+
+    password_hash = generate_password_hash(password)
+
+    user_ref.set(
+        {
+            "email": email,
+            "name": name or "",
+            "password_hash": password_hash,
+            "created_at": datetime.utcnow().isoformat(),
+            "role": "user",
+        }
+    )
+
+    token = create_token(email, email)
+
+    return (
+        jsonify(
+            {
+                "message": "User created successfully",
+                "token": token,
+                "user": {
+                    "email": email,
+                    "name": name or "",
+                    "role": "user",
+                },
+            }
+        ),
+        201,
+    )
+
+@app.route("/api/login", methods=["POST"])
+def login():
+    data = request.get_json()
+
+    email = data.get("email")
+    password = data.get("password")
+
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
+
+    user_ref = db.collection("users").document(email)
+    doc = user_ref.get()
+
+    if not doc.exists:
+        return jsonify({"error": "Invalid email or password"}), 401
+
+    user_data = doc.to_dict()
+    stored_hash = user_data.get("password_hash")
+
+    if not check_password_hash(stored_hash, password):
+        return jsonify({"error": "Invalid email or password"}), 401
+
+    token = create_token(email, email)
+
+    return (
+        jsonify(
+            {
+                "message": "Login successful",
+                "token": token,
+                "user": {
+                    "email": user_data.get("email"),
+                    "name": user_data.get("name"),
+                    "role": user_data.get("role", "user"),
+                },
+            }
+        ),
+        200,
+    )
 
 # ------------------------------------------------------------
 # Main
