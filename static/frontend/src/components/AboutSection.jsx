@@ -3,7 +3,7 @@ import React from 'react';
 
 export default function AboutSection() {
   return (
-    <section className="section relative overflow-hidden py-20
+    <section id="about" className="section relative overflow-hidden py-20
                         bg-cream dark:bg-[#0a0a1a]
                         text-neutral-900 dark:text-gray-100
                         transition-colors duration-500">
