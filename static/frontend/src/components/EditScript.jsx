@@ -1,6 +1,6 @@
 // src/components/EditScript.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Play, Pause, RotateCcw, RotateCw, Download } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 
 /* -------------------- overlay: rotating logo -------------------- */
 function LoadingOverlay({ show, logoSrc = "/logo.png" }) {
@@ -20,10 +20,10 @@ function LoadingOverlay({ show, logoSrc = "/logo.png" }) {
           />
           <div>
             <p className="font-extrabold text-black dark:text-white">
-              Generating audio…
+              Saving your script…
             </p>
             <p className="text-sm text-neutral-600 dark:text-neutral-400">
-              Your audio is being generated. Please wait a few seconds.
+              Your changes are being saved. Please wait a moment.
             </p>
           </div>
         </div>
@@ -39,222 +39,35 @@ function LoadingOverlay({ show, logoSrc = "/logo.png" }) {
   );
 }
 
-function Step({ num, label, done, active }) {
-  const dotBase =
-    "w-8 h-8 grid place-items-center rounded-full text-xs font-bold";
-  const dot = active
-    ? "bg-purple-600 text-white"
-    : done
-      ? "bg-neutral-200 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
-      : "bg-neutral-200 text-neutral-400 dark:bg-neutral-800 dark:text-neutral-500";
-  const text = active ? "text-purple-600" : "text-black/60 dark:text-white/60";
-  return (
-    <div className="flex items-center gap-2">
-      <div className={`${dotBase} ${dot}`}>{num}</div>
-      <span className={`text-sm font-semibold ${text}`}>{label}</span>
-    </div>
-  );
-}
-const Line = () => <div className="h-[2px] w-16 bg-black/10 dark:bg-white/20" />;
-
-
-
-function WeCastAudioPlayer({ src, title = "Generated Audio" }) {
-  const audioRef = useRef(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [speed, setSpeed] = useState(1);
-
-  const SPEED_OPTIONS = [1, 1.25, 1.5, 2];
-
-  const formatTime = (sec) => {
-    if (!sec || Number.isNaN(sec)) return "0:00";
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
-    return `${m}:${s.toString().padStart(2, "0")}`;
-  };
-
-  const applySpeed = (rate) => {
-    setSpeed(rate);
-    const el = audioRef.current;
-    if (el) el.playbackRate = rate;
-  };
-
-  const togglePlay = () => {
-    const el = audioRef.current;
-    if (!el) return;
-    if (isPlaying) {
-      el.pause();
-    } else {
-      el.playbackRate = speed;
-      el.play().catch((err) => console.error("Play error:", err));
-    }
-  };
-
-  const skipSeconds = (delta) => {
-    const el = audioRef.current;
-    if (!el || !duration) return;
-    const nextTime = Math.min(Math.max(el.currentTime + delta, 0), duration);
-    el.currentTime = nextTime;
-    setCurrentTime(nextTime);
-    setProgress((nextTime / duration) * 100);
-  };
-
-  const handleBarClick = (e) => {
-    const el = audioRef.current;
-    if (!el || !duration) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = (e.clientX - rect.left) / rect.width;
-    const nextTime = Math.min(Math.max(ratio * duration, 0), duration);
-    el.currentTime = nextTime;
-    setCurrentTime(nextTime);
-    setProgress((nextTime / duration) * 100);
-  };
-
-  const handleDownload = () => {
-    if (!src) return;
-    const a = document.createElement("a");
-    a.href = src;
-    a.download = (title || "wecast-episode") + ".mp3";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  };
-
-  return (
-    <div className="w-full rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 px-5 py-4 shadow-md flex flex-col gap-3">
-      {/* hidden audio element */}
-      <audio
-        ref={audioRef}
-        src={src}
-        className="hidden"
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
-        onLoadedMetadata={(e) => {
-          const d = e.target.duration || 0;
-          setDuration(d);
-        }}
-        onEnded={() => {
-          setIsPlaying(false);
-          setCurrentTime(duration);
-          setProgress(100);
-        }}
-        onTimeUpdate={(e) => {
-          const el = e.target;
-          const t = el.currentTime;
-          const d = el.duration || 1;
-          setCurrentTime(t);
-          setProgress((t / d) * 100);
-        }}
-      />
-
-      {/* TOP ROW: play + title + time + speed + download */}
-      <div className="flex items-center gap-4">
-        {/* Play / Pause button */}
-        <button
-          onClick={togglePlay}
-          className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 text-white shadow-lg hover:shadow-xl hover:brightness-110 active:scale-95 transition"
-        >
-          {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
-        </button>
-
-        <div className="flex-1 flex items-center justify-between gap-3">
-          {/* Title + time (left side) */}
-          <div className="flex flex-col">
-            <span className="text-sm font-semibold text-black/80 dark:text-white">
-              {title}
-            </span>
-            <span className="text-xs text-black/60 dark:text-white/60">
-              {formatTime(currentTime)} / {formatTime(duration)}
-            </span>
-          </div>
-
-          {/* Time + speed options + download (right side) */}
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-medium text-black/60 dark:text-white/60">
-              {formatTime(currentTime)} / {formatTime(duration)}
-            </span>
-
-            {/* Speed pill */}
-            <div className="flex items-center gap-1 rounded-full bg-black/5 dark:bg-white/5 px-2 py-1">
-              <span className="text-[0.7rem] uppercase tracking-wide text-black/50 dark:text-white/50 mr-1">
-                Speed
-              </span>
-              {SPEED_OPTIONS.map((opt) => (
-                <button
-                  key={opt}
-                  type="button"
-                  onClick={() => applySpeed(opt)}
-                  className={`px-2 py-0.5 rounded-full text-[0.7rem] font-semibold border transition ${speed === opt
-                      ? "bg-purple-600 text-white border-purple-600"
-                      : "bg-transparent text-black/70 dark:text-white/70 border-transparent hover:bg-black/10 dark:hover:bg-white/10"
-                    }`}
-                >
-                  {opt}×
-                </button>
-              ))}
+/* -------------------- stepper components -------------------- */
+function StepDot({ n, label, active = false, done = false }) {
+    const state = active ? "active" : done ? "done" : "pending";
+    const dot = state === "active" ? "bg-purple-600 text-white shadow" :
+               state === "done" ? "bg-neutral-300 dark:bg-neutral-700 text-neutral-800 dark:text-neutral-200" :
+               "bg-black/10 dark:bg-white/10 text-black/70 dark:text-white/70";
+    const labelCls = state === "active" ? "text-purple-600" :
+                    state === "done" ? "text-neutral-500 dark:text-neutral-400" :
+                    "text-black/60 dark:text-white/60";
+    return (
+        <div className="flex items-center gap-3">
+            <div className={`w-8 h-8 rounded-full grid place-items-center text-sm font-bold ${dot}`}>
+                {n}
             </div>
-
-            {/* Download button */}
-            <button
-              type="button"
-              onClick={handleDownload}
-              className="inline-flex items-center justify-center w-9 h-9 rounded-full border border-neutral-300 dark:border-neutral-700 text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 transition"
-              title="Download audio"
-            >
-              <Download className="w-4 h-4" />
-            </button>
-          </div>
+            <div className={`text-sm font-semibold ${labelCls}`}>{label}</div>
         </div>
-      </div>
-
-      {/* PROGRESS BAR */}
-      <div
-        className="mt-1 h-2 w-full rounded-full bg-black/5 dark:bg-white/10 overflow-hidden cursor-pointer"
-        onClick={handleBarClick}
-      >
-        <div
-          className="h-full rounded-full bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 transition-[width]"
-          style={{ width: `${progress}%` }}
-        />
-      </div>
-
-      {/* BOTTOM ROW: skip controls centered */}
-      <div className="flex items-center justify-center gap-4 mt-1">
-        <button
-          type="button"
-          onClick={() => skipSeconds(-10)}
-          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full border border-neutral-300 dark:border-neutral-700 text-xs font-medium text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 transition"
-        >
-          <RotateCcw className="w-4 h-4" />
-          <span>-10s</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => skipSeconds(10)}
-          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full border border-neutral-300 dark:border-neutral-700 text-xs font-medium text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 transition"
-        >
-          <RotateCw className="w-4 h-4" />
-          <span>+10s</span>
-        </button>
-      </div>
-    </div>
-  );
+    );
 }
 
-
+const StepLine = ({ on }) => (
+    <div className={`h-[3px] flex-1 rounded-full ${on ? "bg-gradient-to-r from-purple-600 to-pink-500" : "bg-black/10 dark:bg-white/10"}`} />
+);
 
 // ----------------------------------------------------------------------------------------
 
 export default function EditScript() {
   const [script, setScript] = useState("");
   const [saving, setSaving] = useState(false);
-  const [title, setTitle] = useState("");
-  const [audioLoading, setAudioLoading] = useState(false);
   const [saveMsg, setSaveMsg] = useState("Not saved yet");
-  const [audioUrl, setAudioUrl] = useState("");
   const [loadingDraft, setLoadingDraft] = useState(true);
 
   const lastValidRef = useRef("");
@@ -267,31 +80,19 @@ export default function EditScript() {
         const initial = (d.script || "").trim();
         setScript(initial);
         lastValidRef.current = initial || "";
-        setTitle(d.title || "Generated Audio");
-
       })
       .finally(() => setLoadingDraft(false));
   }, []);
 
-  useEffect(() => {
-    // 🔁 restore last generated audio on refresh
-    async function fetchLastAudio() {
-      try {
-        const res = await fetch("/api/audio/last", {
-          credentials: "include",
-        });
-        const data = await res.json();
-        if (data.url) {
-          // optional cache buster so browser doesn’t reuse a very old file
-          setAudioUrl(data.url + "?t=" + Date.now());
-        }
-      } catch (err) {
-        console.error("Failed to restore last audio", err);
-      }
-    }
-
-    fetchLastAudio();
-  }, []);
+// Add this useEffect in EditScript.jsx to save the edit data
+useEffect(() => {
+  // Save edit data when component mounts for navigation back
+  const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
+  sessionStorage.setItem('editScriptStyle', editData.scriptStyle || '');
+  sessionStorage.setItem('editSpeakersCount', editData.speakersCount || '');
+  sessionStorage.setItem('editSpeakers', JSON.stringify(editData.speakers || []));
+  sessionStorage.setItem('editDescription', editData.description || '');
+}, []);
 
   const speakerLabels = useMemo(() => {
     const labels = new Set();
@@ -374,59 +175,71 @@ export default function EditScript() {
     }
   };
 
-  const genAudio = async () => {
-    const content = script.trim();
-    if (!content) return alert("Script is empty.");
-    setAudioLoading(true);
-    setAudioUrl("");
+  const navigateToAudio = async () => {
+  // Save the script first
+  const content = script.trim();
+  if (content) {
+    setSaving(true);
     try {
-      const r = await fetch("/api/audio", {
+      await fetch("/api/edit/save", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scriptText: content }),
+        body: JSON.stringify({ edited_script: content }),
       });
-      const data = await r.json();
-      if (data.url) {
-        setAudioUrl(data.url + "?t=" + Date.now());
-      } else {
-        alert(data.error || "Unknown error");
-      }
-    } catch {
-      alert("Error generating audio.");
+    } catch (error) {
+      console.error("Failed to save script:", error);
     } finally {
-      setAudioLoading(false);
+      setSaving(false);
     }
+  }
+  
+  // Store data and force step 3 (Review step)
+  const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
+  const updatedEditData = {
+    ...editData,
+    generatedScript: content, // Save the edited script
+    fromEdit: true
   };
-
-
-
+  
+  sessionStorage.setItem('editData', JSON.stringify(updatedEditData));
+  sessionStorage.setItem('forceStep', '3'); // Force step 3 (Review), not 4
+  
+  // Navigate to CreatePro
+  window.location.hash = "#/create";
+};
 
   return (
-    <div className="min-h-screen bg-cream dark:bg-[#0a0a0a] text-black dark:text-white">
-      <div className="h-1 bg-purple-gradient" />
+    <div className="min-h-screen bg-cream dark:bg-[#0a0a0a]">
+      <div className="h-2 bg-purple-gradient" />
 
       <main className="max-w-6xl mx-auto px-6 py-10">
-        {/* centered header */}
-        <header className="text-center">
-          <h1 className="text-3xl md:text-4xl font-extrabold">
+        {/* Title */}
+        <header className="mb-6 text-center">
+          <h1 className="text-3xl md:text-4xl font-extrabold text-black dark:text-white">
             Edit Your Podcast Script
           </h1>
-          <p className="mt-1 text-black/70 dark:text-white/70">
+          <p className="mt-2 text-black/70 dark:text-white/70">
             Keep speaker labels; edit only the wording after each colon.
           </p>
-          <div className="mt-5 inline-flex items-center gap-6 rounded-2xl bg-white/60 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 px-5 py-3">
-            <Step num={1} label="Style" done />
-            <Line />
-            <Step num={2} label="Text" done />
-            <Line />
-            <Step num={3} label="Edit" active />
-          </div>
         </header>
 
+        {/* Stepper - matches CreatePro.jsx */}
+        <div className="max-w-3xl mx-auto rounded-2xl bg-white/60 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 p-4 mb-8">
+          <div className="flex items-center gap-4">
+            <StepDot n={1} label="Style" done />
+            <StepLine on={true} />
+            <StepDot n={2} label="Speakers" done />
+            <StepLine on={true} />
+            <StepDot n={3} label="Edit" active />
+            <StepLine on={false} />
+            <StepDot n={4} label="Audio" />
+          </div>
+        </div>
+
         {/* guidelines */}
-        <section className="mt-8 ui-card">
-          <div className="ui-card-title">Editing Guidelines</div>
+        <section className="ui-card">
+          <h2 className="ui-card-title">Editing Guidelines</h2>
           <ul className="list-disc pl-6 space-y-1 text-sm text-black/80 dark:text-white/80">
             <li><strong>Do not edit speaker names</strong> (left of the colon). They are locked.</li>
             <li>Edit <em>only</em> the content after the colon on each line.</li>
@@ -448,7 +261,7 @@ export default function EditScript() {
 
         {/* editor */}
         <div className="ui-card mt-6">
-          <div className="ui-card-title">Your Script</div>
+          <h2 className="ui-card-title">Your Script</h2>
 
           {loadingDraft ? (
             <div className="text-sm opacity-80">Loading draft…</div>
@@ -468,55 +281,51 @@ export default function EditScript() {
                 placeholder="Host: …"
               />
 
-              {/* actions row: back left, equal-sized buttons right */}
+              {/* actions row */}
               <div className="mt-4 flex items-center justify-between gap-4 flex-wrap">
-                <a
-                  href="#/create?step=2&restore=1"
-                  className="px-4 py-2 border rounded-xl text-sm sm:text-base border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
-                >
-                  Back to Text
-                </a>
+<button
+  onClick={() => {
+    // Store the current script and mark that we're coming from edit
+    const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
+    const updatedEditData = {
+      ...editData,
+      generatedScript: script, // Save the current edited script
+      fromEdit: true // Flag to indicate we're coming from edit
+    };
+    sessionStorage.setItem('editData', JSON.stringify(updatedEditData));
+    sessionStorage.setItem('forceStep', '3'); // Force step 3
+    window.location.hash = "#/create";
+  }}
+  className="px-4 py-2 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
+>
+  Back to Review
+</button>
 
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-wrap">
                   <button
                     onClick={save}
                     disabled={saving}
-                    className="w-44 inline-flex justify-center items-center px-5 py-3 rounded-xl text-sm sm:text-base font-semibold
-                               bg-black text-white dark:bg-white dark:text-black hover:opacity-90 disabled:opacity-60 transition"
+                    className="px-5 py-2 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition disabled:opacity-50"
                   >
                     {saving ? "Saving…" : "Save Script"}
                   </button>
 
                   <button
-                    onClick={genAudio}
-                    disabled={audioLoading}
-                    className="w-44 inline-flex justify-center items-center px-5 py-3 rounded-xl text-sm sm:text-base font-semibold
-                               bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-60 transition"
+                    onClick={navigateToAudio}
+                    className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
                   >
-                    {audioLoading ? "Generating…" : "Generate Audio"}
+                    Review your script after editing <ChevronRight className="w-4 h-4" />
                   </button>
                 </div>
               </div>
 
-              <div className="mt-2 text-sm opacity-80">{saveMsg}</div>
+              <div className="mt-2 text-sm text-black/70 dark:text-white/70">{saveMsg}</div>
 
-              {/* audio preview */}
-              {audioUrl && (
-                <div className="mt-5">
-                  <h3 className="text-sm font-semibold mb-2">Your Podcast Audio</h3>
-                  <WeCastAudioPlayer src={audioUrl}
-                    title={title || "Generated Audio"}  // 👈 here
-                  />
-                </div>
-              )}
-
-              <LoadingOverlay show={audioLoading} />
-
+        
             </>
           )}
         </div>
       </main>
     </div>
-
   );
 }
