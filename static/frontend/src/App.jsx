@@ -28,10 +28,15 @@ export default function App() {
   const isAccount = hash.startsWith('#/account');
   const isSignup = hash.startsWith('#/signup');
   const isLogin = hash.startsWith('#/login');
-  const isCreate = hash.startsWith('#/create'); // same route
+  const isCreate = hash.startsWith('#/create'); 
   const isEdit = hash.startsWith('#/edit');
 
-
+  useEffect(() => {
+    const sectionLinks = ['#about', '#episodes'];
+    if (!sectionLinks.includes(hash)) {
+      window.scrollTo(0, 0);
+    }
+  }, [hash]);
   return (
     <div className="min-h-screen bg-cream dark:bg-[#0a0a1a] text-black dark:text-white overflow-x-hidden transition-colors duration-500">
       <div className="h-2 bg-purple-gradient"></div>
