@@ -17,7 +17,6 @@ from elevenlabs.client import ElevenLabs
 import os
 import requests
 import re
-# 🔥 Firebase / Firestore
 import firebase_admin
 from firebase_admin import credentials, firestore
 import json
