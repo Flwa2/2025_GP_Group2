@@ -6,15 +6,205 @@ import {
     NotebookPen,
     ChevronRight,
     Check,
-    Plus,
     Info,
     Wand2,
     AlertCircle,
     Play,
+    Edit,
+    Pause,
+    RotateCcw,
+    RotateCw,
+    Download,
 } from "lucide-react";
 
+/* -------------------- Audio Player Component -------------------- */
+function WeCastAudioPlayer({ src, title = "Generated Audio" }) {
+    const audioRef = React.useRef(null);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const [duration, setDuration] = useState(0);
+    const [currentTime, setCurrentTime] = useState(0);
+    const [speed, setSpeed] = useState(1);
+
+    const SPEED_OPTIONS = [1, 1.25, 1.5, 2];
+
+    const formatTime = (sec) => {
+        if (!sec || Number.isNaN(sec)) return "0:00";
+        const m = Math.floor(sec / 60);
+        const s = Math.floor(sec % 60);
+        return `${m}:${s.toString().padStart(2, "0")}`;
+    };
+
+    const applySpeed = (rate) => {
+        setSpeed(rate);
+        const el = audioRef.current;
+        if (el) el.playbackRate = rate;
+    };
+
+    const togglePlay = () => {
+        const el = audioRef.current;
+        if (!el) return;
+        if (isPlaying) {
+            el.pause();
+        } else {
+            el.playbackRate = speed;
+            el.play().catch((err) => console.error("Play error:", err));
+        }
+    };
+
+    const skipSeconds = (delta) => {
+        const el = audioRef.current;
+        if (!el || !duration) return;
+        const nextTime = Math.min(Math.max(el.currentTime + delta, 0), duration);
+        el.currentTime = nextTime;
+        setCurrentTime(nextTime);
+        setProgress((nextTime / duration) * 100);
+    };
+
+    const handleBarClick = (e) => {
+        const el = audioRef.current;
+        if (!el || !duration) return;
+        const rect = e.currentTarget.getBoundingClientRect();
+        const ratio = (e.clientX - rect.left) / rect.width;
+        const nextTime = Math.min(Math.max(ratio * duration, 0), duration);
+        el.currentTime = nextTime;
+        setCurrentTime(nextTime);
+        setProgress((nextTime / duration) * 100);
+    };
+
+    const handleDownload = () => {
+        if (!src) return;
+        const a = document.createElement("a");
+        a.href = src;
+        a.download = (title || "wecast-episode") + ".mp3";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    };
+
+    return (
+        <div className="w-full rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 px-5 py-4 shadow-md flex flex-col gap-3">
+            {/* hidden audio element */}
+            <audio
+                ref={audioRef}
+                src={src}
+                className="hidden"
+                onPlay={() => setIsPlaying(true)}
+                onPause={() => setIsPlaying(false)}
+                onLoadedMetadata={(e) => {
+                    const d = e.target.duration || 0;
+                    setDuration(d);
+                }}
+                onEnded={() => {
+                    setIsPlaying(false);
+                    setCurrentTime(duration);
+                    setProgress(100);
+                }}
+                onTimeUpdate={(e) => {
+                    const el = e.target;
+                    const t = el.currentTime;
+                    const d = el.duration || 1;
+                    setCurrentTime(t);
+                    setProgress((t / d) * 100);
+                }}
+            />
+
+            {/* TOP ROW: play + title + time + speed + download */}
+            <div className="flex items-center gap-4">
+                {/* Play / Pause button */}
+                <button
+                    onClick={togglePlay}
+                    className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 text-white shadow-lg hover:shadow-xl hover:brightness-110 active:scale-95 transition"
+                >
+                    {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
+                </button>
+
+                <div className="flex-1 flex items-center justify-between gap-3">
+                    {/* Title + time (left side) */}
+                    <div className="flex flex-col">
+                        <span className="text-sm font-semibold text-black/80 dark:text-white">
+                            {title}
+                        </span>
+                        <span className="text-xs text-black/60 dark:text-white/60">
+                            {formatTime(currentTime)} / {formatTime(duration)}
+                        </span>
+                    </div>
+
+                    {/* Time + speed options + download (right side) */}
+                    <div className="flex items-center gap-3">
+                        <span className="text-xs font-medium text-black/60 dark:text-white/60">
+                            {formatTime(currentTime)} / {formatTime(duration)}
+                        </span>
+
+                        {/* Speed pill */}
+                        <div className="flex items-center gap-1 rounded-full bg-black/5 dark:bg-white/5 px-2 py-1">
+                            <span className="text-[0.7rem] uppercase tracking-wide text-black/50 dark:text-white/50 mr-1">
+                                Speed
+                            </span>
+                            {SPEED_OPTIONS.map((opt) => (
+                                <button
+                                    key={opt}
+                                    type="button"
+                                    onClick={() => applySpeed(opt)}
+                                    className={`px-2 py-0.5 rounded-full text-[0.7rem] font-semibold border transition ${speed === opt
+                                        ? "bg-purple-600 text-white border-purple-600"
+                                        : "bg-transparent text-black/70 dark:text-white/70 border-transparent hover:bg-black/10 dark:hover:bg-white/10"
+                                        }`}
+                                >
+                                    {opt}×
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Download button */}
+                        <button
+                            type="button"
+                            onClick={handleDownload}
+                            className="inline-flex items-center justify-center w-9 h-9 rounded-full border border-neutral-300 dark:border-neutral-700 text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 transition"
+                            title="Download audio"
+                        >
+                            <Download className="w-4 h-4" />
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {/* PROGRESS BAR */}
+            <div
+                className="mt-1 h-2 w-full rounded-full bg-black/5 dark:bg-white/10 overflow-hidden cursor-pointer"
+                onClick={handleBarClick}
+            >
+                <div
+                    className="h-full rounded-full bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 transition-[width]"
+                    style={{ width: `${progress}%` }}
+                />
+            </div>
+
+            {/* BOTTOM ROW: skip controls centered */}
+            <div className="flex items-center justify-center gap-4 mt-1">
+                <button
+                    type="button"
+                    onClick={() => skipSeconds(-10)}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full border border-neutral-300 dark:border-neutral-700 text-xs font-medium text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 transition"
+                >
+                    <RotateCcw className="w-4 h-4" />
+                    <span>-10s</span>
+                </button>
+                <button
+                    type="button"
+                    onClick={() => skipSeconds(10)}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full border border-neutral-300 dark:border-neutral-700 text-xs font-medium text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 transition"
+                >
+                    <RotateCw className="w-4 h-4" />
+                    <span>+10s</span>
+                </button>
+            </div>
+        </div>
+    );
+}
+
 /* -------------------- overlay: rotating logo -------------------- */
-function LoadingOverlay({ show, logoSrc = "/logo.png" }) {
+function LoadingOverlay({ show, logoSrc = "/logo.png", type = "audio" }) {
     if (!show) return null;
     return (
         <div
@@ -31,11 +221,13 @@ function LoadingOverlay({ show, logoSrc = "/logo.png" }) {
                     />
                     <div>
                         <p className="font-extrabold text-black dark:text-white">
-                            Generating your podcast…
+                            {type === "audio" ? "Generating audio…" : "Generating your podcast…"}
                         </p>
                         <p className="text-sm text-neutral-600 dark:text-neutral-400">
-                            We’re crafting your script and setting up the editor. This may
-                            take a few seconds.
+                            {type === "audio" 
+                                ? "Your audio is being generated. Please wait a few seconds."
+                                : "We're crafting your script and setting up the editor. This may take a few seconds."
+                            }
                         </p>
                     </div>
                 </div>
@@ -77,37 +269,100 @@ function Toast({ toast, onClose }) {
 /* ===================================================================== */
 
 export default function CreatePro() {
-    // steps: 1=Style, 2=Speakers, 3=Text
+    // steps: 1=Style, 2=Speakers, 3=Text, 4=Audio
     const [step, setStep] = useState(1);
-
+    const [generatedAudio, setGeneratedAudio] = useState(null);
+    const [generatingAudio, setGeneratingAudio] = useState(false);
+    const [generatedScript, setGeneratedScript] = useState(null);
     const [scriptStyle, setScriptStyle] = useState("");
     const [speakersCount, setSpeakersCount] = useState(0);
     const [speakers, setSpeakers] = useState([]);
     const [description, setDescription] = useState("");
-
     const [errors, setErrors] = useState({});
     const [submitting, setSubmitting] = useState(false);
     const [toast, setToast] = useState(null);
-    const [hoverKey, setHoverKey] = useState(null); // for hover guidelines
+    const [hoverKey, setHoverKey] = useState(null);
 
-    // 🔊 ElevenLabs voices
+    //  ElevenLabs voices
     const [voices, setVoices] = useState([]);
     const [loadingVoices, setLoadingVoices] = useState(true);
 
     const MIN = 500;
     const MAX = 2500;
 
-    // Group voices by gender label (if ElevenLabs provides it)
+   useEffect(() => {
+  const handleNavigation = () => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const stepParam = urlParams.get('step');
+    const forceStep = sessionStorage.getItem('forceStep');
+    const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
+    
+    // If we have edit data with fromEdit flag, go directly to step 3
+    if (editData.fromEdit && editData.generatedScript) {
+      setGeneratedScript(editData.generatedScript);
+      setScriptStyle(editData.scriptStyle || '');
+      setSpeakersCount(editData.speakersCount || 0);
+      setSpeakers(editData.speakers || []);
+      setDescription(editData.description || '');
+      setStep(3);
+      // Clean up the flags
+      sessionStorage.removeItem('forceStep');
+      const cleanEditData = { ...editData };
+      delete cleanEditData.fromEdit;
+      sessionStorage.setItem('editData', JSON.stringify(cleanEditData));
+    }
+    // If we have a forced step, use it
+    else if (forceStep) {
+      setStep(parseInt(forceStep));
+      sessionStorage.removeItem('forceStep');
+    }
+    // Otherwise use URL parameter
+    else if (stepParam) {
+      setStep(parseInt(stepParam));
+    }
+  };
+
+  handleNavigation();
+}, []);
+
+   
+useEffect(() => {
+  const handleHashChange = () => {
+    const hash = window.location.hash;
+    const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
+    
+    if (hash === '#/edit' && generatedScript) {
+      setStep(3);
+    } else if (hash === '#/create') {
+      // When coming back from edit with data, stay on step 3
+      if (editData.fromEdit && editData.generatedScript) {
+        setGeneratedScript(editData.generatedScript);
+        setStep(3);
+        // Clean up the flag
+        const cleanEditData = { ...editData };
+        delete cleanEditData.fromEdit;
+        sessionStorage.setItem('editData', JSON.stringify(cleanEditData));
+      } else if (generatedScript) {
+        setStep(3);
+      }
+    }
+  };
+
+  window.addEventListener('hashchange', handleHashChange);
+  handleHashChange();
+  
+  return () => window.removeEventListener('hashchange', handleHashChange);
+}, [generatedScript]);
+
+    // Group voices by gender label
     const voiceGroups = useMemo(() => {
         const groups = { male: [], female: [], other: [] };
-
         voices.forEach((v) => {
             const g = (v.labels?.gender || v.labels?.Gender || "").toLowerCase();
             if (g === "male") groups.male.push(v);
             else if (g === "female") groups.female.push(v);
             else groups.other.push(v);
         });
-
         return groups;
     }, [voices]);
 
@@ -198,8 +453,6 @@ export default function CreatePro() {
             try {
                 const res = await fetch("/api/voices");
                 const data = await res.json();
-
-                // ✅ handle { voices: [...] }  OR  [...] directly
                 if (Array.isArray(data.voices)) {
                     setVoices(data.voices);
                 } else if (Array.isArray(data)) {
@@ -217,16 +470,11 @@ export default function CreatePro() {
         loadVoices();
     }, []);
 
-
-
     const defaultVoiceForGender = (gender = "Male") => {
         const key = (gender || "").toLowerCase() === "female" ? "female" : "male";
-
-        // Prefer voices that match the gender label, otherwise fall back to all voices.
         const pool = voiceGroups[key].length ? voiceGroups[key] : voices;
         return pool[0]?.id || "";
     };
-
 
     /* ---------- when style changes: reset speakers ---------- */
     useEffect(() => {
@@ -236,48 +484,21 @@ export default function CreatePro() {
 
         if (scriptStyle === "Interview") {
             setSpeakers([
-                {
-                    name: "",
-                    gender: "Male",
-                    role: "host",
-                    voiceId: defaultVoiceForGender("Male"),
-                },
-                {
-                    name: "",
-                    gender: "Female",
-                    role: "guest",
-                    voiceId: defaultVoiceForGender("Female"),
-                },
+                { name: "", gender: "Male", role: "host", voiceId: defaultVoiceForGender("Male") },
+                { name: "", gender: "Female", role: "guest", voiceId: defaultVoiceForGender("Female") },
             ]);
         } else if (scriptStyle === "Conversational") {
             setSpeakers([
-                {
-                    name: "",
-                    gender: "Male",
-                    role: "host",
-                    voiceId: defaultVoiceForGender("Male"),
-                },
-                {
-                    name: "",
-                    gender: "Female",
-                    role: "host",
-                    voiceId: defaultVoiceForGender("Female"),
-                },
+                { name: "", gender: "Male", role: "host", voiceId: defaultVoiceForGender("Male") },
+                { name: "", gender: "Female", role: "host", voiceId: defaultVoiceForGender("Female") },
             ]);
         } else {
             setSpeakers([
-                {
-                    name: "",
-                    gender: "Male",
-                    role: "host",
-                    voiceId: defaultVoiceForGender("Male"),
-                },
+                { name: "", gender: "Male", role: "host", voiceId: defaultVoiceForGender("Male") },
             ]);
         }
         setErrors({});
-        setStep(1);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [scriptStyle, voices.length]); // re-run when style or voice list ready
+    }, [scriptStyle, voices.length]);
 
     /* ---------- when voices finish loading, fill missing voiceIds ---------- */
     useEffect(() => {
@@ -288,7 +509,6 @@ export default function CreatePro() {
                 voiceId: s.voiceId || defaultVoiceForGender(s.gender),
             }))
         );
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [loadingVoices, voices.length]);
 
     /* ---------- when count changes: rebuild array & roles ---------- */
@@ -321,6 +541,16 @@ export default function CreatePro() {
                 }
             } else if (scriptStyle === "Conversational") {
                 next.forEach((s) => (s.role = "host"));
+            } else if (scriptStyle === "Educational" || scriptStyle === "Storytelling") {
+                if (count === 1) next[0].role = "host";
+                else if (count === 2) {
+                    next[0].role = "host";
+                    next[1].role = "guest";
+                } else if (count === 3) {
+                    next[0].role = "host";
+                    next[1].role = "guest";
+                    next[2].role = "guest";
+                }
             } else {
                 if (count === 1) next[0].role = "host";
                 if (count === 2) {
@@ -335,55 +565,36 @@ export default function CreatePro() {
             }
             return next;
         });
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [speakersCount, scriptStyle, voices.length]);
 
     /* ---------- helpers ---------- */
-    const allowedCounts = useMemo(
-        () => styleLimits[scriptStyle] || [],
-        [scriptStyle]
-    );
-    const showRoleSelect =
-        scriptStyle !== "Conversational" && scriptStyle !== "Interview";
-    const anyEmptySpeakerName = speakers.some(
-        (s) => !String(s.name || "").trim()
-    );
+    const allowedCounts = useMemo(() => styleLimits[scriptStyle] || [], [scriptStyle]);
+    const showRoleSelect = scriptStyle !== "Conversational" && scriptStyle !== "Educational" && scriptStyle !== "Storytelling" && scriptStyle !== "Interview";
+    const anyEmptySpeakerName = speakers.some((s) => !String(s.name || "").trim());
 
     const continueFromStyle = () => {
         if (!scriptStyle) {
             setErrors({ script_style: "Choose a podcast style first." });
-            setToast({
-                type: "error",
-                message: "Please choose a podcast style to continue.",
-            });
+            setToast({ type: "error", message: "Please choose a podcast style to continue." });
             setTimeout(() => setToast(null), 2600);
             return;
         }
         setErrors({});
         setStep(2);
-        setToast({
-            type: "success",
-            message: "Style selected. Now configure speakers.",
-        });
+        setToast({ type: "success", message: "Style selected. Now configure speakers." });
         setTimeout(() => setToast(null), 2400);
     };
 
     const onContinueFromSpeakers = () => {
         const errs = {};
         if (!scriptStyle) errs.script_style = "Choose a podcast style first.";
-        if (!allowedCounts.includes(Number(speakersCount)))
-            errs.speakers = "Invalid number of speakers for this style.";
-        if (anyEmptySpeakerName)
-            errs.speaker_names =
-                "Please enter a name for every speaker before continuing.";
+        if (!allowedCounts.includes(Number(speakersCount))) errs.speakers = "Invalid number of speakers for this style.";
+        if (anyEmptySpeakerName) errs.speaker_names = "Please enter a name for every speaker before continuing.";
 
         setErrors(errs);
         if (Object.keys(errs).length === 0) {
             setStep(3);
-            setToast({
-                type: "success",
-                message: "Speakers set. Paste your text to generate the script.",
-            });
+            setToast({ type: "success", message: "Speakers set. Paste your text to generate the script." });
             setTimeout(() => setToast(null), 2400);
         } else {
             setToast({ type: "error", message: Object.values(errs)[0] });
@@ -392,7 +603,6 @@ export default function CreatePro() {
     };
 
     const handleGenerate = async () => {
-        // basic validations you already had…
         const words = description.trim().split(/\s+/).filter(Boolean).length;
         if (words < MIN) {
             setErrors({ description: `At least ${MIN} words.` });
@@ -404,7 +614,7 @@ export default function CreatePro() {
         }
 
         setSubmitting(true);
-        setErrors({}); // clear old errors
+        setErrors({});
 
         try {
             const res = await fetch("/api/generate", {
@@ -414,7 +624,7 @@ export default function CreatePro() {
                 body: JSON.stringify({
                     script_style: scriptStyle,
                     speakers: Number(speakersCount),
-                    speakers_info: speakers, // includes voiceId now
+                    speakers_info: speakers,
                     description,
                 }),
             });
@@ -426,493 +636,486 @@ export default function CreatePro() {
                 return;
             }
 
-            // success → go to React editor route
-            window.location.hash = "#/edit";
+            setGeneratedScript(data.script);
+            setToast({ type: "success", message: "Script generated successfully! Review it below." });
+            setTimeout(() => setToast(null), 2400);
+
         } catch (e) {
             setErrors({ server: "Generation failed. Please check backend." });
+        } finally {
             setSubmitting(false);
         }
+    };
+
+  const handleGenerateAudio = async () => {
+    if (!generatedScript) {
+        setToast({ type: "error", message: "Please generate a script first." });
+        setTimeout(() => setToast(null), 2800);
+        return;
+    }
+
+    setGeneratingAudio(true);
+    setGeneratedAudio(null);
+
+    try {
+        const response = await fetch("/api/audio", {  // ← CHANGED TO /api/audio
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                scriptText: generatedScript,  // ← CHANGED TO scriptText
+                script_style: scriptStyle,
+                speakers_info: speakers,
+            }),
+        });
+
+        const data = await response.json();
+        
+        if (!response.ok || !data.url) {  // ← CHANGED TO data.url
+            throw new Error(data.error || "Audio generation failed");
+        }
+
+        setGeneratedAudio(data.url + "?t=" + Date.now());  // ← CHANGED TO data.url
+        setToast({
+            type: "success",
+            message: "Audio generated successfully!",
+        });
+        setTimeout(() => setToast(null), 2400);
+        
+    } catch (error) {
+        console.error("Audio generation error:", error);
+        setToast({
+            type: "error",
+            message: "Audio generation failed. Please try again.",
+        });
+        setTimeout(() => setToast(null), 2800);
+    } finally {
+        setGeneratingAudio(false);
+    }
+};
+
+    const navigateToEdit = () => {
+        if (!generatedScript) {
+            setToast({
+                type: "error", 
+                message: "Please generate a script first before editing."
+            });
+            setTimeout(() => setToast(null), 2800);
+            return;
+        }
+        
+        // Store ALL necessary data for edit page and navigation back
+        const editData = {
+            scriptStyle,
+            speakersCount,
+            speakers,
+            generatedScript,
+            description
+        };
+        sessionStorage.setItem('editData', JSON.stringify(editData));
+        window.location.hash = "#/edit";
     };
 
     /* ---------- stepper (done=gray) ---------- */
     const StepDot = ({ n, label }) => {
         const state = step === n ? "active" : step > n ? "done" : "pending";
-        const dot =
-            state === "active"
-                ? "bg-purple-600 text-white shadow"
-                : state === "done"
-                    ? "bg-neutral-300 dark:bg-neutral-700 text-neutral-800 dark:text-neutral-200"
-                    : "bg-black/10 dark:bg-white/10 text-black/70 dark:text-white/70";
-        const labelCls =
-            state === "active"
-                ? "text-purple-600"
-                : state === "done"
-                    ? "text-neutral-500 dark:text-neutral-400"
-                    : "text-black/60 dark:text-white/60";
+        const dot = state === "active" ? "bg-purple-600 text-white shadow" :
+                   state === "done" ? "bg-neutral-300 dark:bg-neutral-700 text-neutral-800 dark:text-neutral-200" :
+                   "bg-black/10 dark:bg-white/10 text-black/70 dark:text-white/70";
+        const labelCls = state === "active" ? "text-purple-600" :
+                        state === "done" ? "text-neutral-500 dark:text-neutral-400" :
+                        "text-black/60 dark:text-white/60";
         return (
             <div className="flex items-center gap-3">
-                <div
-                    className={`w-8 h-8 rounded-full grid place-items-center text-sm font-bold ${dot}`}
-                >
+                <div className={`w-8 h-8 rounded-full grid place-items-center text-sm font-bold ${dot}`}>
                     {n}
                 </div>
                 <div className={`text-sm font-semibold ${labelCls}`}>{label}</div>
             </div>
         );
     };
+
     const StepLine = ({ on }) => (
-        <div
-            className={`h-[3px] flex-1 rounded-full ${on
-                ? "bg-gradient-to-r from-purple-600 to-pink-500"
-                : "bg-black/10 dark:bg-white/10"
-                }`}
-        />
+        <div className={`h-[3px] flex-1 rounded-full ${on ? "bg-gradient-to-r from-purple-600 to-pink-500" : "bg-black/10 dark:bg-white/10"}`} />
     );
 
-    /* ---------- layout ---------- */
+    // Determine current step label
+    const getStep3Label = () => {
+        if (window.location.hash === '#/edit') return "Edit";
+        if (generatedScript) return "Review";
+        return "Text";
+    };
+
+    // Check if we're currently in edit mode
+    const isEditMode = window.location.hash === '#/edit';
+
     return (
         <div className="min-h-screen bg-cream dark:bg-[#0a0a0a]">
             <div className="h-2 bg-purple-gradient" />
-
             <main className="max-w-6xl mx-auto px-6 py-10">
                 {/* Title */}
                 <header className="mb-6 text-center">
                     <h1 className="text-3xl md:text-4xl font-extrabold text-black dark:text-white">
                         {step === 1 && "Create your podcast"}
                         {step === 2 && "Configure speakers"}
-                        {step === 3 && "Paste your text"}
+                        {step === 3 && isEditMode ? "Edit Your Script" : 
+                         step === 3 && generatedScript ? "Review Your Script" : ""}
+                        {step === 4 && "Generate Audio"}
                     </h1>
                     <p className="mt-2 text-black/70 dark:text-white/70">
-                        {step === 1 &&
-                            "Pick a style first. Hover a card to preview the style guidelines."}
-                        {step === 2 &&
-                            "Choose how many speakers and fill their details (name, role, voice)."}
-                        {step === 3 &&
-                            "Provide your content to generate the script, then move to audio."}
+                        {step === 1 && "Pick a style first. Hover a card to preview the style guidelines."}
+                        {step === 2 && "Choose how many speakers and fill their details (name, role, voice)."}
+                        {step === 3 && !generatedScript && "Provide your content to generate the script, then move to audio."}
+                        {step === 3 && generatedScript && !isEditMode && "Review your generated script, if needed you can edit the script below, then continue to audio generation."}
+                        {step === 3 && isEditMode && "Edit your script below, then continue to audio generation."}
+                        {step === 4 && "Generate and listen to your podcast audio."}
                     </p>
                 </header>
 
-                {/* Stepper (under title) */}
+                {/* Stepper */}
                 <div className="max-w-3xl mx-auto rounded-2xl bg-white/60 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 p-4 mb-8">
                     <div className="flex items-center gap-4">
                         <StepDot n={1} label="Style" />
                         <StepLine on={step >= 2} />
                         <StepDot n={2} label="Speakers" />
                         <StepLine on={step >= 3} />
-                        <StepDot n={3} label="Text" />
+                        <StepDot n={3} label={getStep3Label()} />
+                        <StepLine on={step >= 4} />
+                        <StepDot n={4} label="Audio" />
                     </div>
                 </div>
 
-                {/* ===================== STEP 1: STYLE ===================== */}
+                {/* STEP 1: STYLE */}
                 {step === 1 && (
                     <section className="ui-card">
                         <h2 className="ui-card-title flex items-center gap-2 justify-center">
                             <Mic2 className="w-4 h-4" /> Podcast Style
                         </h2>
-
-                        {/* Cards grid with HOVER guidelines */}
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4 justify-items-center">
                             {styleCards.map((s) => (
-                                <label
-                                    key={s.key}
-                                    onClick={() => setScriptStyle(s.key)}
-                                    onMouseEnter={() => setHoverKey(s.key)}
-                                    onMouseLeave={() =>
-                                        setHoverKey((k) => (k === s.key ? null : k))
-                                    }
-                                    className={`group relative w-full max-w-xl p-4 rounded-xl border transition cursor-pointer ${scriptStyle === s.key
-                                        ? "border-purple-400/60 bg-purple-500/10"
-                                        : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
-                                        }`}
-                                >
+                                <label key={s.key} onClick={() => setScriptStyle(s.key)} onMouseEnter={() => setHoverKey(s.key)} onMouseLeave={() => setHoverKey((k) => (k === s.key ? null : k))} className={`group relative w-full max-w-xl p-4 rounded-xl border transition cursor-pointer ${scriptStyle === s.key ? "border-purple-400/60 bg-purple-500/10" : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"}`}>
                                     <div className="flex items-start gap-3">
-                                        <input
-                                            type="radio"
-                                            checked={scriptStyle === s.key}
-                                            readOnly
-                                            className="accent-purple-600 mt-1"
-                                        />
+                                        <input type="radio" checked={scriptStyle === s.key} readOnly className="accent-purple-600 mt-1" />
                                         <div className="w-full">
                                             <div className="flex items-center gap-2 font-bold">
                                                 <span className="truncate">{s.title}</span>
-                                                {scriptStyle === s.key && (
-                                                    <span className="text-xs text-purple-500 flex items-center gap-1">
-                                                        <Check className="w-3 h-3" /> Selected
-                                                    </span>
-                                                )}
+                                                {scriptStyle === s.key && <span className="text-xs text-purple-500 flex items-center gap-1"><Check className="w-3 h-3" /> Selected</span>}
                                             </div>
-
                                             <p className="text-sm mt-1">{s.caption}</p>
                                             <ul className="flex flex-wrap gap-2 mt-2 text-xs text-black/70 dark:text-white/70">
-                                                {s.bullets.map((b, i) => (
-                                                    <li
-                                                        key={i}
-                                                        className="px-2 py-1 rounded bg-black/5 dark:bg-white/5"
-                                                    >
-                                                        {b}
-                                                    </li>
-                                                ))}
+                                                {s.bullets.map((b, i) => <li key={i} className="px-2 py-1 rounded bg-black/5 dark:bg-white/5">{b}</li>)}
                                             </ul>
-                                            <p className="text-xs text-purple-500 mt-2">
-                                                Valid: {s.valid}
-                                            </p>
+                                            <p className="text-xs text-purple-500 mt-2">Valid: {s.valid}</p>
                                         </div>
                                     </div>
-
-                                    {/* Hover guidelines popover (glass look + arrow) */}
                                     {hoverKey === s.key && (
                                         <div className="absolute left-5 right-5 top-[calc(100%+30px)] z-40">
-                                            <div
-                                                className="
-        relative rounded-2xl
-        bg-gradient-to-br from-purple-400 to-violet-700
-        text-white shadow-2xl
-        border border-white/10
-        p-4
-        animate-[popoverIn_120ms_ease-out]
-      "
-                                            >
-                                                <div className="flex items-center gap-2 font-semibold tracking-wide">
-                                                    <Info className="w-4 h-4 opacity-90" />
-                                                    <span>Style guidelines</span>
-                                                </div>
-                                                <div className="mt-2 leading-relaxed text-[0.95rem]">
-                                                    {STYLE_GUIDELINES[s.key]}
-                                                </div>
-                                                {/* arrow */}
-                                                <span
-                                                    className="
-          absolute -top-2 left-8 w-3 h-3 rotate-45
-          bg-purple-600
-          shadow-[0_6px_16px_rgba(0,0,0,0.25)]
-          border-l border-t border-white/10
-        "
-                                                />
+                                            <div className="relative rounded-2xl bg-gradient-to-br from-purple-400 to-violet-700 text-white shadow-2xl border border-white/10 p-4 animate-[popoverIn_120ms_ease-out]">
+                                                <div className="flex items-center gap-2 font-semibold tracking-wide"><Info className="w-4 h-4 opacity-90" /><span>Style guidelines</span></div>
+                                                <div className="mt-2 leading-relaxed text-[0.95rem]">{STYLE_GUIDELINES[s.key]}</div>
+                                                <span className="absolute -top-2 left-8 w-3 h-3 rotate-45 bg-purple-600 shadow-[0_6px_16px_rgba(0,0,0,0.25)] border-l border-t border-white/10" />
                                             </div>
                                         </div>
                                     )}
                                 </label>
                             ))}
                         </div>
-
-                        {errors.script_style && (
-                            <p className="text-rose-500 mt-3 flex items-center gap-2 justify-center">
-                                <AlertCircle className="w-4 h-4" /> {errors.script_style}
-                            </p>
-                        )}
-
+                        {errors.script_style && <p className="text-rose-500 mt-3 flex items-center gap-2 justify-center"><AlertCircle className="w-4 h-4" /> {errors.script_style}</p>}
                         <div className="mt-6 flex justify-end">
-                            <button
-                                onClick={continueFromStyle}
-                                className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
-                            >
-                                Continue <ChevronRight className="w-4 h-4" />
-                            </button>
+                            <button onClick={continueFromStyle} className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold">Continue <ChevronRight className="w-4 h-4" /></button>
                         </div>
                     </section>
                 )}
 
-                {/* ===================== STEP 2: SPEAKERS ===================== */}
+                {/* STEP 2: SPEAKERS */}
                 {step === 2 && (
                     <section className="ui-card">
-                        <h2 className="ui-card-title flex items-center gap-2 justify-center">
-                            <Users className="w-4 h-4" /> Speakers
-                        </h2>
-
-                        {/* Count pills */}
+                        <h2 className="ui-card-title flex items-center gap-2 justify-center"><Users className="w-4 h-4" /> Speakers</h2>
                         {scriptStyle && (
                             <div className="flex items-center gap-2 flex-wrap mt-3 justify-center">
                                 {allowedCounts.map((n) => (
-                                    <button
-                                        key={n}
-                                        onClick={() => setSpeakersCount(n)}
-                                        className={`px-4 py-2 text-sm font-semibold rounded-xl transition border ${speakersCount === n
-                                            ? "bg-purple-600 text-white border-purple-600"
-                                            : "bg-black/5 dark:bg-white/5 border-neutral-300 dark:border-neutral-800 text-black/70 dark:text-white/70 hover:bg-black/10"
-                                            }`}
-                                    >
+                                    <button key={n} onClick={() => setSpeakersCount(n)} className={`px-4 py-2 text-sm font-semibold rounded-xl transition border ${speakersCount === n ? "bg-purple-600 text-white border-purple-600" : "bg-black/5 dark:bg-white/5 border-neutral-300 dark:border-neutral-800 text-black/70 dark:text-white/70 hover:bg-black/10"}`}>
                                         {n} {n === 1 ? "Speaker" : "Speakers"}
                                     </button>
                                 ))}
-                                {scriptStyle === "Interview" && speakersCount === 2 && (
-                                    <button
-                                        onClick={() => setSpeakersCount(3)}
-                                        className="inline-flex items-center gap-1 px-3 py-2 text-sm rounded-xl border border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
-                                    >
-                                        <Plus className="w-4 h-4" /> Add 3rd (2H+1G)
-                                    </button>
-                                )}
                             </div>
                         )}
-
-                        {/* Speaker cards grid — centered for 1/2/3 */}
                         {speakers.length > 0 && (
-                            <div
-                                className={`mt-5 grid gap-5 ${speakers.length === 1
-                                    ? "grid-cols-1 max-w-md"
-                                    : speakers.length === 2
-                                        ? "grid-cols-1 md:grid-cols-2 max-w-4xl"
-                                        : "grid-cols-1 md:grid-cols-3 max-w-5xl"
-                                    } mx-auto`}
-                            >
+                            <div className={`mt-5 grid gap-5 ${speakers.length === 1 ? "grid-cols-1 max-w-md" : speakers.length === 2 ? "grid-cols-1 md:grid-cols-2 max-w-4xl" : "grid-cols-1 md:grid-cols-3 max-w-5xl"} mx-auto`}>
                                 {speakers.map((sp, i) => (
-                                    <div
-                                        key={i}
-                                        className="rounded-xl border border-neutral-300 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 w-full"
-                                    >
-                                        <h3 className="text-sm font-bold text-black/80 dark:text-white/80">
-                                            Speaker {i + 1}
-                                        </h3>
+                                    <div key={i} className="rounded-xl border border-neutral-300 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 w-full">
+                                        <h3 className="text-sm font-bold text-black/80 dark:text-white/80">Speaker {i + 1}</h3>
                                         <div className="mt-3 space-y-3">
                                             <div>
                                                 <label className="form-label">Name</label>
-                                                <input
-                                                    value={sp.name}
-                                                    onChange={(e) => {
-                                                        const cleaned = e.target.value
-                                                            .replace(/[^\p{L}\s]/gu, "")
-                                                            .replace(/\s{2,}/g, " ");
-                                                        setSpeakers((arr) => {
-                                                            const next = [...arr];
-                                                            next[i] = { ...next[i], name: cleaned };
-                                                            return next;
-                                                        });
-                                                    }}
-                                                    placeholder={`Speaker ${i + 1} name`}
-                                                    className={`form-input ${errors.speaker_names && !sp.name.trim()
-                                                        ? "border-rose-400"
-                                                        : ""
-                                                        }`}
-                                                />
+                                                <input value={sp.name} onChange={(e) => {
+                                                    const cleaned = e.target.value.replace(/[^\p{L}\s]/gu, "").replace(/\s{2,}/g, " ");
+                                                    setSpeakers((arr) => {
+                                                        const next = [...arr];
+                                                        next[i] = { ...next[i], name: cleaned };
+                                                        return next;
+                                                    });
+                                                }} placeholder={`Speaker ${i + 1} name`} className={`form-input ${errors.speaker_names && !sp.name.trim() ? "border-rose-400" : ""}`} />
                                             </div>
-
                                             <div className="grid grid-cols-2 gap-3">
                                                 <div>
                                                     <label className="form-label">Gender</label>
-                                                    <select
-                                                        value={sp.gender}
-                                                        onChange={(e) =>
-                                                            setSpeakers((arr) => {
-                                                                const n = [...arr];
-                                                                const gender = e.target.value;
-                                                                n[i] = {
-                                                                    ...n[i],
-                                                                    gender,
-                                                                    voiceId:
-                                                                        n[i].voiceId ||
-                                                                        defaultVoiceForGender(gender),
-                                                                };
-                                                                return n;
-                                                            })
-                                                        }
-                                                        className="form-input"
-                                                    >
+                                                    <select value={sp.gender} onChange={(e) => setSpeakers((arr) => {
+                                                        const n = [...arr];
+                                                        const gender = e.target.value;
+                                                        n[i] = { ...n[i], gender, voiceId: n[i].voiceId || defaultVoiceForGender(gender) };
+                                                        return n;
+                                                    })} className="form-input">
                                                         <option>Male</option>
                                                         <option>Female</option>
                                                     </select>
                                                 </div>
                                                 <div>
                                                     <label className="form-label">Role</label>
-                                                    <select
-                                                        value={sp.role}
-                                                        disabled={!showRoleSelect}
-                                                        onChange={(e) =>
-                                                            setSpeakers((arr) => {
-                                                                const n = [...arr];
-                                                                n[i] = { ...n[i], role: e.target.value };
-                                                                return n;
-                                                            })
-                                                        }
-                                                        className={`form-input ${!showRoleSelect
-                                                            ? "opacity-60 cursor-not-allowed"
-                                                            : ""
-                                                            }`}
-                                                    >
-                                                        <option value="host">Host</option>
-                                                        <option value="guest">Guest</option>
-                                                    </select>
-                                                    {scriptStyle === "Conversational" && (
-                                                        <p className="form-help">
-                                                            Conversational uses hosts only.
-                                                        </p>
-                                                    )}
-                                                    {scriptStyle === "Interview" && (
-                                                        <p className="form-help">
-                                                            Interview roles are fixed by layout.
-                                                        </p>
-                                                    )}
+                                                    <div className={`form-input ${!showRoleSelect ? "opacity-60 cursor-not-allowed" : ""}`}>{sp.role === "host" ? "Host" : "Guest"}</div>
+                                                    {scriptStyle === "Conversational" && <p className="form-help">Conversational uses hosts only.</p>}
+                                                    {scriptStyle === "Interview" && <p className="form-help">Interview roles are fixed by layout.</p>}
+                                                    {(scriptStyle === "Educational" || scriptStyle === "Storytelling") && <p className="form-help">Roles are fixed for this style.</p>}
                                                 </div>
                                             </div>
-
-                                            {/* 🔊 Voice selection */}
                                             <div>
                                                 <label className="form-label">Voice</label>
-
-                                                {loadingVoices ? (
-                                                    <p className="text-sm text-black/60 dark:text-white/60">
-                                                        Loading voices…
-                                                    </p>
-                                                ) : voices.length === 0 ? (
-                                                    <p className="text-sm text-rose-500">
-                                                        No voices found. Check ElevenLabs config.
-                                                    </p>
-                                                ) : (
-                                                    (() => {
-                                                        // Decide which pool to use based on the speaker's gender
-                                                        const genderKey =
-                                                            (sp.gender || "").toLowerCase() === "female" ? "female" : "male";
-
-                                                        // Prefer same-gender voices; if none, fall back to all voices
-                                                        const pool =
-                                                            voiceGroups[genderKey].length ? voiceGroups[genderKey] : voices;
-
-                                                        const currentId = sp.voiceId || pool[0]?.id || "";
-
-                                                        return (
-                                                            <div className="flex items-center gap-3">
-                                                                <select
-                                                                    value={currentId}
-                                                                    onChange={(e) =>
-                                                                        setSpeakers((arr) => {
-                                                                            const n = [...arr];
-                                                                            n[i] = { ...n[i], voiceId: e.target.value };
-                                                                            return n;
-                                                                        })
-                                                                    }
-                                                                    className="form-input flex-1"
-                                                                >
-                                                                    {pool.map((v) => (
-                                                                        <option key={v.id} value={v.id}>
-                                                                            {v.name}
-                                                                        </option>
-                                                                    ))}
-                                                                </select>
-
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => {
-                                                                        const selected =
-                                                                            pool.find((v) => v.id === currentId) || pool[0];
-                                                                        if (selected?.preview_url) {
-                                                                            const audio = new Audio(selected.preview_url);
-                                                                            audio.play().catch((err) =>
-                                                                                console.error("Preview failed", err)
-                                                                            );
-                                                                        } else {
-                                                                            alert("No preview available for this voice.");
-                                                                        }
-                                                                    }}
-                                                                    className="inline-flex items-center justify-center gap-2 px-5 h-[44px]
-           rounded-xl border border-purple-500 text-purple-600 font-semibold
-           hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
-                                                                >
-                                                                    <Play className="w-4 h-4" />
-                                                                    Preview
-                                                                </button>
-                                                            </div>
-                                                        );
-                                                    })()
-                                                )}
-
-                                                <p className="form-help text-xs mt-1">
-                                                    This voice will be used when generating audio for this speaker.
-                                                </p>
+                                                {loadingVoices ? <p className="text-sm text-black/60 dark:text-white/60">Loading voices…</p> : voices.length === 0 ? <p className="text-sm text-rose-500">No voices found. Check ElevenLabs config.</p> : (() => {
+                                                    const genderKey = (sp.gender || "").toLowerCase() === "female" ? "female" : "male";
+                                                    const pool = voiceGroups[genderKey].length ? voiceGroups[genderKey] : voices;
+                                                    const currentId = sp.voiceId || pool[0]?.id || "";
+                                                    return (
+                                                        <div className="flex items-center gap-3">
+                                                            <select value={currentId} onChange={(e) => setSpeakers((arr) => {
+                                                                const n = [...arr];
+                                                                n[i] = { ...n[i], voiceId: e.target.value };
+                                                                return n;
+                                                            })} className="form-input flex-1">
+                                                                {pool.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+                                                            </select>
+                                                            <button type="button" onClick={() => {
+                                                                const selected = pool.find((v) => v.id === currentId) || pool[0];
+                                                                if (selected?.preview_url) {
+                                                                    const audio = new Audio(selected.preview_url);
+                                                                    audio.play().catch((err) => console.error("Preview failed", err));
+                                                                } else {
+                                                                    alert("No preview available for this voice.");
+                                                                }
+                                                            }} className="inline-flex items-center justify-center gap-2 px-5 h-[44px] rounded-xl border border-purple-500 text-purple-600 font-semibold hover:bg-purple-50 dark:hover:bg-purple-900/20 transition">
+                                                                <Play className="w-4 h-4" /> Preview
+                                                            </button>
+                                                        </div>
+                                                    );
+                                                })()}
+                                                <p className="form-help text-xs mt-1">This voice will be used when generating audio for this speaker.</p>
                                             </div>
-
                                         </div>
                                     </div>
                                 ))}
                             </div>
                         )}
-
-                        {/* errors & actions */}
-                        {(errors.speaker_names || errors.speakers) && (
-                            <p className="text-rose-500 mt-4 text-center flex items-center gap-2 justify-center">
-                                <AlertCircle className="w-4 h-4" />
-                                {errors.speaker_names || errors.speakers}
-                            </p>
-                        )}
-
+                        {(errors.speaker_names || errors.speakers) && <p className="text-rose-500 mt-4 text-center flex items-center gap-2 justify-center"><AlertCircle className="w-4 h-4" /> {errors.speaker_names || errors.speakers}</p>}
                         <div className="mt-6 flex justify-between">
-                            <button
-                                onClick={() => setStep(1)}
-                                className="px-4 py-2 border rounded-xl"
-                            >
-                                Back
-                            </button>
-                            <button
-                                onClick={onContinueFromSpeakers}
-                                className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
-                            >
-                                Continue <ChevronRight className="w-4 h-4" />
-                            </button>
+                            <button onClick={() => setStep(1)} className="px-4 py-2 border rounded-xl">Back</button>
+                            <button onClick={onContinueFromSpeakers} className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold">Continue <ChevronRight className="w-4 h-4" /></button>
                         </div>
                     </section>
                 )}
 
-                {/* ===================== STEP 3: TEXT ===================== */}
-                {step === 3 && (
+                {/* STEP 3: TEXT/REVIEW */}
+                {step === 3 && !isEditMode && (
                     <section className="ui-card">
                         <h2 className="ui-card-title flex items-center gap-2">
-                            <NotebookPen className="w-4 h-4" /> Your Text
+                            {generatedScript ? <Edit className="w-4 h-4" /> : <NotebookPen className="w-4 h-4" />} 
+                            {generatedScript ? "Review your Script" : "Your Text"}
                         </h2>
 
-                        <textarea
-                            id="wecast_textarea"
-                            value={description}
-                            onChange={(e) => setDescription(e.target.value)}
-                            placeholder="Paste your text here (max 2500 words)…"
-                            className="form-textarea mt-3"
-                        />
-                        <div className="mt-2 text-sm flex justify-between">
-                            <span
-                                className={`${description.trim().split(/\s+/).filter(Boolean).length < MIN
-                                    ? "text-rose-500"
-                                    : "text-purple-500"
-                                    }`}
-                            >
-                                {description.trim().split(/\s+/).filter(Boolean).length} / {MAX}{" "}
-                                words
-                            </span>
-                            {errors.description && (
-                                <span className="text-rose-500">{errors.description}</span>
-                            )}
-                        </div>
+                        {!generatedScript ? (
+                            // Text input mode - before generation
+                            <>
+                                <textarea 
+                                    id="wecast_textarea" 
+                                    value={description} 
+                                    onChange={(e) => setDescription(e.target.value)} 
+                                    placeholder="Paste your text here (max 2500 words)…" 
+                                    className="form-textarea mt-3" 
+                                    rows={8} 
+                                />
+                                <div className="mt-2 text-sm flex justify-between">
+                                    <span className={`${description.trim().split(/\s+/).filter(Boolean).length < MIN ? "text-rose-500" : "text-purple-500"}`}>
+                                        {description.trim().split(/\s+/).filter(Boolean).length} / {MAX} words
+                                    </span>
+                                    {errors.description && <span className="text-rose-500">{errors.description}</span>}
+                                </div>
+                                {errors.server && <p className="text-rose-600 mt-3 flex items-center gap-2"><AlertCircle className="w-4 h-4" /> {errors.server}</p>}
+                                <div className="mt-6 flex justify-between">
+                                    <button onClick={() => setStep(2)} className="px-4 py-2 border rounded-xl">Back</button>
+                                    <button onClick={handleGenerate} disabled={submitting} className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50">
+                                        {submitting ? "Generating Script..." : <>Generate Script <Wand2 className="w-4 h-4" /></>}
+                                    </button>
+                                </div>
+                            </>
+                        ) : (
+                            // Review Mode
+                            <>
+                                <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800 mb-6">
+                                    <h3 className="text-xl font-bold text-green-700 dark:text-green-300 mb-4 flex items-center gap-2">
+                                        <Check className="w-5 h-5" /> Script Generated Successfully!
+                                    </h3>
 
-                        {errors.server && (
-                            <p className="text-rose-600 mt-3 flex items-center gap-2">
-                                <AlertCircle className="w-4 h-4" />
-                                {errors.server}
-                            </p>
+                                    {/* Script Information ABOVE the script */}
+                                    <div className="bg-white dark:bg-neutral-800 rounded-xl p-4 mb-4">
+                                        <h4 className="font-semibold mb-3 text-black dark:text-white">Script Information:</h4>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                                            <div>
+                                                <p><strong>Style:</strong> {scriptStyle}</p>
+                                                <p><strong>Speakers:</strong> {speakersCount}</p>
+                                                <p><strong>Total Words:</strong> {generatedScript.split(/\s+/).filter(Boolean).length}</p>
+                                            </div>
+                                            <div>
+                                                <p><strong>Speaker Roles:</strong> {speakers.map(s => s.role).join(', ')}</p>
+                                                <p><strong>Status:</strong> Ready for audio generation</p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Script Preview */}
+                                    <div className="bg-white dark:bg-neutral-800 rounded-xl p-4">
+                                        <h4 className="font-semibold mb-3 text-black dark:text-white">Script Preview:</h4>
+                                        <div className="whitespace-pre-wrap text-sm text-black/80 dark:text-white/80 leading-relaxed max-h-96 overflow-y-auto">
+                                            {generatedScript}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Action Buttons */}
+                                <div className="flex justify-between items-center">
+                                    <button 
+                                        onClick={() => { 
+                                            setGeneratedScript(null); 
+                                            setToast({ type: "info", message: "You can regenerate the script with changes." }); 
+                                            setTimeout(() => setToast(null), 2400); 
+                                        }} 
+                                        className="px-4 py-2 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                    >
+                                        Back
+                                    </button>
+                                    
+                                    <div className="flex gap-3">
+                                        <button 
+                                            onClick={navigateToEdit}
+                                            className="px-4 py-2 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                        >
+                                            Edit in Editor
+                                        </button>
+                                        <button 
+                                            onClick={() => setStep(4)} 
+                                            className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
+                                        >
+                                            Continue to Audio <ChevronRight className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                </div>
+                            </>
                         )}
-
-                        <div className="mt-6 flex justify-between">
-                            <button
-                                onClick={() => setStep(2)}
-                                className="px-4 py-2 border rounded-xl"
-                            >
-                                Back
-                            </button>
-                            <button
-                                onClick={handleGenerate}
-                                className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
-                            >
-                                {submitting ? (
-                                    "Please wait…"
-                                ) : (
-                                    <>
-                                        Start Generating <Wand2 className="w-4 h-4" />
-                                    </>
-                                )}
-                            </button>
-                        </div>
                     </section>
                 )}
-            </main>
 
-            {/* overlays */}
-            <LoadingOverlay show={submitting} />
-            <Toast toast={toast} onClose={() => setToast(null)} />
+                {/* STEP 4: AUDIO */}
+                {step === 4 && (
+                    <section className="ui-card">
+                        <h2 className="ui-card-title flex items-center gap-2 justify-center"><Mic2 className="w-4 h-4" /> Generate Audio</h2>
+                        
+                        {!generatedAudio ? (
+                            // Audio generation section
+                            <div className="text-center space-y-6">
+                                <div className="bg-purple-50 dark:bg-purple-900/20 rounded-2xl p-6 border border-purple-200 dark:border-purple-800">
+                                    <h3 className="text-xl font-bold text-purple-700 dark:text-purple-300 mb-3">Ready to Generate Audio</h3>
+                                    <p className="text-black/70 dark:text-white/70 mb-4">
+                                        Your script has been generated successfully! Now you can create the audio version of your podcast using the voices you selected.
+                                    </p>
+                                    
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 text-left">
+                                        <div>
+                                            <h4 className="font-semibold mb-2">Podcast Details:</h4>
+                                            <p><strong>Style:</strong> {scriptStyle}</p>
+                                            <p><strong>Speakers:</strong> {speakersCount}</p>
+                                            <p><strong>Words:</strong> {generatedScript.split(/\s+/).filter(Boolean).length}</p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="flex gap-4 justify-center flex-wrap">
+                                    <button 
+                                        onClick={() => setStep(3)} 
+                                        className="px-6 py-3 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                    >
+                                        Back to Review
+                                    </button>
+                                    <button 
+                                        onClick={handleGenerateAudio} 
+                                        disabled={generatingAudio}
+                                        className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
+                                    >
+                                        {generatingAudio ? "Generating Audio..." : <>Generate Audio <Play className="w-4 h-4" /></>}
+                                    </button>
+                                    <button 
+                                        onClick={navigateToEdit} 
+                                        className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                    >
+                                        Edit Script First
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            // Audio playback section
+                            <div className="space-y-6">
+                                <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800">
+                                    <h3 className="text-xl font-bold text-green-700 dark:text-green-300 mb-4 flex items-center gap-2 justify-center">
+                                        <Check className="w-5 h-5" /> Audio Generated Successfully! 🎉
+                                    </h3>
+                                    
+                                    {/* Audio Player */}
+                                    <div className="mt-6">
+                                        <WeCastAudioPlayer 
+                                            src={generatedAudio} 
+                                            title={`${scriptStyle} Podcast - ${speakersCount} Speakers`}
+                                        />
+                                    </div>
+
+                                    {/* Additional Actions */}
+                                    <div className="mt-6 flex gap-4 justify-center flex-wrap">
+                                        <button 
+                                            onClick={() => setStep(3)} 
+                                            className="px-6 py-3 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                        >
+                                            Back to Script
+                                        </button>
+                                        <button 
+                                            onClick={handleGenerateAudio} 
+                                            disabled={generatingAudio}
+                                            className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                        >
+                                            Regenerate Audio
+                                        </button>
+                                        <button 
+                                            onClick={navigateToEdit} 
+                                            className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                        >
+                                            Edit Script
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </section>
+                )}
+
+                {/* overlays */}
+                <LoadingOverlay show={submitting} type="script" />
+                <LoadingOverlay show={generatingAudio} type="audio" />
+                <Toast toast={toast} onClose={() => setToast(null)} />
+            </main>
         </div>
     );
 }
