@@ -30,7 +30,7 @@ export default function AboutSection() {
 
           <p className="text-lg leading-relaxed max-w-lg italic
                         text-neutral-700 dark:text-gray-400">
-            “From written thoughts to spoken magic <strong className="font-semibold text-neutral-900 dark:text-white">WeCast</strong> gives words their sound.”
+            "From written ideas to real conversations, <strong className="font-semibold text-neutral-900 dark:text-white">WeCast</strong> brings your content to life.”
           </p>
         </div>
 

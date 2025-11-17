@@ -27,6 +27,11 @@ export default function Footer() {
     }
   };
 
+  const scrollToTop = () => {
+    window.location.hash = "#/"; 
+    setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
+  };
+
   return (
     <footer className="bg-black dark:bg-[#101020] text-white dark:text-gray-200 transition-colors pt-20 duration-500">
       <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-12">
@@ -50,9 +55,13 @@ export default function Footer() {
           <h4 className="text-lg font-semibold mb-4">Quick Links</h4>
           <ul className="space-y-3 text-white/70 text-sm">
             <li>
-              <a href="#/" className="hover:text-white transition">
+              <button
+                onClick={scrollToTop}
+                className="hover:text-white transition cursor-pointer"
+              >
                 Home
-              </a>
+              </button>
+
             </li>
             <li>
               <a href="#/create" className="hover:text-white transition">

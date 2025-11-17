@@ -269,7 +269,7 @@ function Toast({ toast, onClose }) {
 /* ===================================================================== */
 
 export default function CreatePro() {
-    // steps: 1=Style, 2=Speakers, 3=Text, 4=Audio
+// steps: 1=Style, 2=Speakers, 3=Enter Text, 4=Review & Edit, 5=Transition Music, 6=Audio
     const [step, setStep] = useState(1);
     const [generatedAudio, setGeneratedAudio] = useState(null);
     const [generatingAudio, setGeneratingAudio] = useState(false);
@@ -305,14 +305,14 @@ export default function CreatePro() {
     const forceStep = sessionStorage.getItem('forceStep');
     const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
     
-    // If we have edit data with fromEdit flag, go directly to step 3
+    // If we have edit data with fromEdit flag, go directly to step 4 (Review & Edit)
     if (editData.fromEdit && editData.generatedScript) {
       setGeneratedScript(editData.generatedScript);
       setScriptStyle(editData.scriptStyle || '');
       setSpeakersCount(editData.speakersCount || 0);
       setSpeakers(editData.speakers || []);
       setDescription(editData.description || '');
-      setStep(3);
+      setStep(4);
       // Clean up the flags
       sessionStorage.removeItem('forceStep');
       const cleanEditData = { ...editData };
@@ -340,18 +340,18 @@ useEffect(() => {
     const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
     
     if (hash === '#/edit' && generatedScript) {
-      setStep(3);
+      setStep(4);
     } else if (hash === '#/create') {
       // When coming back from edit with data, stay on step 3
       if (editData.fromEdit && editData.generatedScript) {
         setGeneratedScript(editData.generatedScript);
-        setStep(3);
+        setStep(4);
         // Clean up the flag
         const cleanEditData = { ...editData };
         delete cleanEditData.fromEdit;
         sessionStorage.setItem('editData', JSON.stringify(cleanEditData));
       } else if (generatedScript) {
-        setStep(3);
+        setStep(4);
       }
     }
   };
@@ -659,6 +659,7 @@ useEffect(() => {
 
             setToast({ type: "success", message: "Script generated successfully! Review it below." });
             setTimeout(() => setToast(null), 2400);
+            setStep(4);
 
         } catch (e) {
             setErrors({ server: "Generation failed. Please check backend." });
@@ -759,52 +760,70 @@ useEffect(() => {
         <div className={`h-[3px] flex-1 rounded-full ${on ? "bg-gradient-to-r from-purple-600 to-pink-500" : "bg-black/10 dark:bg-white/10"}`} />
     );
 
-    // Determine current step label
-    const getStep3Label = () => {
-        if (window.location.hash === '#/edit') return "Edit";
-        if (generatedScript) return "Review";
-        return "Text";
-    };
+    // Count how many of each role we have (host, guest, etc.)
+    const roleCounts = useMemo(() => {
+    const counts = {};
+    speakers.forEach((s) => {
+        const r = s.role || "Speaker";
+        counts[r] = (counts[r] || 0) + 1;
+    });
+    return counts;
+    }, [speakers]);
 
-    // Check if we're currently in edit mode
-    const isEditMode = window.location.hash === '#/edit';
-
+    const roleUsage = {};
     return (
         <div className="min-h-screen bg-cream dark:bg-[#0a0a0a]">
             <div className="h-2 bg-purple-gradient" />
-            <main className="max-w-6xl mx-auto px-6 py-10">
+            <main className="w-full max-w-[1400px] mx-auto px-6 py-10">
                 {/* Title */}
                 <header className="mb-6 text-center">
                     <h1 className="text-3xl md:text-4xl font-extrabold text-black dark:text-white">
-                        {step === 1 && "Create your podcast"}
-                        {step === 2 && "Configure speakers"}
-                        {step === 3 && isEditMode ? "Edit Your Script" : 
-                         step === 3 && generatedScript ? "Review Your Script" : ""}
-                        {step === 4 && "Generate Audio"}
+                        {step === 1 && "Choose Style"}
+                        {step === 2 && "Add Speakers"}
+                        {step === 3 && "Write Your Content"}
+                        {step === 4 && "Review & Edit Script"}
+                        {step === 5 && "Select Transition Music"}
+                        {step === 6 && "Generate Your Podcast Audio"}
                     </h1>
+
                     <p className="mt-2 text-black/70 dark:text-white/70">
-                        {step === 1 && "Pick a style first. Hover a card to preview the style guidelines."}
-                        {step === 2 && "Choose how many speakers and fill their details (name, role, voice)."}
-                        {step === 3 && !generatedScript && "Provide your content to generate the script, then move to audio."}
-                        {step === 3 && generatedScript && !isEditMode && "Review your generated script, if needed you can edit the script below, then continue to audio generation."}
-                        {step === 3 && isEditMode && "Edit your script below, then continue to audio generation."}
-                        {step === 4 && "Generate and listen to your podcast audio."}
+                        {step === 1 && "Choose the overall tone and format for your podcast episode."}
+                        {step === 2 && "Add your speakers and choose their names and voices.ss"}
+                        {step === 3 && "Paste or write the content you want turned into a structured podcast script."}
+                        {step === 4 && "Review your script, make quick edits, and get it ready for audio."}
+                        {step === 5 && "Choose a transition track to give your podcast smoother flow."}
+                        {step === 6 && "Turn your script into polished, natural-sounding podcast audio."}
                     </p>
-                </header>
+                    </header>
+
+
 
                 {/* Stepper */}
-                <div className="max-w-3xl mx-auto rounded-2xl bg-white/60 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 p-4 mb-8">
-                    <div className="flex items-center gap-4">
-                        <StepDot n={1} label="Style" />
-                        <StepLine on={step >= 2} />
-                        <StepDot n={2} label="Speakers" />
-                        <StepLine on={step >= 3} />
-                        <StepDot n={3} label={getStep3Label()} />
-                        <StepLine on={step >= 4} />
-                        <StepDot n={4} label="Audio" />
-                    </div>
-                </div>
+                <div className="w-full max-w-[1400px] mx-auto rounded-2xl bg-white/60 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 p-4 mb-8">
+                    <div className="flex items-center gap-2">
+                        <StepDot n={1} label="Choose Style" />
+                        <StepLine on={step > 1} />
 
+                        <StepDot n={2} label="Add Speakers" />
+                        <StepLine on={step > 2} />
+
+                        <StepDot n={3} label="Write Content" />
+                        <StepLine on={step > 3} />
+
+                        <StepDot n={4} label="Review & Edit Script" />
+                        <StepLine on={step > 4} />
+
+                        <StepDot n={5} label="Select Music" />
+                        <StepLine on={step > 5} />
+
+                        <StepDot n={6} label="Generate Audio" />
+                    </div>
+                    </div>
+
+
+
+
+                <div className="max-w-5xl mx-auto">
                 {/* STEP 1: STYLE */}
                 {step === 1 && (
                     <section className="ui-card">
@@ -862,76 +881,188 @@ useEffect(() => {
                         )}
                         {speakers.length > 0 && (
                             <div className={`mt-5 grid gap-5 ${speakers.length === 1 ? "grid-cols-1 max-w-md" : speakers.length === 2 ? "grid-cols-1 md:grid-cols-2 max-w-4xl" : "grid-cols-1 md:grid-cols-3 max-w-5xl"} mx-auto`}>
-                                {speakers.map((sp, i) => (
-                                    <div key={i} className="rounded-xl border border-neutral-300 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 w-full">
-                                        <h3 className="text-sm font-bold text-black/80 dark:text-white/80">Speaker {i + 1}</h3>
+                                {speakers.map((sp, i) => {
+                                // 1) Normalize the role coming from your style
+                                // Normalize the role name coming from the style
+                                let rawRole = sp.role || "guest";
+
+                                // Count how many hosts exist
+                                const totalHosts = roleCounts["Host"] || roleCounts["host"] || 0;
+
+                                // Convert roles into UI roles
+                                let role;
+
+                                // If multiple hosts → turn all of them into Co-hosts
+                                if (rawRole === "host" && totalHosts > 1) {
+                                role = "Co-host";
+                                } else if (rawRole === "host") {
+                                role = "Host";
+                                } else if (rawRole === "cohost") {
+                                role = "Co-host";
+                                } else if (rawRole === "narrator") {
+                                role = "Narrator";
+                                } else {
+                                role = "Guest";
+                                }
+
+                                // Track usage for numbering (Guest 1, Co-host 1, etc.)
+                                roleUsage[role] = (roleUsage[role] || 0) + 1;
+                                const occurrence = roleUsage[role];
+
+                                // Build label
+                                const label =
+                                roleCounts[rawRole] > 1 && role !== "Host"
+                                    ? `${role} ${occurrence}`
+                                    : role;
+
+                                return (
+                                    <div
+                                        key={i}
+                                        className="rounded-xl border border-neutral-300 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 w-full"
+                                    >
+                                        {/* Card title now uses role label */}
+                                        <h3 className="text-sm font-bold text-black/80 dark:text-white/80">
+                                            {label}
+                                        </h3>
+                                        <p className="mt-1 text-xs text-neutral-500">
+                                            Roles are fixed for this style. You can edit the name, gender, and voice.
+                                        </p>
+
                                         <div className="mt-3 space-y-3">
+                                            {/* Name */}
                                             <div>
                                                 <label className="form-label">Name</label>
-                                                <input value={sp.name} onChange={(e) => {
-                                                    const cleaned = e.target.value.replace(/[^\p{L}\s]/gu, "").replace(/\s{2,}/g, " ");
-                                                    setSpeakers((arr) => {
-                                                        const next = [...arr];
-                                                        next[i] = { ...next[i], name: cleaned };
-                                                        return next;
-                                                    });
-                                                }} placeholder={`Speaker ${i + 1} name`} className={`form-input ${errors.speaker_names && !sp.name.trim() ? "border-rose-400" : ""}`} />
+                                                <input
+                                                    value={sp.name}
+                                                    onChange={(e) => {
+                                                        const cleaned = e.target.value
+                                                            .replace(/[^\p{L}\s]/gu, "")
+                                                            .replace(/\s{2,}/g, " ");
+                                                        setSpeakers((arr) => {
+                                                            const next = [...arr];
+                                                            next[i] = { ...next[i], name: cleaned };
+                                                            return next;
+                                                        });
+                                                    }}
+                                                    placeholder={`${label} name`}
+                                                    className={`form-input ${
+                                                        errors.speaker_names && !sp.name.trim()
+                                                            ? "border-rose-400"
+                                                            : ""
+                                                    }`}
+                                                />
                                             </div>
-                                            <div className="grid grid-cols-2 gap-3">
+
+                                            {/* Gender ONLY (Role field removed) */}
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                                 <div>
                                                     <label className="form-label">Gender</label>
-                                                    <select value={sp.gender} onChange={(e) => setSpeakers((arr) => {
-                                                        const n = [...arr];
-                                                        const gender = e.target.value;
-                                                        n[i] = { ...n[i], gender, voiceId: n[i].voiceId || defaultVoiceForGender(gender) };
-                                                        return n;
-                                                    })} className="form-input">
+                                                    <select
+                                                        value={sp.gender}
+                                                        onChange={(e) =>
+                                                            setSpeakers((arr) => {
+                                                                const n = [...arr];
+                                                                const gender = e.target.value;
+                                                                n[i] = {
+                                                                    ...n[i],
+                                                                    gender,
+                                                                    voiceId:
+                                                                        n[i].voiceId ||
+                                                                        defaultVoiceForGender(gender),
+                                                                };
+                                                                return n;
+                                                            })
+                                                        }
+                                                        className="form-input"
+                                                    >
                                                         <option>Male</option>
                                                         <option>Female</option>
                                                     </select>
                                                 </div>
-                                                <div>
-                                                    <label className="form-label">Role</label>
-                                                    <div className={`form-input ${!showRoleSelect ? "opacity-60 cursor-not-allowed" : ""}`}>{sp.role === "host" ? "Host" : "Guest"}</div>
-                                                    {scriptStyle === "Conversational" && <p className="form-help">Conversational uses hosts only.</p>}
-                                                    {scriptStyle === "Interview" && <p className="form-help">Interview roles are fixed by layout.</p>}
-                                                    {(scriptStyle === "Educational" || scriptStyle === "Storytelling") && <p className="form-help">Roles are fixed for this style.</p>}
-                                                </div>
                                             </div>
+
+                                            {/* Voice picker (unchanged) */}
                                             <div>
                                                 <label className="form-label">Voice</label>
-                                                {loadingVoices ? <p className="text-sm text-black/60 dark:text-white/60">Loading voices…</p> : voices.length === 0 ? <p className="text-sm text-rose-500">No voices found. Check ElevenLabs config.</p> : (() => {
-                                                    const genderKey = (sp.gender || "").toLowerCase() === "female" ? "female" : "male";
-                                                    const pool = voiceGroups[genderKey].length ? voiceGroups[genderKey] : voices;
+                                                {loadingVoices ? (
+                                                    <p className="text-sm text-black/60 dark:text-white/60">
+                                                        Loading voices…
+                                                    </p>
+                                                ) : voices.length === 0 ? (
+                                                    <p className="text-sm text-rose-500">
+                                                        No voices found. Check ElevenLabs config.
+                                                    </p>
+                                                ) : (() => {
+                                                    const genderKey =
+                                                        (sp.gender || "").toLowerCase() === "female"
+                                                            ? "female"
+                                                            : "male";
+                                                    const pool = voiceGroups[genderKey].length
+                                                        ? voiceGroups[genderKey]
+                                                        : voices;
                                                     const currentId = sp.voiceId || pool[0]?.id || "";
                                                     return (
                                                         <div className="flex items-center gap-3">
-                                                            <select value={currentId} onChange={(e) => setSpeakers((arr) => {
-                                                                const n = [...arr];
-                                                                n[i] = { ...n[i], voiceId: e.target.value };
-                                                                return n;
-                                                            })} className="form-input flex-1">
-                                                                {pool.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-                                                            </select>
-                                                            <button type="button" onClick={() => {
-                                                                const selected = pool.find((v) => v.id === currentId) || pool[0];
-                                                                if (selected?.preview_url) {
-                                                                    const audio = new Audio(selected.preview_url);
-                                                                    audio.play().catch((err) => console.error("Preview failed", err));
-                                                                } else {
-                                                                    alert("No preview available for this voice.");
+                                                            <select
+                                                                value={currentId}
+                                                                onChange={(e) =>
+                                                                    setSpeakers((arr) => {
+                                                                        const n = [...arr];
+                                                                        n[i] = {
+                                                                            ...n[i],
+                                                                            voiceId: e.target.value,
+                                                                        };
+                                                                        return n;
+                                                                    })
                                                                 }
-                                                            }} className="inline-flex items-center justify-center gap-2 px-5 h-[44px] rounded-xl border border-purple-500 text-purple-600 font-semibold hover:bg-purple-50 dark:hover:bg-purple-900/20 transition">
+                                                                className="form-input flex-1"
+                                                            >
+                                                                {pool.map((v) => (
+                                                                    <option key={v.id} value={v.id}>
+                                                                        {v.name}
+                                                                    </option>
+                                                                ))}
+                                                            </select>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    const selected =
+                                                                        pool.find(
+                                                                            (v) => v.id === currentId
+                                                                        ) || pool[0];
+                                                                    if (selected?.preview_url) {
+                                                                        const audio = new Audio(
+                                                                            selected.preview_url
+                                                                        );
+                                                                        audio
+                                                                            .play()
+                                                                            .catch((err) =>
+                                                                                console.error(
+                                                                                    "Preview failed",
+                                                                                    err
+                                                                                )
+                                                                            );
+                                                                    } else {
+                                                                        alert(
+                                                                            "No preview available for this voice."
+                                                                        );
+                                                                    }
+                                                                }}
+                                                                className="inline-flex items-center justify-center gap-2 px-5 h-[44px] rounded-xl border border-purple-500 text-purple-600 font-semibold hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                                            >
                                                                 <Play className="w-4 h-4" /> Preview
                                                             </button>
                                                         </div>
                                                     );
                                                 })()}
-                                                <p className="form-help text-xs mt-1">This voice will be used when generating audio for this speaker.</p>
+                                                <p className="form-help text-xs mt-1">
+                                                    This voice will be used when generating audio for this speaker.
+                                                </p>
                                             </div>
                                         </div>
                                     </div>
-                                ))}
+                                );
+                            })}
                             </div>
                         )}
                         {(errors.speaker_names || errors.speakers) && <p className="text-rose-500 mt-4 text-center flex items-center gap-2 justify-center"><AlertCircle className="w-4 h-4" /> {errors.speaker_names || errors.speakers}</p>}
@@ -942,107 +1073,181 @@ useEffect(() => {
                     </section>
                 )}
 
-                {/* STEP 3: TEXT/REVIEW */}
-                {step === 3 && !isEditMode && (
+                {/* STEP 3: ENTER TEXT */}
+                {step === 3 && (
                     <section className="ui-card">
                         <h2 className="ui-card-title flex items-center gap-2">
-                            {generatedScript ? <Edit className="w-4 h-4" /> : <NotebookPen className="w-4 h-4" />} 
-                            {generatedScript ? "Review your Script" : "Your Text"}
+                            <NotebookPen className="w-4 h-4" />
+                            Enter your text
                         </h2>
 
-                        {!generatedScript ? (
-                            // Text input mode - before generation
-                            <>
-                                <textarea 
-                                    id="wecast_textarea" 
-                                    value={description} 
-                                    onChange={(e) => setDescription(e.target.value)} 
-                                    placeholder="Paste your text here (max 2500 words)…" 
-                                    className="form-textarea mt-3" 
-                                    rows={8} 
-                                />
-                                <div className="mt-2 text-sm flex justify-between">
-                                    <span className={`${description.trim().split(/\s+/).filter(Boolean).length < MIN ? "text-rose-500" : "text-purple-500"}`}>
-                                        {description.trim().split(/\s+/).filter(Boolean).length} / {MAX} words
-                                    </span>
-                                    {errors.description && <span className="text-rose-500">{errors.description}</span>}
-                                </div>
-                                {errors.server && <p className="text-rose-600 mt-3 flex items-center gap-2"><AlertCircle className="w-4 h-4" /> {errors.server}</p>}
-                                <div className="mt-6 flex justify-between">
-                                    <button onClick={() => setStep(2)} className="px-4 py-2 border rounded-xl">Back</button>
-                                    <button onClick={handleGenerate} disabled={submitting} className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50">
-                                        {submitting ? "Generating Script..." : <>Generate Script <Wand2 className="w-4 h-4" /></>}
-                                    </button>
-                                </div>
-                            </>
-                        ) : (
-                            // Review Mode
-                            <>
-                                <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800 mb-6">
-                                    <h3 className="text-xl font-bold text-green-700 dark:text-green-300 mb-4 flex items-center gap-2">
-                                        <Check className="w-5 h-5" /> Script Generated Successfully!
-                                    </h3>
-
-                                    {/* Script Information ABOVE the script */}
-                                    <div className="bg-white dark:bg-neutral-800 rounded-xl p-4 mb-4">
-                                        <h4 className="font-semibold mb-3 text-black dark:text-white">Script Information:</h4>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                                            <div>
-                                                <p><strong>Style:</strong> {scriptStyle}</p>
-                                                <p><strong>Speakers:</strong> {speakersCount}</p>
-                                                <p><strong>Total Words:</strong> {generatedScript.split(/\s+/).filter(Boolean).length}</p>
-                                            </div>
-                                            <div>
-                                                <p><strong>Speaker Roles:</strong> {speakers.map(s => s.role).join(', ')}</p>
-                                                <p><strong>Status:</strong> Ready for audio generation</p>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* Script Preview */}
-                                    <div className="bg-white dark:bg-neutral-800 rounded-xl p-4">
-                                        <h4 className="font-semibold mb-3 text-black dark:text-white">Script Preview:</h4>
-                                        <div className="whitespace-pre-wrap text-sm text-black/80 dark:text-white/80 leading-relaxed max-h-96 overflow-y-auto">
-                                            {displayedScript}
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {/* Action Buttons */}
-                                <div className="flex justify-between items-center">
-                                    <button 
-                                        onClick={() => { 
-                                            setGeneratedScript(null); 
-                                            setToast({ type: "info", message: "You can regenerate the script with changes." }); 
-                                            setTimeout(() => setToast(null), 2400); 
-                                        }} 
-                                        className="px-4 py-2 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
-                                    >
-                                        Back
-                                    </button>
-                                    
-                                    <div className="flex gap-3">
-                                        <button 
-                                            onClick={navigateToEdit}
-                                            className="px-4 py-2 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
-                                        >
-                                            Edit in Editor
-                                        </button>
-                                        <button 
-                                            onClick={() => setStep(4)} 
-                                            className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
-                                        >
-                                            Continue to Audio <ChevronRight className="w-4 h-4" />
-                                        </button>
-                                    </div>
-                                </div>
-                            </>
+                        <textarea
+                            id="wecast_textarea"
+                            value={description}
+                            onChange={(e) => setDescription(e.target.value)}
+                            placeholder="Paste your text here (min 500, max 2500 words)…"
+                            className="form-textarea mt-3"
+                            rows={8}
+                        />
+                        <div className="mt-2 text-sm flex justify-between">
+                            <span
+                                className={`${
+                                    description.trim().split(/\s+/).filter(Boolean).length < MIN
+                                        ? "text-rose-500"
+                                        : "text-purple-500"
+                                }`}
+                            >
+                                {description.trim().split(/\s+/).filter(Boolean).length} / {MAX} words
+                            </span>
+                            {errors.description && (
+                                <span className="text-rose-500">{errors.description}</span>
+                            )}
+                        </div>
+                        {errors.server && (
+                            <p className="text-rose-600 mt-3 flex items-center gap-2">
+                                <AlertCircle className="w-4 h-4" /> {errors.server}
+                            </p>
                         )}
+                        <div className="mt-6 flex justify-between">
+                            <button
+                                onClick={() => setStep(2)}
+                                className="px-4 py-2 border rounded-xl"
+                            >
+                                Back
+                            </button>
+                            <button
+                                onClick={handleGenerate}
+                                disabled={submitting}
+                                className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
+                            >
+                                {submitting ? (
+                                    "Generating Script..."
+                                ) : (
+                                    <>
+                                        Generate Script <Wand2 className="w-4 h-4" />
+                                    </>
+                                )}
+                            </button>
+                        </div>
                     </section>
                 )}
 
-                {/* STEP 4: AUDIO */}
-                {step === 4 && (
+                {/* STEP 4: REVIEW & EDIT */}
+                {step === 4 && generatedScript && (
+                    <section className="ui-card">
+                        <h2 className="ui-card-title flex items-center gap-2">
+                            <Edit className="w-4 h-4" />
+                            Review your script
+                        </h2>
+
+                        <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800 mb-6">
+                            <h3 className="text-xl font-bold text-green-700 dark:text-green-300 mb-4 flex items-center gap-2">
+                                <Check className="w-5 h-5" /> Script Generated Successfully!
+                            </h3>
+
+                            {/* Script Information ABOVE the script */}
+                            <div className="bg-white dark:bg-neutral-800 rounded-xl p-4 mb-4">
+                                <h4 className="font-semibold mb-3 text-black dark:text-white">
+                                    Script Information:
+                                </h4>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                                    <div>
+                                        <p>
+                                            <strong>Style:</strong> {scriptStyle}
+                                        </p>
+                                        <p>
+                                            <strong>Speakers:</strong> {speakersCount}
+                                        </p>
+                                        <p>
+                                            <strong>Total Words:</strong>{" "}
+                                            {generatedScript.split(/\s+/).filter(Boolean).length}
+                                        </p>
+                                    </div>
+                                    <div>
+                                        <p>
+                                            <strong>Speaker Roles:</strong>{" "}
+                                            {speakers.map((s) => s.role).join(", ")}
+                                        </p>
+                                        <p>
+                                            <strong>Status:</strong> Ready for audio generation
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Script Preview */}
+                            <div className="bg-white dark:bg-neutral-800 rounded-xl p-4">
+                                <h4 className="font-semibold mb-3 text-black dark:text-white">
+                                    Script Preview:
+                                </h4>
+                                <div className="whitespace-pre-wrap text-sm text-black/80 dark:text-white/80 leading-relaxed max-h-96 overflow-y-auto">
+                                    {displayedScript}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="flex justify-between items-center">
+                            <button
+                                onClick={() => {
+                                    // go back to text step and allow regeneration
+                                    setStep(3);
+                                }}
+                                className="px-4 py-2 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
+                            >
+                                Back to text
+                            </button>
+
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={navigateToEdit}
+                                    className="px-4 py-2 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                >
+                                    Edit in Editor
+                                </button>
+                                <button
+                                    onClick={() => setStep(5)}
+                                    className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
+                                >
+                                    Continue to Transition Music <ChevronRight className="w-4 h-4" />
+                                </button>
+                            </div>
+                        </div>
+                    </section>
+                )}
+                {/* STEP 5: TRANSITION MUSIC (placeholder) */}
+                {step === 5 && (
+                    <section className="ui-card">
+                        <h2 className="ui-card-title flex items-center gap-2 justify-center">
+                            <Mic2 className="w-4 h-4" /> Transition music
+                        </h2>
+
+                        <div className="mt-4 rounded-2xl border border-dashed border-purple-300 dark:border-purple-700 bg-purple-50/40 dark:bg-purple-900/10 p-6 text-center">
+                            <p className="text-sm text-black/70 dark:text-white/70 max-w-xl mx-auto">
+                                Transition music selection is coming soon. For now, you can continue to
+                                generate your podcast audio.
+                            </p>
+                        </div>
+
+                        <div className="mt-6 flex justify-between">
+                            <button
+                                onClick={() => setStep(4)}
+                                className="px-4 py-2 border rounded-xl"
+                            >
+                                Back to Review
+                            </button>
+                            <button
+                                onClick={() => setStep(6)}
+                                className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
+                            >
+                                Continue to Audio <ChevronRight className="w-4 h-4" />
+                            </button>
+                        </div>
+                    </section>
+                )}
+
+                {/* STEP 6: AUDIO */}
+                {step === 6 && (
                     <section className="ui-card">
                         <h2 className="ui-card-title flex items-center gap-2 justify-center"><Mic2 className="w-4 h-4" /> Generate Audio</h2>
                         
@@ -1067,7 +1272,7 @@ useEffect(() => {
 
                                 <div className="flex gap-4 justify-center flex-wrap">
                                     <button 
-                                        onClick={() => setStep(3)} 
+                                        onClick={() => setStep(4)} 
                                         className="px-6 py-3 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
                                     >
                                         Back to Review
@@ -1106,7 +1311,7 @@ useEffect(() => {
                                     {/* Additional Actions */}
                                     <div className="mt-6 flex gap-4 justify-center flex-wrap">
                                         <button 
-                                            onClick={() => setStep(3)} 
+                                            onClick={() => setStep(4)} 
                                             className="px-6 py-3 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
                                         >
                                             Back to Script
@@ -1130,7 +1335,7 @@ useEffect(() => {
                         )}
                     </section>
                 )}
-
+                </div>
                 {/* overlays */}
                 <LoadingOverlay show={submitting} type="script" />
                 <LoadingOverlay show={generatingAudio} type="audio" />

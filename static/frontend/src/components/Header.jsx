@@ -30,32 +30,41 @@ export default function Header() {
     return () => window.removeEventListener("storage", handleStorage);
   }, []);
 
+  const scrollToTop = () => {
+    window.location.hash = "#/"; 
+    setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
+  };
+
   return (
     <header className="fixed top-0 inset-x-0 z-50 bg-white/20 dark:bg-black/40 backdrop-blur-md border-b border-black/10 dark:border-white/10 text-black dark:text-white">
       <nav className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         {/* LEFT: logo + animated WeCast */}
         <div className="flex items-center gap-2">
+          <button onClick={scrollToTop}>
           <img
             src="/logo.png"
             alt="WeCast logo"
             className="w-8 h-8 object-contain"
           />
-          <a href="#/" className="corner-logo block" aria-label="WeCast Home">
+          </button>
+          <button onClick={scrollToTop} className="corner-logo block">
             <strong className="text-3xl md:text-2xl font-black tracking-wide text-black dark:text-white">
               WeCast
             </strong>
-          </a>
+          </button>
+
         </div>
 
         {/* CENTER: navigation links */}
         <ul className="absolute left-1/2 -translate-x-1/2 flex items-center gap-6 text-base">
           <li>
-            <a
-              href="#/"
+            <button
+              onClick={scrollToTop}
               className="transition-colors duration-300 hover:text-purple-600"
             >
               Home
-            </a>
+            </button>
+
           </li>
 
           {/* Profile only when logged in */}

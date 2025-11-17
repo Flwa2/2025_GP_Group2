@@ -257,7 +257,7 @@ useEffect(() => {
     }
   }
   
-  // Store data and force step 3 (Review step)
+  // Store data and force step 4 (Review & Edit step)
   const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
   const updatedEditData = {
     ...editData,
@@ -266,7 +266,7 @@ useEffect(() => {
   };
   
   sessionStorage.setItem('editData', JSON.stringify(updatedEditData));
-  sessionStorage.setItem('forceStep', '3'); // Force step 3 (Review), not 4
+  sessionStorage.setItem('forceStep', '4'); // Force step 4 (Review & Edit)
   
   // Navigate to CreatePro
   window.location.hash = "#/create";
@@ -276,30 +276,42 @@ useEffect(() => {
     <div className="min-h-screen bg-cream dark:bg-[#0a0a0a]">
       <div className="h-2 bg-purple-gradient" />
 
-      <main className="max-w-6xl mx-auto px-6 py-10">
+      <main className="w-full max-w-[1400px] mx-auto px-6 py-10">
         {/* Title */}
         <header className="mb-6 text-center">
           <h1 className="text-3xl md:text-4xl font-extrabold text-black dark:text-white">
-            Edit Your Podcast Script
+            Review & Edit Script
           </h1>
           <p className="mt-2 text-black/70 dark:text-white/70">
-            Keep speaker labels; edit only the wording after each colon.
+            Review your script, make quick edits, and get it ready for audio.
           </p>
         </header>
 
         {/* Stepper - matches CreatePro.jsx */}
-        <div className="max-w-3xl mx-auto rounded-2xl bg-white/60 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 p-4 mb-8">
-          <div className="flex items-center gap-4">
-            <StepDot n={1} label="Style" done />
+        <div className="w-full rounded-2xl bg-white/60 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 p-4 mb-8">
+          <div className="flex items-center gap-2">
+            <StepDot n={1} label="Choose Style" done />
             <StepLine on={true} />
-            <StepDot n={2} label="Speakers" done />
+
+            <StepDot n={2} label="Add Speakers" done />
             <StepLine on={true} />
-            <StepDot n={3} label="Edit" active />
+
+            <StepDot n={3} label="Write Content" done />
+            <StepLine on={true} />
+
+            <StepDot n={4} label="Review & Edit Script" active />
             <StepLine on={false} />
-            <StepDot n={4} label="Audio" />
+
+            <StepDot n={5} label="Select Music" />
+            <StepLine on={false} />
+
+            <StepDot n={6} label="Generate Audio" />
           </div>
         </div>
 
+
+
+        <div className="max-w-5xl mx-auto">
         {/* guidelines */}
         <section className="ui-card">
           <h2 className="ui-card-title">Editing Guidelines</h2>
@@ -427,7 +439,7 @@ useEffect(() => {
       fromEdit: true // Flag to indicate we're coming from edit
     };
     sessionStorage.setItem('editData', JSON.stringify(updatedEditData));
-    sessionStorage.setItem('forceStep', '3'); // Force step 3
+    sessionStorage.setItem('forceStep', '4'); // Force step 4 (Review & Edit)
     window.location.hash = "#/create";
   }}
   className="px-4 py-2 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
@@ -458,6 +470,7 @@ useEffect(() => {
         
             </>
           )}
+        </div>
         </div>
       </main>
     </div>
