@@ -274,6 +274,9 @@ export default function CreatePro() {
     const [generatedAudio, setGeneratedAudio] = useState(null);
     const [generatingAudio, setGeneratingAudio] = useState(false);
     const [generatedScript, setGeneratedScript] = useState(null);
+    const [showTitle, setShowTitle] = useState("");
+    const [scriptTemplate, setScriptTemplate] = useState("");
+    const [episodeTitle, setEpisodeTitle] = useState("");
     const [scriptStyle, setScriptStyle] = useState("");
     const [speakersCount, setSpeakersCount] = useState(0);
     const [speakers, setSpeakers] = useState([]);
@@ -282,6 +285,11 @@ export default function CreatePro() {
     const [submitting, setSubmitting] = useState(false);
     const [toast, setToast] = useState(null);
     const [hoverKey, setHoverKey] = useState(null);
+
+    const displayedScript =
+    scriptTemplate && showTitle
+        ? scriptTemplate.replaceAll("{{SHOW_TITLE}}", showTitle)
+        : generatedScript || "";
 
     //  ElevenLabs voices
     const [voices, setVoices] = useState([]);
@@ -636,7 +644,19 @@ useEffect(() => {
                 return;
             }
 
-            setGeneratedScript(data.script);
+            // template from backend
+            const template = data.script;
+            const show = data.show_title;
+
+            // store template + show title
+            setScriptTemplate(template);
+            setShowTitle(show);
+            setEpisodeTitle(data.title);
+
+            // rendered script that the user will SEE
+            const rendered = template.replaceAll("{{SHOW_TITLE}}", show);
+            setGeneratedScript(rendered);
+
             setToast({ type: "success", message: "Script generated successfully! Review it below." });
             setTimeout(() => setToast(null), 2400);
 
@@ -983,7 +1003,7 @@ useEffect(() => {
                                     <div className="bg-white dark:bg-neutral-800 rounded-xl p-4">
                                         <h4 className="font-semibold mb-3 text-black dark:text-white">Script Preview:</h4>
                                         <div className="whitespace-pre-wrap text-sm text-black/80 dark:text-white/80 leading-relaxed max-h-96 overflow-y-auto">
-                                            {generatedScript}
+                                            {displayedScript}
                                         </div>
                                     </div>
                                 </div>

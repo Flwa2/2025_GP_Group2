@@ -1,6 +1,7 @@
 // src/components/EditScript.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
+import { Mic2 } from "lucide-react";
 
 /* -------------------- overlay: rotating logo -------------------- */
 function LoadingOverlay({ show, logoSrc = "/logo.png" }) {
@@ -65,26 +66,99 @@ const StepLine = ({ on }) => (
 // ----------------------------------------------------------------------------------------
 
 export default function EditScript() {
+
   const [script, setScript] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("Not saved yet");
   const [loadingDraft, setLoadingDraft] = useState(true);
+  const [scriptTemplate, setScriptTemplate] = useState("");
+  const [showTitle, setShowTitle] = useState("");
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [titleJustUpdated, setTitleJustUpdated] = useState(false);
 
   const lastValidRef = useRef("");
   const textareaRef = useRef(null);
 
-  useEffect(() => {
-    fetch("/api/draft", { credentials: "include" })
-      .then((r) => r.json())
-      .then((d) => {
-        const initial = (d.script || "").trim();
-        setScript(initial);
-        lastValidRef.current = initial || "";
-      })
-      .finally(() => setLoadingDraft(false));
-  }, []);
+  // what the user *sees* in the editor
+  const displayedScript = scriptTemplate
+    ? scriptTemplate.replaceAll("{{SHOW_TITLE}}", showTitle || "Podcast Show")
+    : script;
 
-// Add this useEffect in EditScript.jsx to save the edit data
+  // NEW: editor change handler (replaces old onChangeSafe)
+  const handleScriptChange = (e) => {
+    const next = e.target.value;
+
+    // don't allow clearing everything (keep your old behavior)
+    if (next.trim() === "") {
+      setScript(lastValidRef.current);
+      setSaveMsg("You can't clear the entire script.");
+      return;
+    }
+
+    // visible script
+    setScript(next);
+    lastValidRef.current = next;
+
+    // keep template version in sync by replacing show title with placeholder
+    const placeholder = "{{SHOW_TITLE}}";
+    const title = showTitle || "Podcast Show";
+    const templated = next.replaceAll(title, placeholder);
+    setScriptTemplate(templated);
+  };
+
+  const startEditTitle = () => {
+    setDraftTitle(showTitle || "Podcast Show");
+    setIsEditingTitle(true);
+  };
+
+  const cancelEditTitle = () => {
+    setIsEditingTitle(false);
+  };
+
+  const saveTitle = () => {
+    const trimmed = draftTitle.trim();
+    if (!trimmed) {
+      return; // ignore empty
+    }
+
+    // update actual title
+    setShowTitle(trimmed);
+    setIsEditingTitle(false);
+
+    // also update visible script + lastValidRef
+    const updatedVisible = scriptTemplate.replaceAll("{{SHOW_TITLE}}", trimmed);
+    setScript(updatedVisible);
+    lastValidRef.current = updatedVisible;
+  };
+
+  useEffect(() => {
+    if (!showTitle) return;
+    setTitleJustUpdated(true);
+    const t = setTimeout(() => setTitleJustUpdated(false), 900);
+    return () => clearTimeout(t);
+  }, [showTitle]);
+
+  useEffect(() => {
+  fetch("/api/draft", { credentials: "include" })
+    .then((r) => r.json())
+    .then((d) => {
+      const template = (d.script || "").trim();          // template from backend
+      const show = d.show_title || "Podcast Show";       // show title from backend
+
+      setShowTitle(show);
+      setScriptTemplate(template);
+
+      const initial = template
+        ? template.replaceAll("{{SHOW_TITLE}}", show)
+        : "";
+      setScript(initial);
+      lastValidRef.current = initial || "";
+    })
+    .finally(() => setLoadingDraft(false));
+}, []);
+
+
 useEffect(() => {
   // Save edit data when component mounts for navigation back
   const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
@@ -138,17 +212,6 @@ useEffect(() => {
         });
       }
     }
-  };
-
-  const onChangeSafe = (e) => {
-    const next = e.target.value;
-    if (next.trim() === "") {
-      setScript(lastValidRef.current);
-      setSaveMsg("You can't clear the entire script.");
-      return;
-    }
-    setScript(next);
-    lastValidRef.current = next;
   };
 
   const save = async () => {
@@ -259,6 +322,76 @@ useEffect(() => {
           </ul>
         </section>
 
+        {/* Podcast Title */}
+        <div
+          className={
+            `mt-8 mb-6 px-5 py-4 rounded-2xl border border-amber-200/70 ` +
+            `bg-gradient-to-r from-amber-50 via-amber-100 to-amber-50 ` +
+            `dark:from-neutral-800 dark:via-neutral-900 dark:to-neutral-800 ` +
+            `shadow-sm flex items-center justify-between gap-4 transition-all ` +
+            `duration-300 ${
+              titleJustUpdated
+                ? "ring-2 ring-purple-300/70 shadow-md"
+                : "ring-0"
+            }`
+          }
+        >
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-full bg-white/80 dark:bg-neutral-700 flex items-center justify-center shadow-sm">
+              <Mic2 className="w-4 h-4 text-purple-600 dark:text-purple-300" />
+            </div>
+            <div>
+              <p className="text-[11px] tracking-[0.18em] uppercase text-neutral-500 dark:text-neutral-400">
+                Podcast Title
+              </p>
+              <p className="mt-1 text-lg font-semibold text-neutral-900 dark:text-white">
+                {showTitle || "Podcast Show"}
+              </p>
+            </div>
+          </div>
+
+          {!isEditingTitle ? (
+            <button
+              type="button"
+              onClick={startEditTitle}
+              className="text-xs px-3 py-1.5 rounded-full border border-neutral-300 dark:border-neutral-600 
+                        text-neutral-700 dark:text-neutral-100 
+                        hover:bg-neutral-900/5 dark:hover:bg-white/10 
+                        hover:border-purple-400 transition-all duration-200"
+            >
+              Edit title
+            </button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={draftTitle}
+                onChange={(e) => setDraftTitle(e.target.value)}
+                className="text-xs px-2 py-1 rounded-lg border border-neutral-300 dark:border-neutral-600 
+                          bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 w-44 
+                          focus:outline-none focus:ring-2 focus:ring-purple-400/70"
+              />
+              <button
+                type="button"
+                onClick={saveTitle}
+                className="text-xs px-3 py-1.5 rounded-full bg-purple-600 text-white 
+                          hover:bg-purple-700 transition-colors duration-200"
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={cancelEditTitle}
+                className="text-xs px-2 py-1 text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-100"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+
+
+
         {/* editor */}
         <div className="ui-card mt-6">
           <h2 className="ui-card-title">Your Script</h2>
@@ -275,11 +408,12 @@ useEffect(() => {
                 ref={textareaRef}
                 className="form-textarea"
                 style={{ minHeight: "52vh", lineHeight: 1.55 }}
-                value={script}
-                onChange={onChangeSafe}
+                value={displayedScript}
+                onChange={handleScriptChange}
                 onKeyDown={onKeyDownGuard}
                 placeholder="Host: …"
               />
+
 
               {/* actions row */}
               <div className="mt-4 flex items-center justify-between gap-4 flex-wrap">

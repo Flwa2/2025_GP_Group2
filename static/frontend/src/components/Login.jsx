@@ -20,41 +20,52 @@ export default function Login() {
 
         try {
             const res = await fetch(`${API_BASE}/api/login`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    email,
-                    password: pwd,
-                }),
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                email,
+                password: pwd,
+            }),
             });
 
-            const data = await res.json().catch(() => ({}));
-
-            if (!res.ok) {
-                setError(data.error || "Invalid email or password.");
-                setLoading(false);
-                return;
+            let data = {};
+            try {
+            data = await res.json();
+            } catch {
+            data = {};
             }
 
-            // Save token + user
+            // Backend reachable but login failed (wrong password, etc.)
+            if (!res.ok) {
+            setError(data.error || "Invalid email or password.");
+            return;
+            }
+
+            // SUCCESS CASE
             if (data.token) {
-                localStorage.setItem("token", data.token);
+            localStorage.setItem("token", data.token);
             }
             if (data.user) {
-                localStorage.setItem("user", JSON.stringify(data.user));
+            localStorage.setItem("user", JSON.stringify(data.user));
             }
 
-            // Redirect to dashboard/home
-            window.location.hash = "#/";
+            // Let the header know auth changed (so it hides Login/Sign Up)
+            window.dispatchEvent(
+            new StorageEvent("storage", { key: "token", newValue: data.token || "" })
+            );
 
+            // Go to home / dashboard
+            window.location.hash = "#/";
         } catch (err) {
-            console.error("LOGIN ERROR:", err);
+            console.error("LOGIN NETWORK ERROR:", err);
             setError("Failed to connect to the server. Please try again.");
+        } finally {
             setLoading(false);
         }
-    };
+        };
+
         const handleGoogleLogin = async () => {
     setError("");
     setLoading(true);

@@ -27,6 +27,7 @@ import jwt
 from firebase_init import db  
 print("🔍 DEBUG in app.py:", db)
 
+SHOW_TITLE_PLACEHOLDER = "{{SHOW_TITLE}}"
 # ------------------------------------------------------------
 # App + Config
 # ------------------------------------------------------------
@@ -354,6 +355,34 @@ Script:
     return (resp.choices[0].message.content or "").strip()
 
 
+def extract_show_title_and_template(script: str):
+    """
+    Detect the podcast *show* name inside the intro
+    and return (show_title, script_template_with_placeholder).
+    """
+    if not script.strip():
+        return "Podcast Show", script  # fallback
+
+    # Look only in the first few lines where the intro is
+    lines = script.splitlines()
+    head = "\n".join(lines[:10])
+
+    # Example we saw:
+    # host: Welcome, listeners, to another episode of "Cultural Conversations," where...
+    match = re.search(r'episode of\s+"([^"]+)"', head, flags=re.IGNORECASE)
+    if not match:
+        # more generic fallback: first quoted thing in the intro
+        match = re.search(r'"([^"]+)"', head)
+    if not match:
+        return "Podcast Show", script  # nothing found, don’t break anything
+
+    show_title = match.group(1)
+
+    # Replace ONLY the first occurrence of the show title with the placeholder
+    script_template = script.replace(show_title, SHOW_TITLE_PLACEHOLDER, 1)
+
+    return show_title, script_template
+
 
 def validate_roles(style: str, speakers_info: list):
     roles = [s["role"] for s in speakers_info]
@@ -461,18 +490,23 @@ def api_generate():
     # 2) Generate a short AI title for this episode
     title = generate_title_from_script(script, script_style)
 
-    # 3) Store everything in the session draft
+    # 3) NEW: extract show title + turn script into a template
+    #    (uses the helper you added earlier)
+    show_title, script_template = extract_show_title_and_template(script)
+
+    # 4) Store everything in the session draft
     session["create_draft"] = {
         "script_style": script_style,
         "speakers_count": speakers,
         "speakers_info": speakers_info,
         "description": description,
-        "script": script,
+        "script": script_template,
+        "show_title": show_title,
         "title": title,
     }
 
     # 4) Return both script + title to the frontend
-    return jsonify(ok=True, script=script, title=title)
+    return jsonify(ok=True, script=script_template, title=title, show_title=show_title)
 
 
 

@@ -1,7 +1,10 @@
 // src/components/Header.jsx
+import { useEffect, useState } from "react";
 import CurvedWeCast from "./CurvedWeCast";
 
 export default function Header() {
+  const [loggedIn, setLoggedIn] = useState(false);
+
   const goEpisodes = (e) => {
     e.preventDefault();
     // always land on home then smooth-scroll to #episodes
@@ -11,6 +14,21 @@ export default function Header() {
       el?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 0);
   };
+
+  useEffect(() => {
+    // check once on mount
+    const token = localStorage.getItem("token");
+    setLoggedIn(!!token);
+
+    // optional: react to token changes from other tabs / logout
+    const handleStorage = (e) => {
+      if (e.key === "token") {
+        setLoggedIn(!!e.newValue);
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
 
   return (
     <header className="fixed top-0 inset-x-0 z-50 bg-white/20 dark:bg-black/40 backdrop-blur-md border-b border-black/10 dark:border-white/10 text-black dark:text-white">
@@ -39,41 +57,40 @@ export default function Header() {
               Home
             </a>
           </li>
-          <li>
-            <a
-              href="#/episodes"
-              onClick={goEpisodes}
-              className="transition-colors duration-300 hover:text-purple-600"
-            >
-              Episodes
-            </a>
-          </li>
-          <li>
-            <a
-              href="#/account"
-              className="transition-colors duration-300 hover:text-purple-600"
-            >
-              Profile
-            </a>
-          </li>
+
+          {/* Profile only when logged in */}
+          {loggedIn && (
+            <li>
+              <a
+                href="#/account"
+                className="transition-colors duration-300 hover:text-purple-600"
+              >
+                Profile
+              </a>
+            </li>
+          )}
         </ul>
 
+        {/* RIGHT: auth buttons */}
         <div className="flex items-center gap-3">
-          <a
-            href="#/login"
-            className="px-3 py-1.5 rounded-lg text-black dark:text-gray-100 font-normal transition-all duration-300 hover:font-semibold hover:underline underline-offset-4"
-            style={{ backgroundColor: "transparent", border: "none" }}
-          >
-            Log in
-          </a>
+          {!loggedIn && (
+            <>
+              <a
+                href="#/login"
+                className="px-3 py-1.5 rounded-lg text-black dark:text-gray-100 font-normal transition-all duration-300 hover:font-semibold hover:underline underline-offset-4"
+                style={{ backgroundColor: "transparent", border: "none" }}
+              >
+                Log in
+              </a>
 
-          <a
-            href="#/signup"
-            className="px-3 py-1.5 rounded-lg bg-black text-white font-bold border-2 border-black transition-all duration-300 hover:bg-pink-200 hover:text-black"
-          >
-            Sign Up
-          </a>
-
+              <a
+                href="#/signup"
+                className="px-3 py-1.5 rounded-lg bg-black text-white font-bold border-2 border-black transition-all duration-300 hover:bg-pink-200 hover:text-black"
+              >
+                Sign Up
+              </a>
+            </>
+          )}
         </div>
       </nav>
     </header>
