@@ -210,8 +210,29 @@ export default function Account() {
           {saving ? "Saving…" : "Save Changes"}
         </button>
       </div>
-    </div>
-  );
+
+      {/* Logout */}
+      <div className="pt-6">
+        <button
+          onClick={() => {
+            localStorage.removeItem("token");
+            localStorage.removeItem("user");
+
+            // Notify state change
+            window.dispatchEvent(
+              new StorageEvent("storage", { key: "token", newValue: "" })
+            );
+
+            // Redirect user
+            window.location.hash = "#/";
+          }}
+          className="w-full bg-red-500 hover:bg-red-600 text-white font-semibold py-3 rounded-xl transition"
+        >
+          Log Out
+        </button>
+      </div>
+    </div>   
+  );         
 }
 
 /* ---------- UI helpers ---------- */

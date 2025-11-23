@@ -285,6 +285,34 @@ export default function CreatePro() {
     const [submitting, setSubmitting] = useState(false);
     const [toast, setToast] = useState(null);
     const [hoverKey, setHoverKey] = useState(null);
+    const [musicPreview, setMusicPreview] = useState(null);
+    const [category, setCategory] = useState("");
+    const [introMusic, setIntroMusic] = useState("");
+    const [bodyMusic, setBodyMusic] = useState("");
+    const [outroMusic, setOutroMusic] = useState("");
+    const [availableTracks, setAvailableTracks] = useState([]);
+
+    //هذي بنخليها بالداتابيس ف اسحبوا عليها 
+    const MUSIC_CATEGORIES = {
+    dramatic: [
+        { file: "Music 1 intro C1.mp3", name: "Epic Build" },
+        { file: "Music 1 Body C1.mp3", name: "Dark Piano" },
+        { file: "Music 1 Outro C1.mp3", name: " Build" },
+
+    ],
+    chill: [
+        { file: "chill1.mp3", name: "LoFi Breeze" },
+        { file: "chill2.mp3", name: "Soft Guitar" },
+    ],
+    classics: [
+        { file: "classic1.mp3", name: "Beethoven Intro" },
+        { file: "classic2.mp3", name: "Soft Symphony" },
+    ],
+    arabic: [
+        { file: "oud1.mp3", name: "Deep Oud" },
+        { file: "oud2.mp3", name: "Modern Middle East" },
+    ],
+    };
 
     const displayedScript =
     scriptTemplate && showTitle
@@ -1004,24 +1032,40 @@ useEffect(() => {
                                                     return (
                                                         <div className="flex items-center gap-3">
                                                             <select
+                                                                className="form-input flex-1"
                                                                 value={currentId}
-                                                                onChange={(e) =>
+                                                                onChange={(e) => {
+                                                                    const newVoice = e.target.value;
+
+                                                                    // Prevent duplicate assignment
+                                                                    const alreadyUsed = speakers.some(
+                                                                        (s, idx) => s.voiceId === newVoice && idx !== i
+                                                                    );
+
+                                                                    if (alreadyUsed) {
+                                                                        alert("⚠️ This voice is already used by another speaker. Please choose a different one.");
+                                                                        return;
+                                                                    }
+
                                                                     setSpeakers((arr) => {
                                                                         const n = [...arr];
-                                                                        n[i] = {
-                                                                            ...n[i],
-                                                                            voiceId: e.target.value,
-                                                                        };
+                                                                        n[i] = { ...n[i], voiceId: newVoice };
                                                                         return n;
-                                                                    })
-                                                                }
-                                                                className="form-input flex-1"
+                                                                    });
+                                                                }}
                                                             >
-                                                                {pool.map((v) => (
-                                                                    <option key={v.id} value={v.id}>
-                                                                        {v.name}
-                                                                    </option>
-                                                                ))}
+                                                                <option value="">Select Voice</option>
+                                                                {pool.map((v) => {
+                                                                    const isTaken = speakers.some(
+                                                                        (s, idx) => s.voiceId === v.id && idx !== i
+                                                                    );
+
+                                                                    return (
+                                                                        <option key={v.id} value={v.id} disabled={isTaken}>
+                                                                            {v.name} {isTaken ? "(Already Used)" : ""}
+                                                                        </option>
+                                                                    );
+                                                                })}
                                                             </select>
                                                             <button
                                                                 type="button"
@@ -1216,35 +1260,138 @@ useEffect(() => {
                     </section>
                 )}
                 {/* STEP 5: TRANSITION MUSIC (placeholder) */}
-                {step === 5 && (
-                    <section className="ui-card">
-                        <h2 className="ui-card-title flex items-center gap-2 justify-center">
-                            <Mic2 className="w-4 h-4" /> Transition music
-                        </h2>
+{step === 5 && (
+<section className="ui-card">
+    <h2 className="ui-card-title flex items-center gap-2 justify-center">
+        🎧 Select Transition Music
+    </h2>
 
-                        <div className="mt-4 rounded-2xl border border-dashed border-purple-300 dark:border-purple-700 bg-purple-50/40 dark:bg-purple-900/10 p-6 text-center">
-                            <p className="text-sm text-black/70 dark:text-white/70 max-w-xl mx-auto">
-                                Transition music selection is coming soon. For now, you can continue to
-                                generate your podcast audio.
-                            </p>
-                        </div>
+    <p className="text-center text-sm text-black/60 dark:text-white/60 mt-2">
+        Choose a music category to preview intro, body, and outro tracks.
+    </p>
 
-                        <div className="mt-6 flex justify-between">
-                            <button
-                                onClick={() => setStep(4)}
-                                className="px-4 py-2 border rounded-xl"
-                            >
-                                Back to Review
-                            </button>
-                            <button
-                                onClick={() => setStep(6)}
-                                className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
-                            >
-                                Continue to Audio <ChevronRight className="w-4 h-4" />
-                            </button>
-                        </div>
-                    </section>
+    {/* CATEGORY SELECT */}
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
+        {Object.keys(MUSIC_CATEGORIES).map((cat) => (
+            <label
+                key={cat}
+                onClick={() => {
+                    setCategory(cat);
+                    setAvailableTracks(MUSIC_CATEGORIES[cat]);
+                }}
+                className={`cursor-pointer group relative w-full p-5 rounded-xl border transition 
+                ${
+                    category === cat
+                        ? "border-purple-500 bg-purple-50"
+                        : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
+                }`}
+            >
+                <div className="flex items-center gap-3">
+                    <input 
+                        type="radio" 
+                        checked={category === cat} 
+                        readOnly 
+                        className="accent-purple-600 mt-1"
+                    />
+                    <div>
+                        <div className="font-semibold capitalize">{cat}</div>
+                        <p className="text-xs text-black/60 dark:text-white/60">
+                            {cat === "dramatic" && "Epic emotional cinematic style."}
+                            {cat === "arabic" && "Middle eastern oud and oriental tones."}
+                            {cat === "chill" && "Relaxed lofi and smooth vibes."}
+                            {cat === "classics" && "Soft piano and orchestral melodies."}
+                        </p>
+                    </div>
+                </div>
+
+                {category === cat && (
+                    <span className="absolute top-2 right-3 text-purple-500 text-xs">
+                        ✓ Selected
+                    </span>
                 )}
+            </label>
+        ))}
+    </div>
+
+    {/* TRACK LIST */}
+    {category && availableTracks.length > 0 && (
+        <div className="mt-8 space-y-4">
+            {["Intro", "Body", "Outro"].map((label, index) => (
+                <div key={label} className="flex items-center justify-between border p-3 rounded-xl dark:border-neutral-700">
+                    <span className="font-medium">{label}</span>
+                    
+                    <div className="flex items-center gap-3">
+                        <select
+                            className="p-2 rounded-lg border dark:bg-neutral-800 dark:border-neutral-700"
+                            value={
+                                index === 0 ? introMusic : index === 1 ? bodyMusic : outroMusic
+                            }
+                            onChange={(e) => {
+                                if (index === 0) setIntroMusic(e.target.value);
+                                if (index === 1) setBodyMusic(e.target.value);
+                                if (index === 2) setOutroMusic(e.target.value);
+                            }}
+                        >
+                            <option value="">-- Select --</option>
+                            {availableTracks.map((track) => (
+                                <option key={track.file} value={track.file}>{track.name}</option>
+                            ))}
+                        </select>
+
+                        <button
+                            className={`px-4 py-2 rounded-xl border flex items-center gap-2 ${
+                                (index === 0 && !introMusic) ||
+                                (index === 1 && !bodyMusic) ||
+                                (index === 2 && !outroMusic)
+                                ? "opacity-40 cursor-not-allowed"
+                                : "border-purple-500 text-purple-600 hover:bg-purple-50"
+                            }`}
+                            onClick={() => {
+                                const selected =
+                                    index === 0 ? introMusic : index === 1 ? bodyMusic : outroMusic;
+                                if (selected) {
+                                    setMusicPreview(`http://localhost:5000/static/music/${selected}`);
+                                }
+                            }}
+                        >
+                            ▶ Preview
+                        </button>
+                    </div>
+                </div>
+            ))}
+
+            {musicPreview && (
+                <audio autoPlay src={musicPreview} onEnded={() => setMusicPreview(null)} />
+            )}
+        </div>
+    )}
+
+    <div className="mt-8 flex justify-between">
+        <button
+            onClick={() => setStep(4)}
+            className="px-4 py-2 border rounded-xl"
+        >
+            Back
+        </button>
+        <button
+            disabled={!introMusic || !bodyMusic || !outroMusic}
+            onClick={async () => {
+                await fetch("/api/save-music", {
+                    method: "POST",
+                    credentials: "include",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ introMusic, bodyMusic, outroMusic }),
+                });
+                setStep(6);
+            }}
+            className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
+        >
+            Continue to Audio →
+        </button>
+    </div>
+</section>
+)}
+
 
                 {/* STEP 6: AUDIO */}
                 {step === 6 && (
@@ -1272,10 +1419,10 @@ useEffect(() => {
 
                                 <div className="flex gap-4 justify-center flex-wrap">
                                     <button 
-                                        onClick={() => setStep(4)} 
+                                        onClick={() => setStep(5)} 
                                         className="px-6 py-3 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
                                     >
-                                        Back to Review
+                                        Back
                                     </button>
                                     <button 
                                         onClick={handleGenerateAudio} 

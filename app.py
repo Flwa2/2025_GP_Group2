@@ -13,6 +13,8 @@ from flask_cors import CORS
 from flask_session import Session
 from dotenv import load_dotenv
 from openai import OpenAI
+from pydub import AudioSegment
+from io import BytesIO
 from elevenlabs.client import ElevenLabs
 import os
 import requests
@@ -34,12 +36,22 @@ SHOW_TITLE_PLACEHOLDER = "{{SHOW_TITLE}}"
 
 app = Flask(__name__)
 
-# CORS so React (localhost:5173) can call Flask
 CORS(
     app,
-    origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    resources={r"/*": {"origins": ["http://localhost:5173", "http://127.0.0.1:5173"]}},
     supports_credentials=True,
+    allow_headers=["Content-Type", "Authorization"],
+    methods=["GET", "POST", "OPTIONS"]
 )
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return response
+
 
 # Server-side sessions (for create_draft, etc.)
 app.config.update(
@@ -237,7 +249,6 @@ INTRO
 --------------------
 - Greet listeners.
 - Introduce topic + speakers.
-- Include one sound cue in square brackets.
 
 --------------------
 BODY
@@ -245,22 +256,71 @@ BODY
 - Natural dialogue.
 - All speakers MUST speak multiple times.
 - Turn-taking is REQUIRED.
-- Use smooth transitions like [music fades out] or [pause].
 
 --------------------
 OUTRO
 --------------------
 - Summary or closing thoughts.
-- One closing sound cue.
 
 --------------------
 RULES
 --------------------
+- The script MUST contain three sections in this exact format:
+
+--------------------
+INTRO
+--------------------
+[music]
+[script content here]
+[music]
+--------------------
+BODY
+--------------------
+[script content here]
+--------------------
+OUTRO
+--------------------
+[music]
+[script content here]
+[music]
+
+- Do NOT add any extra music tags.
+- Do NOT put music in the middle of dialogue.
 - Every spoken line MUST begin with: SpeakerName:
 - Do NOT use bullet points inside the script.
 - Do NOT use markdown (#, ##, ### headings).
 - Sound cues must be inside square brackets.
 - Keep the script natural and flowing.
+
+SPEAKER RULES (MANDATORY — DO NOT VIOLATE):
+- Speaker Interaction Rule: When a speaker replies, they should naturally reference the other speaker's label when appropriate during conversation. Speakers MUST address each other using the exact labels provided (example: if speakers are x and v, then the script may contain: "That’s interesting, v." or "What do you think, x?").
+- Keep speaker labels EXACTLY as written in the input (example: ga, ha, sp, user, narrator).
+- Do NOT rename, modify, expand, substitute, or invent new speaker names.
+- If the original text contains: "ga:", "ha:" or any label format, use them EXACTLY.
+- DO NOT convert them to human names or fictional identities.
+- If a line does not have a speaker label, DO NOT create one.
+- Output must preserve speaker labeling format literally.
+
+TRANSITION SPEECH RULES (VERY IMPORTANT):
+
+- The sentence immediately BEFORE a [music] tag must sound like a natural ending, conclusion, or pause. 
+- Do NOT end abruptly. End with tone markers such as:
+  • a reflective closing thought
+  • a conversational wrap-up
+  • a gentle shift phrase such as:
+      "We'll continue right after this..."
+      "More on that in a moment."
+      "Let's pause for a second."
+
+- The FIRST sentence after a [music] tag must feel like a fresh beginning or a smooth re-entry. 
+- Use natural re-entry language like:
+      "Welcome back—"
+      "Now let’s continue—"
+      "Picking up where we left off—"
+      "So now—"
+
+- DO NOT be robotic or repetitive. 
+- Tone must feel intentional, confident, and designed for audio.
 
 {arabic_instruction}
 
@@ -297,10 +357,10 @@ Transform the following text into a structured podcast script:
         if re.match(r"^#{1,6}\s+\w+", stripped):
             continue
 
-        # remove standalone sound bracket lines:
-        # [Soft intro], [Music fades], [Applause], etc.
-        if re.match(r"^\[[^\]]+\]$", stripped):
-            continue
+        # remove bracket-only lines EXCEPT [music]
+        if re.fullmatch(r"\[[^\]]+\]", stripped):
+            if stripped.lower() != "[music]":
+                continue
 
         cleaned_lines.append(ln)
 
@@ -556,12 +616,10 @@ def api_edit_save():
 def clean_script_for_tts(script: str) -> str:
     """
     Create a clean text version for TTS:
-    - Remove section headers (INTRO, BODY, OUTRO)
-    - Remove markdown headings (#, ##...)
-    - Remove sound lines like [music fades]
-    - Remove speaker names
-    - Remove divider lines (-----)
-    - Keep only actual spoken text
+    - Remove speaker labels
+    - Remove formatting leftovers (ga:, fe:, -, bullet points, unicode spaces)
+    - Remove tags and markdown
+    - Keep only natural spoken text
     """
     cleaned_lines = []
 
@@ -570,44 +628,44 @@ def clean_script_for_tts(script: str) -> str:
         if not line:
             continue
 
-        # Remove markdown headings (# Title)
+        # 🔥 Remove markdown headings (# Title)
         if line.startswith("#"):
             continue
 
-        # Remove INTRO / BODY / OUTRO
+        # 🔥 Remove INTRO / BODY / OUTRO labels
         if re.fullmatch(r"(intro|body|outro)[:：]?\s*$", line, re.IGNORECASE):
             continue
 
-        # Remove "Mike: INTRO"
-        if re.match(
-            r"^([^:：]+)[:：]\s*(intro|body|outro)\s*$",
-            line,
-            re.IGNORECASE,
-        ):
+        # 🔥 Remove "Speaker: INTRO"
+        if re.match(r"^([^:：]+)[:：]\s*(intro|body|outro)\s*$", line, re.IGNORECASE):
             continue
 
-        # Remove standalone sound effect lines
+        # 🔥 Remove standalone sound cue lines except [music]
         if re.fullmatch(r"\[[^\]]+\]", line):
+            if line.lower() != "[music]":
+                continue
+
+        # 🔥 Remove ANY inline tag like [laugh], [pause], [music], etc.
+        line = re.sub(r"\[[^\]]*]", "", line)
+
+        # 🔥 Remove leftover unicode formatting characters
+        line = re.sub(r"[\u200B-\u200D\uFEFF]", "", line)
+
+        # 🔥 Remove long separators like ---- or ••••
+        if re.fullmatch(r"[-_=*~•·\u2022]{2,}", line):
             continue
 
-        # Remove inline sound effects
-        line = re.sub(r"\[[^\]]*\]", "", line)
+        # 🔥 Remove speaker labels ("ga: Hello" → "Hello")
+        line = re.sub(r"^[A-Za-z0-9]{1,10}\s*[:：]\s*", "", line)
 
-        # Remove speaker names ("Mike: Hello" → "Hello")
-        m = re.match(r"^([^:：]+)[:：]\s*(.*)$", line)
-        if m:
-            line = m.group(2).strip()
-
-        # Remove lines like '-----'
-        if re.fullmatch(r"[-_=*~•·]+", line):
-            continue
+        # 🔥 Remove accidental leftover beginning symbols
+        line = re.sub(r"^[^\w]+", "", line)
 
         # Cleanup extra spaces
         line = re.sub(r"\s{2,}", " ", line).strip()
-        if not line:
-            continue
 
-        cleaned_lines.append(line)
+        if line:
+            cleaned_lines.append(line)
 
     return "\n".join(cleaned_lines)
 
@@ -647,63 +705,37 @@ def parse_script_into_segments(script: str):
     - ignore markdown headings (#..)
     - ignore INTRO/BODY/OUTRO headers
     - ignore separator lines (----)
-    - ignore pure [sound] lines
-    - remove inline [sound] / (stage) tags from spoken text
     - lines without label keep the previous speaker
+    - Literal parser: KEEP speaker labels exactly as written.
+    - Only treat '[music]' as a special segment.
     """
     segments = []
     last_speaker = None
 
     for raw in script.splitlines():
-        original = raw
-        stripped = original.strip()
+        stripped = raw.strip()
         if not stripped:
             continue
 
-        # skip markdown headings
-        if stripped.startswith("#"):
+        # Detect music cues
+        if stripped.lower() == "[music]":
+            segments.append(("__music__", None))
             continue
 
-        # skip INTRO/BODY/OUTRO lines
-        if re.fullmatch(r"(intro|body|outro)[:：]?\s*$", stripped, re.IGNORECASE):
+        # Detect "Speaker: text"
+        if ":" in stripped:
+            speaker, text = stripped.split(":", 1)
+            speaker = speaker.strip()
+            text = text.strip()
+
+            if text:
+                segments.append((speaker, text))
+                last_speaker = speaker
             continue
 
-        # skip 'Mike: INTRO'
-        if re.match(
-            r"^([^:：]+)[:：]\s*(intro|body|outro)\s*$",
-            stripped,
-            re.IGNORECASE,
-        ):
-            continue
-
-        # skip pure sound effect lines
-        if re.fullmatch(r"\[[^\]]+\]", stripped):
-            continue
-
-        # skip lines like '--------'
-        if re.fullmatch(r"[-_=*~•·]+", stripped):
-            continue
-
-        m = re.match(r"^([^:：]+)[:：]\s*(.*)$", stripped)
-        if m:
-            speaker = m.group(1).strip()
-            text = m.group(2).strip()
-            last_speaker = speaker
-        else:
-            # continuation of last speaker
-            if not last_speaker:
-                continue
-            speaker = last_speaker
-            text = stripped
-
-        # remove inline [sound] and (stage) tags
-        text = re.sub(r"\[[^\]]*\]", "", text)
-        text = re.sub(r"\([^\)]*\)", "", text)
-        text = re.sub(r"\s{2,}", " ", text).strip()
-        if not text:
-            continue
-
-        segments.append((speaker, text))
+        # Otherwise treat it as continuation of last speaker
+        if last_speaker:
+            segments.append((last_speaker, stripped))
 
     return segments
 
@@ -715,6 +747,7 @@ def synthesize_audio_from_script(script: str):
     - Otherwise → single-voice fallback.
     Returns (ok: bool, result: url_or_error_message)
     """
+    music_index = 0
     script = (script or "").strip()
     if not script:
         return False, "Script is empty."
@@ -724,42 +757,75 @@ def synthesize_audio_from_script(script: str):
         return False, "Nothing to read after cleaning script."
 
     speaker_to_voice, default_voice = build_speaker_voice_map()
-    distinct_voices = set(speaker_to_voice.values())
+
+    audio_parts = []   # <-- store pieces here
+
+    for speaker, text in segments:
+
+        if speaker.strip().lower() == "__music__":
+            # Read user selections from session
+            intro = session.get("introMusic", "")
+            body = session.get("bodyMusic", "")
+            outro = session.get("outroMusic", "")
+
+            # Assign based on position of [music]
+            if music_index == 0:
+                selected_music = intro
+            elif music_index in (1, 2):  # body tags
+                selected_music = body
+            else:
+                selected_music = outro
+
+            music_index += 1
+
+            if selected_music:
+                music_path = os.path.join("static", "music", selected_music)
+                if os.path.exists(music_path):
+                    music_clip = AudioSegment.from_mp3(music_path)
+                    audio_parts.append(music_clip)
+
+            continue
+
+
+
+        # SPEECH SEGMENT
+
+        text = clean_script_for_tts(text)
+
+        if text.strip():
+            voice_id = speaker_to_voice.get(speaker, default_voice)
+            tts_audio = b""
+
+            for chunk in voice_client.text_to_speech.convert(
+                voice_id=voice_id,
+                model_id="eleven_turbo_v2",
+                text=text,
+            ):
+                if chunk:
+                    tts_audio += chunk
+
+            speech_segment = AudioSegment.from_file(BytesIO(tts_audio), format="mp3")
+            audio_parts.append(speech_segment)
+
+    # -----------------------------
+    # COMBINE EVERYTHING CLEANLY
+    # -----------------------------
+    if not audio_parts:
+        return False, "No audio data generated."
+
+    final_audio = AudioSegment.silent(duration=500)
+
+    for item in audio_parts:
+        final_audio += item
+
 
     output_path = os.path.join("static", "output.mp3")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    try:
-        with open(output_path, "wb") as f:
-            # 🔊 Single-voice fallback
-            if len(distinct_voices) <= 1:
-                # collapse all text into one big chunk
-                tts_text = " ".join(text for _, text in segments)
-                for chunk in voice_client.text_to_speech.convert(
-                    voice_id=default_voice,
-                    model_id="eleven_turbo_v2",
-                    text=tts_text,
-                ):
-                    if chunk:
-                        f.write(chunk)
-            else:
-                # 🔊 Multi-voice: one request per segment
-                for speaker, text in segments:
-                    voice_id = speaker_to_voice.get(speaker, default_voice)
-                    for chunk in voice_client.text_to_speech.convert(
-                        voice_id=voice_id,
-                        model_id="eleven_turbo_v2",
-                        text=text,
-                    ):
-                        if chunk:
-                            f.write(chunk)
+    final_audio.export(output_path, format="mp3")
 
-        file_url = url_for("static", filename="output.mp3", _external=True)
-        return True, file_url
-
-    except Exception as e:
-        print("ELEVENLABS ERROR (synthesize_audio_from_script):", e)
-        return False, str(e)
+    file_url = url_for("static", filename="output.mp3", _external=True)
+    return True, file_url
     
     
 @app.post("/api/audio")
@@ -783,6 +849,16 @@ def api_audio():
     # result is the URL to output.mp3
     return jsonify(url=result)
 
+
+@app.post("/api/save-music")
+def save_music():
+    data = request.get_json() or {}
+
+    session["introMusic"] = data.get("introMusic", "")
+    session["bodyMusic"] = data.get("bodyMusic", "")
+    session["outroMusic"] = data.get("outroMusic", "")
+
+    return jsonify(ok=True)
 
 
 # ------------------------------------------------------------
@@ -1063,6 +1139,9 @@ def login():
         return jsonify({"error": "Invalid email or password"}), 401
 
     token = create_token(email, email)
+    
+    session["user_id"] = email
+    session.modified = True
 
     return (
         jsonify(
@@ -1078,6 +1157,64 @@ def login():
         ),
         200,
     )
+
+@app.post("/api/social-login")
+def social_login():
+    from firebase_admin import auth as fb_auth
+
+    data = request.get_json(silent=True) or {}
+    id_token = data.get("idToken")
+
+    if not id_token:
+        return jsonify(error="Missing Firebase ID token"), 400
+
+    try:
+        decoded = fb_auth.verify_id_token(id_token)
+        email = decoded.get("email")
+        name = decoded.get("name") or ""
+
+        if not email:
+            return jsonify(error="Unable to read email from Firebase token"), 400
+
+        user_ref = db.collection("users").document(email)
+        doc = user_ref.get()
+
+        auth_provider = decoded.get("firebase", {}).get("sign_in_provider", "oauth")
+
+        if not doc.exists:
+            # Create new user
+            user_ref.set({
+                "email": email,
+                "name": name,
+                "authProvider": auth_provider,
+                "created_at": datetime.utcnow().isoformat(),
+                "last_login": datetime.utcnow().isoformat(),
+                "role": "user",
+                "password_hash": None,
+            })
+        else:
+            # Update existing login timestamp + provider
+            user_ref.update({
+                "name": name,  # update name in case Google/Github provides fresh one
+                "authProvider": auth_provider,
+                "last_login": datetime.utcnow().isoformat(),
+            })
+
+
+        token = create_token(email, email)
+
+        session["user_id"] = email
+        session.modified = True
+
+        return jsonify(
+            message="Login successful",
+            token=token,
+            user={"email": email, "name": name, "role": "user"},
+        )
+
+    except Exception as e:
+        print("🔥 OAuth login error:", e)
+        return jsonify(error="Invalid or expired OAuth token"), 401
 
 # ------------------------------------------------------------
 # Main

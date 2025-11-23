@@ -48,9 +48,14 @@ function HeroSection() {
           <p className="text-lg text-black dark:text-gray-100 leading-relaxed">
             Whether it’s a blog post, essay, or research paper, WeCast transforms your text into a lifelike podcast episode ready to play in seconds.</p>
           <button
-            onClick={() => {
-              window.location.hash = '#/create';
-            }}
+          onClick={() => {
+            const token = localStorage.getItem("token");
+            if (token) {
+              window.location.hash = "#/create";
+            } else {
+              window.location.hash = "#/login?redirect=create";
+            }
+          }}
             className="relative inline-flex items-center justify-center px-8 py-3 font-semibold text-white rounded-full overflow-hidden group btn-cta"
           >
             <span className="relative z-10">Let’s WeCast It</span>

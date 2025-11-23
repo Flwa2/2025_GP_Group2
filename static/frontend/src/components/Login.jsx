@@ -67,62 +67,80 @@ export default function Login() {
         };
 
         const handleGoogleLogin = async () => {
-    setError("");
-    setLoading(true);
-    try {
-        const result = await signInWithPopup(auth, googleProvider);
-        const user = result.user;
-        const idToken = await user.getIdToken();
+        setError("");
+        setLoading(true);
 
-        // Optional: send idToken to Flask to create a session/JWT
-        // const res = await fetch("http://127.0.0.1:5000/api/firebase-login", { ... })
+        try {
+            const result = await signInWithPopup(auth, googleProvider);
+            const user = result.user;
+            const idToken = await user.getIdToken();
 
-        // For now: just store basic info locally
-        localStorage.setItem("token", idToken);
-        localStorage.setItem(
-        "user",
-        JSON.stringify({
-            email: user.email,
-            name: user.displayName,
-            authProvider: "google",
-        })
-        );
+            // Send token to backend
+            const res = await fetch(`${API_BASE}/api/social-login`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ idToken })
+            });
 
-        window.location.hash = "#/";
-    } catch (err) {
-        console.error("GOOGLE LOGIN ERROR:", err);
-        setError("Google login failed. Please try again.");
-    } finally {
-        setLoading(false);
-    }
+            const data = await res.json();
+
+            if (!res.ok) {
+                setError(data.error || "Login failed.");
+                return;
+            }
+
+            // Save successful login
+            localStorage.setItem("token", data.token);
+            localStorage.setItem("user", JSON.stringify(data.user));
+
+            window.dispatchEvent(new StorageEvent("storage", { key: "token", newValue: data.token }));
+            window.location.hash = "#/";
+
+        } catch (err) {
+            console.error("GOOGLE LOGIN ERROR:", err);
+            setError("Google login failed. Please try again.");
+        } finally {
+            setLoading(false);
+        }
     };
 
-    const handleGithubLogin = async () => {
-    setError("");
-    setLoading(true);
-    try {
-        const result = await signInWithPopup(auth, githubProvider);
-        const user = result.user;
-        const idToken = await user.getIdToken();
+        const handleGithubLogin = async () => {
+            setError("");
+            setLoading(true);
 
-        localStorage.setItem("token", idToken);
-        localStorage.setItem(
-        "user",
-        JSON.stringify({
-            email: user.email,
-            name: user.displayName,
-            authProvider: "github",
-        })
-        );
+            try {
+                const result = await signInWithPopup(auth, githubProvider);
+                const user = result.user;
+                const idToken = await user.getIdToken();
 
-        window.location.hash = "#/";
-    } catch (err) {
-        console.error("GITHUB LOGIN ERROR:", err);
-        setError("GitHub login failed. Please try again.");
-    } finally {
-        setLoading(false);
-    }
-    };
+                const res = await fetch(`${API_BASE}/api/social-login`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    credentials: "include",
+                    body: JSON.stringify({ idToken })
+                });
+
+                const data = await res.json();
+
+                if (!res.ok) {
+                    setError(data.error || "Login failed.");
+                    return;
+                }
+
+                localStorage.setItem("token", data.token);
+                localStorage.setItem("user", JSON.stringify(data.user));
+
+                window.dispatchEvent(new StorageEvent("storage", { key: "token", newValue: data.token }));
+                window.location.hash = "#/";
+
+            } catch (err) {
+                console.error("GITHUB LOGIN ERROR:", err);
+                setError("GitHub login failed. Please try again.");
+            } finally {
+                setLoading(false);
+            }
+        };
     return (
         <div className="min-h-screen relative overflow-hidden flex items-center justify-center bg-cream dark:bg-[#0a0a1a] transition-colors  pb-20 md:pb-28">
             {/* RIGHT animated shapes (optional, subtle in dark) */}

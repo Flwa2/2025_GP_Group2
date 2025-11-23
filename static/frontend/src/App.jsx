@@ -13,6 +13,10 @@ import Login from './components/Login';
 import EditScript from './components/EditScript';
 import Create from './components/CreatePro'; // or './pages/CreatePro'
 
+function isAuthenticated() {
+  return !!localStorage.getItem("token");
+}
+
 function useHashRoute() {
   const [hash, setHash] = useState(window.location.hash || '#/');
   useEffect(() => {
@@ -28,8 +32,8 @@ export default function App() {
   const isAccount = hash.startsWith('#/account');
   const isSignup = hash.startsWith('#/signup');
   const isLogin = hash.startsWith('#/login');
-  const isCreate = hash.startsWith('#/create'); 
-  const isEdit = hash.startsWith('#/edit');
+  const isCreate = hash.startsWith("#/create") && (hash.includes("guest=true") || isAuthenticated());
+  const isEdit = hash.startsWith('#/edit') && isAuthenticated();
 
   useEffect(() => {
     const sectionLinks = ['#about', '#episodes'];
@@ -51,6 +55,18 @@ export default function App() {
           <Login />
         ) : isCreate ? (
           <Create />
+        ) : hash.startsWith("#/create") ? (
+          (() => {
+            const needsAuth = hash.includes("auth=required");
+            const token = localStorage.getItem("token");
+
+            if (needsAuth && !token) {
+              window.location.hash = "#/login?redirect=create";
+              return null;
+            }
+
+            return <Create />;
+          })()
         ) : isEdit ? (
           <EditScript />
         ) : (
