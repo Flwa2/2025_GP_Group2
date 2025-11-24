@@ -214,33 +214,96 @@ useEffect(() => {
     }
   };
 
-  const save = async () => {
-    const content = script.trim();
-    if (!content) {
-      setSaveMsg("Script is empty.");
-      return;
-    }
-    setSaving(true);
-    setSaveMsg("Saving…");
-    try {
-      const r = await fetch("/api/edit/save", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ edited_script: content }),
-      });
-      if (!r.ok) throw new Error();
-      setSaveMsg("Last saved: " + new Date().toLocaleTimeString());
-    } catch {
-      setSaveMsg("Failed to save.");
-    } finally {
-      setSaving(false);
-    }
-  };
+  // returns index of first bad line, or -1 if all good
+const findEmptySpeakerLine = (text) => {
+  if (!text) return -1;
 
-  const navigateToAudio = async () => {
-  // Save the script first
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const line = raw.trim();
+
+    // matches: "Marshall:" or "Host :" with nothing after the colon
+    if (/^([^:：]+)\s*[:：]\s*$/.test(line)) {
+      return i;
+    }
+  }
+  return -1;
+};
+
+const focusEmptySpeakerLine = (text) => {
+  const ta = textareaRef.current;
+  if (!ta) return;
+
+  const lines = text.split(/\r?\n/);
+  const badIndex = findEmptySpeakerLine(text);
+  if (badIndex === -1) return;
+
+  // compute cursor position at end of that line
+  let offset = 0;
+  for (let i = 0; i < badIndex; i++) {
+    offset += lines[i].length + 1; // +1 for newline
+  }
+  offset += lines[badIndex].length;
+
+  ta.focus();
+  ta.selectionStart = ta.selectionEnd = offset;
+};
+
+const save = async () => {
   const content = script.trim();
+  if (!content) {
+    setSaveMsg("Script is empty.");
+    return;
+  }
+
+  const badLine = findEmptySpeakerLine(script);
+  if (badLine !== -1) {
+    setSaveMsg(
+      "Each speaker line must include text after the colon. Please fix the highlighted line."
+    );
+    focusEmptySpeakerLine(script);
+    return;
+  }
+
+  setSaving(true);
+  setSaveMsg("Saving…");
+  try {
+    const r = await fetch("/api/edit/save", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ edited_script: content }),
+    });
+    if (!r.ok) throw new Error();
+    setSaveMsg("Last saved: " + new Date().toLocaleTimeString());
+  } catch {
+    setSaveMsg("Failed to save.");
+  } finally {
+    setSaving(false);
+  }
+};
+
+
+
+const navigateToAudio = async () => {
+  const trimmed = script.trim();
+  if (!trimmed) {
+    setSaveMsg("Script is empty.");
+    return;
+  }
+
+  const badLine = findEmptySpeakerLine(script);
+  if (badLine !== -1) {
+    setSaveMsg(
+      "Each speaker line must include text after the colon. Please fix the highlighted line before continuing."
+    );
+    focusEmptySpeakerLine(script);
+    return;
+  }
+
+  // Save the script first
+  const content = trimmed;
   if (content) {
     setSaving(true);
     try {
@@ -256,21 +319,22 @@ useEffect(() => {
       setSaving(false);
     }
   }
-  
+
   // Store data and force step 4 (Review & Edit step)
-  const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
+  const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
   const updatedEditData = {
     ...editData,
-    generatedScript: content, // Save the edited script
-    fromEdit: true
+    generatedScript: content,
+    fromEdit: true,
   };
-  
-  sessionStorage.setItem('editData', JSON.stringify(updatedEditData));
-  sessionStorage.setItem('forceStep', '4'); // Force step 4 (Review & Edit)
-  
+
+  sessionStorage.setItem("editData", JSON.stringify(updatedEditData));
+  sessionStorage.setItem("forceStep", "4");
+
   // Navigate to CreatePro
   window.location.hash = "#/create";
 };
+
 
   return (
     <div className="min-h-screen bg-cream dark:bg-[#0a0a0a]">
