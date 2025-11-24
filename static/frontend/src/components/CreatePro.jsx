@@ -72,15 +72,34 @@ function WeCastAudioPlayer({ src, title = "Generated Audio" }) {
         setProgress((nextTime / duration) * 100);
     };
 
-    const handleDownload = () => {
+    const handleDownload = async () => {
         if (!src) return;
-        const a = document.createElement("a");
-        a.href = src;
-        a.download = (title || "wecast-episode") + ".mp3";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
+
+        try {
+            // Get the audio file data without leaving the page
+            const res = await fetch(src, { credentials: "include" });
+            if (!res.ok) {
+                console.error("Download failed with status", res.status);
+                return;
+            }
+
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = (title || "Podcast Episode") + ".mp3";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+
+            // Clean up in memory
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error("Download error:", err);
+        }
     };
+
 
     return (
         <div className="w-full rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 px-5 py-4 shadow-md flex flex-col gap-3">
@@ -224,7 +243,7 @@ function LoadingOverlay({ show, logoSrc = "/logo.png", type = "audio" }) {
                             {type === "audio" ? "Generating audio…" : "Generating your podcast…"}
                         </p>
                         <p className="text-sm text-neutral-600 dark:text-neutral-400">
-                            {type === "audio" 
+                            {type === "audio"
                                 ? "Your audio is being generated. Please wait a few seconds."
                                 : "We're crafting your script and setting up the editor. This may take a few seconds."
                             }
@@ -268,9 +287,27 @@ function Toast({ toast, onClose }) {
 
 /* ===================================================================== */
 
+function extractShowTitle(scriptText) {
+    if (!scriptText) return "";
+
+    // Match titles inside quotation marks
+    const matchQuoted = scriptText.match(/["“](.*?)["”]/);
+    if (matchQuoted) return matchQuoted[1].trim();
+
+    // Match titles after “Title:” or “Episode Title:”
+    const matchKeyword = scriptText.match(/(?:title|episode title)\s*[:\-]\s*(.+)/i);
+    if (matchKeyword) return matchKeyword[1].trim();
+
+    return "";
+}
+
+
 export default function CreatePro() {
-// steps: 1=Style, 2=Speakers, 3=Enter Text, 4=Review & Edit, 5=Transition Music, 6=Audio
+    // steps: 1=Style, 2=Speakers, 3=Enter Text, 4=Review & Edit, 5=Transition Music, 6=Audio
     const [step, setStep] = useState(1);
+    useEffect(() => {
+        sessionStorage.setItem("currentStep", step);
+    }, [step]);
     const [generatedAudio, setGeneratedAudio] = useState(null);
     const [generatingAudio, setGeneratingAudio] = useState(false);
     const [generatedScript, setGeneratedScript] = useState(null);
@@ -294,30 +331,43 @@ export default function CreatePro() {
 
     //هذي بنخليها بالداتابيس ف اسحبوا عليها 
     const MUSIC_CATEGORIES = {
-    dramatic: [
-        { file: "Music 1 intro C1.mp3", name: "Epic Build" },
-        { file: "Music 1 Body C1.mp3", name: "Dark Piano" },
-        { file: "Music 1 Outro C1.mp3", name: " Build" },
+        dramatic: [
+            { file: "Music 1 intro C1.mp3", name: "Epic Build" },
+            { file: "Music 1 Body C1.mp3", name: "Dark Piano" },
+            { file: "Music 1 Outro C1.mp3", name: " Build" },
 
-    ],
-    chill: [
-        { file: "chill1.mp3", name: "LoFi Breeze" },
-        { file: "chill2.mp3", name: "Soft Guitar" },
-    ],
-    classics: [
-        { file: "classic1.mp3", name: "Beethoven Intro" },
-        { file: "classic2.mp3", name: "Soft Symphony" },
-    ],
-    arabic: [
-        { file: "oud1.mp3", name: "Deep Oud" },
-        { file: "oud2.mp3", name: "Modern Middle East" },
-    ],
+        ],
+        chill: [
+            { file: "chill1.mp3", name: "LoFi Breeze" },
+            { file: "chill2.mp3", name: "Soft Guitar" },
+        ],
+        classics: [
+            { file: "classic1.mp3", name: "Beethoven Intro" },
+            { file: "classic2.mp3", name: "Soft Symphony" },
+        ],
+        arabic: [
+            { file: "oud1.mp3", name: "Deep Oud" },
+            { file: "oud2.mp3", name: "Modern Middle East" },
+        ],
     };
 
     const displayedScript =
-    scriptTemplate && showTitle
-        ? scriptTemplate.replaceAll("{{SHOW_TITLE}}", showTitle)
-        : generatedScript || "";
+        scriptTemplate && showTitle
+            ? scriptTemplate.replaceAll("{{SHOW_TITLE}}", showTitle)
+            : generatedScript || "";
+
+    // restore title and template when page reloads or user comes back
+    useEffect(() => {
+        const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
+
+        if (editData.showTitle) {
+            setShowTitle(editData.showTitle);
+        }
+        if (editData.scriptTemplate) {
+            setScriptTemplate(editData.scriptTemplate);
+        }
+    }, []);
+
 
     //  ElevenLabs voices
     const [voices, setVoices] = useState([]);
@@ -326,69 +376,125 @@ export default function CreatePro() {
     const MIN = 500;
     const MAX = 2500;
 
-   useEffect(() => {
-  const handleNavigation = () => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const stepParam = urlParams.get('step');
-    const forceStep = sessionStorage.getItem('forceStep');
-    const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
-    
-    // If we have edit data with fromEdit flag, go directly to step 4 (Review & Edit)
-    if (editData.fromEdit && editData.generatedScript) {
-      setGeneratedScript(editData.generatedScript);
-      setScriptStyle(editData.scriptStyle || '');
-      setSpeakersCount(editData.speakersCount || 0);
-      setSpeakers(editData.speakers || []);
-      setDescription(editData.description || '');
-      setStep(4);
-      // Clean up the flags
-      sessionStorage.removeItem('forceStep');
-      const cleanEditData = { ...editData };
-      delete cleanEditData.fromEdit;
-      sessionStorage.setItem('editData', JSON.stringify(cleanEditData));
-    }
-    // If we have a forced step, use it
-    else if (forceStep) {
-      setStep(parseInt(forceStep));
-      sessionStorage.removeItem('forceStep');
-    }
-    // Otherwise use URL parameter
-    else if (stepParam) {
-      setStep(parseInt(stepParam));
-    }
-  };
+    useEffect(() => {
+        const handleNavigation = () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const stepParam = urlParams.get("step");
+            const forceStep = sessionStorage.getItem("forceStep");
+            const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
+            const saved = sessionStorage.getItem("currentStep");
 
-  handleNavigation();
-}, []);
+            // 1) Coming from Edit
+            // 1) Coming from Edit
+            if (editData.fromEdit && editData.generatedScript) {
+                setGeneratedScript(editData.generatedScript);
+                setScriptStyle(editData.scriptStyle || "");
+                setSpeakersCount(editData.speakersCount || 0);
+                setSpeakers(editData.speakers || []);
+                setDescription(editData.description || "");
 
-   
-useEffect(() => {
-  const handleHashChange = () => {
-    const hash = window.location.hash;
-    const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
-    
-    if (hash === '#/edit' && generatedScript) {
-      setStep(4);
-    } else if (hash === '#/create') {
-      // When coming back from edit with data, stay on step 3
-      if (editData.fromEdit && editData.generatedScript) {
-        setGeneratedScript(editData.generatedScript);
-        setStep(4);
-        // Clean up the flag
-        const cleanEditData = { ...editData };
-        delete cleanEditData.fromEdit;
-        sessionStorage.setItem('editData', JSON.stringify(cleanEditData));
-      } else if (generatedScript) {
-        setStep(4);
-      }
-    }
-  };
+                // Restore title and template as well
+                let titleFromStorage =
+                    (editData.showTitle || "").trim() ||
+                    (editData.episodeTitle || "").trim();
 
-  window.addEventListener('hashchange', handleHashChange);
-  handleHashChange();
-  
-  return () => window.removeEventListener('hashchange', handleHashChange);
-}, [generatedScript]);
+                if (!titleFromStorage) {
+                    // Last chance: read it from quotes in the script
+                    titleFromStorage = extractTitleFromScript(
+                        editData.generatedScript || editData.scriptTemplate || ""
+                    );
+                }
+
+                if (editData.scriptTemplate) {
+                    setScriptTemplate(editData.scriptTemplate);
+                }
+                if (titleFromStorage) {
+                    setShowTitle(titleFromStorage);
+                    setEpisodeTitle(titleFromStorage);
+                }
+
+                setStep(4);
+
+                sessionStorage.removeItem("forceStep");
+                const cleanEditData = { ...editData };
+                delete cleanEditData.fromEdit;
+                sessionStorage.setItem("editData", JSON.stringify(cleanEditData));
+                return;
+            }
+
+
+            // 2) Forced step (for deep links etc)
+            if (forceStep) {
+                setStep(parseInt(forceStep));
+                sessionStorage.removeItem("forceStep");
+                return;
+            }
+
+            // 3) Step from URL
+            if (stepParam) {
+                setStep(parseInt(stepParam));
+                return;
+            }
+
+            // 4) Fallback to last saved step
+            if (saved) {
+                setStep(parseInt(saved));
+            }
+        };
+
+        handleNavigation();
+    }, []);
+
+
+
+    useEffect(() => {
+        const handleHashChange = () => {
+            const hash = window.location.hash;
+            const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
+
+            if (hash === '#/edit' && generatedScript) {
+                setStep(4);
+            } else if (hash === '#/create') {
+                if (editData.fromEdit && editData.generatedScript) {
+                    setGeneratedScript(editData.generatedScript);
+                    setScriptStyle(editData.scriptStyle || "");
+                    setSpeakersCount(editData.speakersCount || 0);
+                    setSpeakers(editData.speakers || []);
+                    setDescription(editData.description || "");
+
+                    let titleFromStorage =
+                        (editData.showTitle || "").trim() ||
+                        (editData.episodeTitle || "").trim();
+
+                    if (!titleFromStorage) {
+                        titleFromStorage = extractTitleFromScript(
+                            editData.generatedScript || editData.scriptTemplate || ""
+                        );
+                    }
+
+                    if (editData.scriptTemplate) {
+                        setScriptTemplate(editData.scriptTemplate);
+                    }
+                    if (titleFromStorage) {
+                        setShowTitle(titleFromStorage);
+                        setEpisodeTitle(titleFromStorage);
+                    }
+
+                    setStep(4);
+                    const cleanEditData = { ...editData };
+                    delete cleanEditData.fromEdit;
+                    sessionStorage.setItem('editData', JSON.stringify(cleanEditData));
+                } else if (generatedScript) {
+                    setStep(4);
+                }
+            }
+        };
+
+        window.addEventListener('hashchange', handleHashChange);
+        handleHashChange();
+
+        return () => window.removeEventListener('hashchange', handleHashChange);
+    }, [generatedScript]);
 
     // Group voices by gender label
     const voiceGroups = useMemo(() => {
@@ -507,10 +613,31 @@ useEffect(() => {
     }, []);
 
     const defaultVoiceForGender = (gender = "Male") => {
-        const key = (gender || "").toLowerCase() === "female" ? "female" : "male";
+        const isFemale = (gender || "").toLowerCase() === "female";
+        const key = isFemale ? "female" : "male";
+
         const pool = voiceGroups[key].length ? voiceGroups[key] : voices;
-        return pool[0]?.id || "";
+        if (!pool.length) return "";
+
+        // Voices already used by other speakers
+        const usedIds = new Set(
+            speakers
+                .map((s) => s.voiceId)
+                .filter(Boolean)
+        );
+
+        // Try to find an unused voice in the gender pool
+        const unusedInPool = pool.find((v) => !usedIds.has(v.id));
+        if (unusedInPool) return unusedInPool.id;
+
+        // If all gender voices are used, try any unused voice
+        const unusedAny = voices.find((v) => !usedIds.has(v.id));
+        if (unusedAny) return unusedAny.id;
+
+        // Fallback to first available
+        return pool[0].id || voices[0]?.id || "";
     };
+
 
     /* ---------- when style changes: reset speakers ---------- */
     useEffect(() => {
@@ -608,6 +735,16 @@ useEffect(() => {
     const showRoleSelect = scriptStyle !== "Conversational" && scriptStyle !== "Educational" && scriptStyle !== "Storytelling" && scriptStyle !== "Interview";
     const anyEmptySpeakerName = speakers.some((s) => !String(s.name || "").trim());
 
+    const normalizeName = (s = "") =>
+        s.trim().toLowerCase().replace(/\s+/g, " ");
+
+    const hasDuplicateNames = useMemo(() => {
+        const names = speakers
+            .map((s) => normalizeName(s.name))
+            .filter(Boolean); // ignore empty
+        return new Set(names).size !== names.length;
+    }, [speakers]);
+
     const continueFromStyle = () => {
         if (!scriptStyle) {
             setErrors({ script_style: "Choose a podcast style first." });
@@ -624,8 +761,14 @@ useEffect(() => {
     const onContinueFromSpeakers = () => {
         const errs = {};
         if (!scriptStyle) errs.script_style = "Choose a podcast style first.";
-        if (!allowedCounts.includes(Number(speakersCount))) errs.speakers = "Invalid number of speakers for this style.";
-        if (anyEmptySpeakerName) errs.speaker_names = "Please enter a name for every speaker before continuing.";
+        if (!allowedCounts.includes(Number(speakersCount))) {
+            errs.speakers = "Invalid number of speakers for this style.";
+        }
+        if (anyEmptySpeakerName) {
+            errs.speaker_names = "Please enter a name for every speaker before continuing.";
+        } else if (hasDuplicateNames) {
+            errs.speaker_names = "Speaker names must be unique. Please use different names for each speaker.";
+        }
 
         setErrors(errs);
         if (Object.keys(errs).length === 0) {
@@ -637,6 +780,7 @@ useEffect(() => {
             setTimeout(() => setToast(null), 2800);
         }
     };
+
 
     const handleGenerate = async () => {
         const words = description.trim().split(/\s+/).filter(Boolean).length;
@@ -674,21 +818,41 @@ useEffect(() => {
 
             // template from backend
             const template = data.script;
-            const show = data.show_title;
 
-            // store template + show title
+            // Try all possible keys from backend
+            const backendTitle =
+                data.show_title || data.title || "Podcast Episode";
+
+            // store template + title
             setScriptTemplate(template);
-            setShowTitle(show);
-            setEpisodeTitle(data.title);
+            setShowTitle(backendTitle);
+            setEpisodeTitle(backendTitle);
 
             // rendered script that the user will SEE
-            const rendered = template.replaceAll("{{SHOW_TITLE}}", show);
+            const rendered = template.replaceAll("{{SHOW_TITLE}}", backendTitle);
             setGeneratedScript(rendered);
 
-            setToast({ type: "success", message: "Script generated successfully! Review it below." });
+            // overwrite editData every generation
+            const editData = {
+                scriptStyle,
+                speakersCount,
+                speakers,
+                description,
+                scriptTemplate: template,
+                showTitle: backendTitle,
+                episodeTitle: backendTitle,
+                generatedScript: rendered,
+            };
+            sessionStorage.setItem("editData", JSON.stringify(editData));
+            sessionStorage.removeItem("guestEditDraft");
+
+
+            setToast({
+                type: "success",
+                message: "Script generated successfully! Review it below.",
+            });
             setTimeout(() => setToast(null), 2400);
             setStep(4);
-
         } catch (e) {
             setErrors({ server: "Generation failed. Please check backend." });
         } finally {
@@ -696,84 +860,89 @@ useEffect(() => {
         }
     };
 
-  const handleGenerateAudio = async () => {
-    if (!generatedScript) {
-        setToast({ type: "error", message: "Please generate a script first." });
-        setTimeout(() => setToast(null), 2800);
-        return;
-    }
 
-    setGeneratingAudio(true);
-    setGeneratedAudio(null);
-
-    try {
-        const response = await fetch("/api/audio", {  // ← CHANGED TO /api/audio
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                scriptText: generatedScript,  // ← CHANGED TO scriptText
-                script_style: scriptStyle,
-                speakers_info: speakers,
-            }),
-        });
-
-        const data = await response.json();
-        
-        if (!response.ok || !data.url) {  // ← CHANGED TO data.url
-            throw new Error(data.error || "Audio generation failed");
+    const handleGenerateAudio = async () => {
+        if (!generatedScript) {
+            setToast({ type: "error", message: "Please generate a script first." });
+            setTimeout(() => setToast(null), 2800);
+            return;
         }
 
-        setGeneratedAudio(data.url + "?t=" + Date.now());  // ← CHANGED TO data.url
-        setToast({
-            type: "success",
-            message: "Audio generated successfully!",
-        });
-        setTimeout(() => setToast(null), 2400);
-        
-    } catch (error) {
-        console.error("Audio generation error:", error);
-        setToast({
-            type: "error",
-            message: "Audio generation failed. Please try again.",
-        });
-        setTimeout(() => setToast(null), 2800);
-    } finally {
-        setGeneratingAudio(false);
-    }
-};
+        setGeneratingAudio(true);
+        setGeneratedAudio(null);
+
+        try {
+            const response = await fetch("/api/audio", {  // ← CHANGED TO /api/audio
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    scriptText: generatedScript,  // ← CHANGED TO scriptText
+                    script_style: scriptStyle,
+                    speakers_info: speakers,
+                }),
+            });
+
+            const data = await response.json();
+
+            if (!response.ok || !data.url) {  // ← CHANGED TO data.url
+                throw new Error(data.error || "Audio generation failed");
+            }
+
+            setGeneratedAudio(data.url + "?t=" + Date.now());  // ← CHANGED TO data.url
+            setToast({
+                type: "success",
+                message: "Audio generated successfully!",
+            });
+            setTimeout(() => setToast(null), 2400);
+
+        } catch (error) {
+            console.error("Audio generation error:", error);
+            setToast({
+                type: "error",
+                message: "Audio generation failed. Please try again.",
+            });
+            setTimeout(() => setToast(null), 2800);
+        } finally {
+            setGeneratingAudio(false);
+        }
+    };
 
     const navigateToEdit = () => {
         if (!generatedScript) {
             setToast({
-                type: "error", 
-                message: "Please generate a script first before editing."
+                type: "error",
+                message: "Please generate a script first before editing.",
             });
             setTimeout(() => setToast(null), 2800);
             return;
         }
-        
-        // Store ALL necessary data for edit page and navigation back
+
         const editData = {
             scriptStyle,
             speakersCount,
             speakers,
             generatedScript,
-            description
+            description,
+            scriptTemplate,
+            showTitle,
+            episodeTitle: showTitle,
         };
-        sessionStorage.setItem('editData', JSON.stringify(editData));
+
+        sessionStorage.setItem("editData", JSON.stringify(editData));
         window.location.hash = "#/edit";
     };
+
 
     /* ---------- stepper (done=gray) ---------- */
     const StepDot = ({ n, label }) => {
         const state = step === n ? "active" : step > n ? "done" : "pending";
         const dot = state === "active" ? "bg-purple-600 text-white shadow" :
-                   state === "done" ? "bg-neutral-300 dark:bg-neutral-700 text-neutral-800 dark:text-neutral-200" :
-                   "bg-black/10 dark:bg-white/10 text-black/70 dark:text-white/70";
+            state === "done" ? "bg-neutral-300 dark:bg-neutral-700 text-neutral-800 dark:text-neutral-200" :
+                "bg-black/10 dark:bg-white/10 text-black/70 dark:text-white/70";
         const labelCls = state === "active" ? "text-purple-600" :
-                        state === "done" ? "text-neutral-500 dark:text-neutral-400" :
-                        "text-black/60 dark:text-white/60";
+            state === "done" ? "text-neutral-500 dark:text-neutral-400" :
+                "text-black/60 dark:text-white/60";
         return (
             <div className="flex items-center gap-3">
                 <div className={`w-8 h-8 rounded-full grid place-items-center text-sm font-bold ${dot}`}>
@@ -790,15 +959,28 @@ useEffect(() => {
 
     // Count how many of each role we have (host, guest, etc.)
     const roleCounts = useMemo(() => {
-    const counts = {};
-    speakers.forEach((s) => {
-        const r = s.role || "Speaker";
-        counts[r] = (counts[r] || 0) + 1;
-    });
-    return counts;
+        const counts = {};
+        speakers.forEach((s) => {
+            const r = s.role || "Speaker";
+            counts[r] = (counts[r] || 0) + 1;
+        });
+        return counts;
     }, [speakers]);
 
     const roleUsage = {};
+
+    const audioTitle = React.useMemo(
+        () =>
+            (showTitle && showTitle.trim()) ||
+            (episodeTitle && episodeTitle.trim()) ||
+            (scriptStyle
+                ? `${scriptStyle} Podcast - ${speakersCount} Speakers`
+                : "Podcast Episode"),
+        [showTitle, episodeTitle, scriptStyle, speakersCount]
+    );
+
+
+
     return (
         <div className="min-h-screen bg-cream dark:bg-[#0a0a0a]">
             <div className="h-2 bg-purple-gradient" />
@@ -822,7 +1004,7 @@ useEffect(() => {
                         {step === 5 && "Choose a transition track to give your podcast smoother flow."}
                         {step === 6 && "Turn your script into polished, natural-sounding podcast audio."}
                     </p>
-                    </header>
+                </header>
 
 
 
@@ -846,643 +1028,678 @@ useEffect(() => {
 
                         <StepDot n={6} label="Generate Audio" />
                     </div>
-                    </div>
+                </div>
 
 
 
 
                 <div className="max-w-5xl mx-auto">
-                {/* STEP 1: STYLE */}
-                {step === 1 && (
-                    <section className="ui-card">
-                        <h2 className="ui-card-title flex items-center gap-2 justify-center">
-                            <Mic2 className="w-4 h-4" /> Podcast Style
-                        </h2>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4 justify-items-center">
-                            {styleCards.map((s) => (
-                                <label key={s.key} onClick={() => setScriptStyle(s.key)} onMouseEnter={() => setHoverKey(s.key)} onMouseLeave={() => setHoverKey((k) => (k === s.key ? null : k))} className={`group relative w-full max-w-xl p-4 rounded-xl border transition cursor-pointer ${scriptStyle === s.key ? "border-purple-400/60 bg-purple-500/10" : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"}`}>
-                                    <div className="flex items-start gap-3">
-                                        <input type="radio" checked={scriptStyle === s.key} readOnly className="accent-purple-600 mt-1" />
-                                        <div className="w-full">
-                                            <div className="flex items-center gap-2 font-bold">
-                                                <span className="truncate">{s.title}</span>
-                                                {scriptStyle === s.key && <span className="text-xs text-purple-500 flex items-center gap-1"><Check className="w-3 h-3" /> Selected</span>}
-                                            </div>
-                                            <p className="text-sm mt-1">{s.caption}</p>
-                                            <ul className="flex flex-wrap gap-2 mt-2 text-xs text-black/70 dark:text-white/70">
-                                                {s.bullets.map((b, i) => <li key={i} className="px-2 py-1 rounded bg-black/5 dark:bg-white/5">{b}</li>)}
-                                            </ul>
-                                            <p className="text-xs text-purple-500 mt-2">Valid: {s.valid}</p>
-                                        </div>
-                                    </div>
-                                    {hoverKey === s.key && (
-                                        <div className="absolute left-5 right-5 top-[calc(100%+30px)] z-40">
-                                            <div className="relative rounded-2xl bg-gradient-to-br from-purple-400 to-violet-700 text-white shadow-2xl border border-white/10 p-4 animate-[popoverIn_120ms_ease-out]">
-                                                <div className="flex items-center gap-2 font-semibold tracking-wide"><Info className="w-4 h-4 opacity-90" /><span>Style guidelines</span></div>
-                                                <div className="mt-2 leading-relaxed text-[0.95rem]">{STYLE_GUIDELINES[s.key]}</div>
-                                                <span className="absolute -top-2 left-8 w-3 h-3 rotate-45 bg-purple-600 shadow-[0_6px_16px_rgba(0,0,0,0.25)] border-l border-t border-white/10" />
+                    {/* STEP 1: STYLE */}
+                    {step === 1 && (
+                        <section className="ui-card">
+                            <h2 className="ui-card-title flex items-center gap-2 justify-center">
+                                <Mic2 className="w-4 h-4" /> Podcast Style
+                            </h2>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4 justify-items-center">
+                                {styleCards.map((s) => (
+                                    <label key={s.key} onClick={() => setScriptStyle(s.key)} onMouseEnter={() => setHoverKey(s.key)} onMouseLeave={() => setHoverKey((k) => (k === s.key ? null : k))} className={`group relative w-full max-w-xl p-4 rounded-xl border transition cursor-pointer ${scriptStyle === s.key ? "border-purple-400/60 bg-purple-500/10" : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"}`}>
+                                        <div className="flex items-start gap-3">
+                                            <input type="radio" checked={scriptStyle === s.key} readOnly className="accent-purple-600 mt-1" />
+                                            <div className="w-full">
+                                                <div className="flex items-center gap-2 font-bold">
+                                                    <span className="truncate">{s.title}</span>
+                                                    {scriptStyle === s.key && <span className="text-xs text-purple-500 flex items-center gap-1"><Check className="w-3 h-3" /> Selected</span>}
+                                                </div>
+                                                <p className="text-sm mt-1">{s.caption}</p>
+                                                <ul className="flex flex-wrap gap-2 mt-2 text-xs text-black/70 dark:text-white/70">
+                                                    {s.bullets.map((b, i) => <li key={i} className="px-2 py-1 rounded bg-black/5 dark:bg-white/5">{b}</li>)}
+                                                </ul>
+                                                <p className="text-xs text-purple-500 mt-2">Valid: {s.valid}</p>
                                             </div>
                                         </div>
-                                    )}
-                                </label>
-                            ))}
-                        </div>
-                        {errors.script_style && <p className="text-rose-500 mt-3 flex items-center gap-2 justify-center"><AlertCircle className="w-4 h-4" /> {errors.script_style}</p>}
-                        <div className="mt-6 flex justify-end">
-                            <button onClick={continueFromStyle} className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold">Continue <ChevronRight className="w-4 h-4" /></button>
-                        </div>
-                    </section>
-                )}
-
-                {/* STEP 2: SPEAKERS */}
-                {step === 2 && (
-                    <section className="ui-card">
-                        <h2 className="ui-card-title flex items-center gap-2 justify-center"><Users className="w-4 h-4" /> Speakers</h2>
-                        {scriptStyle && (
-                            <div className="flex items-center gap-2 flex-wrap mt-3 justify-center">
-                                {allowedCounts.map((n) => (
-                                    <button key={n} onClick={() => setSpeakersCount(n)} className={`px-4 py-2 text-sm font-semibold rounded-xl transition border ${speakersCount === n ? "bg-purple-600 text-white border-purple-600" : "bg-black/5 dark:bg-white/5 border-neutral-300 dark:border-neutral-800 text-black/70 dark:text-white/70 hover:bg-black/10"}`}>
-                                        {n} {n === 1 ? "Speaker" : "Speakers"}
-                                    </button>
-                                ))}
-                            </div>
-                        )}
-                        {speakers.length > 0 && (
-                            <div className={`mt-5 grid gap-5 ${speakers.length === 1 ? "grid-cols-1 max-w-md" : speakers.length === 2 ? "grid-cols-1 md:grid-cols-2 max-w-4xl" : "grid-cols-1 md:grid-cols-3 max-w-5xl"} mx-auto`}>
-                                {speakers.map((sp, i) => {
-                                // 1) Normalize the role coming from your style
-                                // Normalize the role name coming from the style
-                                let rawRole = sp.role || "guest";
-
-                                // Count how many hosts exist
-                                const totalHosts = roleCounts["Host"] || roleCounts["host"] || 0;
-
-                                // Convert roles into UI roles
-                                let role;
-
-                                // If multiple hosts → turn all of them into Co-hosts
-                                if (rawRole === "host" && totalHosts > 1) {
-                                role = "Co-host";
-                                } else if (rawRole === "host") {
-                                role = "Host";
-                                } else if (rawRole === "cohost") {
-                                role = "Co-host";
-                                } else if (rawRole === "narrator") {
-                                role = "Narrator";
-                                } else {
-                                role = "Guest";
-                                }
-
-                                // Track usage for numbering (Guest 1, Co-host 1, etc.)
-                                roleUsage[role] = (roleUsage[role] || 0) + 1;
-                                const occurrence = roleUsage[role];
-
-                                // Build label
-                                const label =
-                                roleCounts[rawRole] > 1 && role !== "Host"
-                                    ? `${role} ${occurrence}`
-                                    : role;
-
-                                return (
-                                    <div
-                                        key={i}
-                                        className="rounded-xl border border-neutral-300 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 w-full"
-                                    >
-                                        {/* Card title now uses role label */}
-                                        <h3 className="text-sm font-bold text-black/80 dark:text-white/80">
-                                            {label}
-                                        </h3>
-                                        <p className="mt-1 text-xs text-neutral-500">
-                                            Roles are fixed for this style. You can edit the name, gender, and voice.
-                                        </p>
-
-                                        <div className="mt-3 space-y-3">
-                                            {/* Name */}
-                                            <div>
-                                                <label className="form-label">Name</label>
-                                                <input
-                                                    value={sp.name}
-                                                    onChange={(e) => {
-                                                        const cleaned = e.target.value
-                                                            .replace(/[^\p{L}\s]/gu, "")
-                                                            .replace(/\s{2,}/g, " ");
-                                                        setSpeakers((arr) => {
-                                                            const next = [...arr];
-                                                            next[i] = { ...next[i], name: cleaned };
-                                                            return next;
-                                                        });
-                                                    }}
-                                                    placeholder={`${label} name`}
-                                                    className={`form-input ${
-                                                        errors.speaker_names && !sp.name.trim()
-                                                            ? "border-rose-400"
-                                                            : ""
-                                                    }`}
-                                                />
-                                            </div>
-
-                                            {/* Gender ONLY (Role field removed) */}
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                                <div>
-                                                    <label className="form-label">Gender</label>
-                                                    <select
-                                                        value={sp.gender}
-                                                        onChange={(e) =>
-                                                            setSpeakers((arr) => {
-                                                                const n = [...arr];
-                                                                const gender = e.target.value;
-                                                                n[i] = {
-                                                                    ...n[i],
-                                                                    gender,
-                                                                    voiceId:
-                                                                        n[i].voiceId ||
-                                                                        defaultVoiceForGender(gender),
-                                                                };
-                                                                return n;
-                                                            })
-                                                        }
-                                                        className="form-input"
-                                                    >
-                                                        <option>Male</option>
-                                                        <option>Female</option>
-                                                    </select>
+                                        {hoverKey === s.key && (
+                                            <div className="absolute left-5 right-5 top-[calc(100%+30px)] z-40">
+                                                <div className="relative rounded-2xl bg-gradient-to-br from-purple-400 to-violet-700 text-white shadow-2xl border border-white/10 p-4 animate-[popoverIn_120ms_ease-out]">
+                                                    <div className="flex items-center gap-2 font-semibold tracking-wide"><Info className="w-4 h-4 opacity-90" /><span>Style guidelines</span></div>
+                                                    <div className="mt-2 leading-relaxed text-[0.95rem]">{STYLE_GUIDELINES[s.key]}</div>
+                                                    <span className="absolute -top-2 left-8 w-3 h-3 rotate-45 bg-purple-600 shadow-[0_6px_16px_rgba(0,0,0,0.25)] border-l border-t border-white/10" />
                                                 </div>
                                             </div>
+                                        )}
+                                    </label>
+                                ))}
+                            </div>
+                            {errors.script_style && <p className="text-rose-500 mt-3 flex items-center gap-2 justify-center"><AlertCircle className="w-4 h-4" /> {errors.script_style}</p>}
+                            <div className="mt-6 flex justify-end">
+                                <button onClick={continueFromStyle} className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold">Continue <ChevronRight className="w-4 h-4" /></button>
+                            </div>
+                        </section>
+                    )}
 
-                                            {/* Voice picker (unchanged) */}
-                                            <div>
-                                                <label className="form-label">Voice</label>
-                                                {loadingVoices ? (
-                                                    <p className="text-sm text-black/60 dark:text-white/60">
-                                                        Loading voices…
-                                                    </p>
-                                                ) : voices.length === 0 ? (
-                                                    <p className="text-sm text-rose-500">
-                                                        No voices found. Check ElevenLabs config.
-                                                    </p>
-                                                ) : (() => {
-                                                    const genderKey =
-                                                        (sp.gender || "").toLowerCase() === "female"
-                                                            ? "female"
-                                                            : "male";
-                                                    const pool = voiceGroups[genderKey].length
-                                                        ? voiceGroups[genderKey]
-                                                        : voices;
-                                                    const currentId = sp.voiceId || pool[0]?.id || "";
-                                                    return (
-                                                        <div className="flex items-center gap-3">
+                    {/* STEP 2: SPEAKERS */}
+                    {step === 2 && (
+                        <section className="ui-card">
+                            <h2 className="ui-card-title flex items-center gap-2 justify-center"><Users className="w-4 h-4" /> Speakers</h2>
+                            {scriptStyle && (
+                                <div className="flex items-center gap-2 flex-wrap mt-3 justify-center">
+                                    {allowedCounts.map((n) => (
+                                        <button key={n} onClick={() => setSpeakersCount(n)} className={`px-4 py-2 text-sm font-semibold rounded-xl transition border ${speakersCount === n ? "bg-purple-600 text-white border-purple-600" : "bg-black/5 dark:bg-white/5 border-neutral-300 dark:border-neutral-800 text-black/70 dark:text-white/70 hover:bg-black/10"}`}>
+                                            {n} {n === 1 ? "Speaker" : "Speakers"}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                            {speakers.length > 0 && (
+                                <div className={`mt-5 grid gap-5 ${speakers.length === 1 ? "grid-cols-1 max-w-md" : speakers.length === 2 ? "grid-cols-1 md:grid-cols-2 max-w-4xl" : "grid-cols-1 md:grid-cols-3 max-w-5xl"} mx-auto`}>
+                                    {speakers.map((sp, i) => {
+                                        // 1) Normalize the role coming from your style
+                                        // Normalize the role name coming from the style
+                                        let rawRole = sp.role || "guest";
+
+                                        // Count how many hosts exist
+                                        const totalHosts = roleCounts["Host"] || roleCounts["host"] || 0;
+
+                                        // Convert roles into UI roles
+                                        let role;
+
+                                        // If multiple hosts → turn all of them into Co-hosts
+                                        if (rawRole === "host" && totalHosts > 1) {
+                                            role = "Co-host";
+                                        } else if (rawRole === "host") {
+                                            role = "Host";
+                                        } else if (rawRole === "cohost") {
+                                            role = "Co-host";
+                                        } else if (rawRole === "narrator") {
+                                            role = "Narrator";
+                                        } else {
+                                            role = "Guest";
+                                        }
+
+                                        // Track usage for numbering (Guest 1, Co-host 1, etc.)
+                                        roleUsage[role] = (roleUsage[role] || 0) + 1;
+                                        const occurrence = roleUsage[role];
+
+                                        // Build label
+                                        const label =
+                                            roleCounts[rawRole] > 1 && role !== "Host"
+                                                ? `${role} ${occurrence}`
+                                                : role;
+
+                                        return (
+                                            <div
+                                                key={i}
+                                                className="rounded-xl border border-neutral-300 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 w-full"
+                                            >
+                                                {/* Card title now uses role label */}
+                                                <h3 className="text-sm font-bold text-black/80 dark:text-white/80">
+                                                    {label}
+                                                </h3>
+                                                <p className="mt-1 text-xs text-neutral-500">
+                                                    Roles are fixed for this style. You can edit the name, gender, and voice.
+                                                </p>
+
+                                                <div className="mt-3 space-y-3">
+                                                    {/* Name */}
+                                                    <div>
+                                                        <label className="form-label">Name</label>
+                                                        <input
+                                                            value={sp.name}
+                                                            onChange={(e) => {
+                                                                const cleaned = e.target.value
+                                                                    .replace(/[^\p{L}\s]/gu, "")
+                                                                    .replace(/\s{2,}/g, " ");
+                                                                setSpeakers((arr) => {
+                                                                    const next = [...arr];
+                                                                    next[i] = { ...next[i], name: cleaned };
+                                                                    return next;
+                                                                });
+                                                            }}
+                                                            placeholder={`${label} name`}
+                                                            className={`form-input ${errors.speaker_names && !sp.name.trim()
+                                                                ? "border-rose-400"
+                                                                : ""
+                                                                }`}
+                                                        />
+                                                    </div>
+
+                                                    {/* Gender ONLY (Role field removed) */}
+                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                        <div>
+                                                            <label className="form-label">Gender</label>
                                                             <select
-                                                                className="form-input flex-1"
-                                                                value={currentId}
-                                                                onChange={(e) => {
-                                                                    const newVoice = e.target.value;
-
-                                                                    // Prevent duplicate assignment
-                                                                    const alreadyUsed = speakers.some(
-                                                                        (s, idx) => s.voiceId === newVoice && idx !== i
-                                                                    );
-
-                                                                    if (alreadyUsed) {
-                                                                        alert("⚠️ This voice is already used by another speaker. Please choose a different one.");
-                                                                        return;
-                                                                    }
-
+                                                                value={sp.gender}
+                                                                onChange={(e) =>
                                                                     setSpeakers((arr) => {
                                                                         const n = [...arr];
-                                                                        n[i] = { ...n[i], voiceId: newVoice };
+                                                                        const gender = e.target.value;
+                                                                        n[i] = {
+                                                                            ...n[i],
+                                                                            gender,
+                                                                            voiceId:
+                                                                                n[i].voiceId ||
+                                                                                defaultVoiceForGender(gender),
+                                                                        };
                                                                         return n;
-                                                                    });
-                                                                }}
+                                                                    })
+                                                                }
+                                                                className="form-input"
                                                             >
-                                                                <option value="">Select Voice</option>
-                                                                {pool.map((v) => {
-                                                                    const isTaken = speakers.some(
-                                                                        (s, idx) => s.voiceId === v.id && idx !== i
-                                                                    );
-
-                                                                    return (
-                                                                        <option key={v.id} value={v.id} disabled={isTaken}>
-                                                                            {v.name} {isTaken ? "(Already Used)" : ""}
-                                                                        </option>
-                                                                    );
-                                                                })}
+                                                                <option>Male</option>
+                                                                <option>Female</option>
                                                             </select>
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => {
-                                                                    const selected =
-                                                                        pool.find(
-                                                                            (v) => v.id === currentId
-                                                                        ) || pool[0];
-                                                                    if (selected?.preview_url) {
-                                                                        const audio = new Audio(
-                                                                            selected.preview_url
-                                                                        );
-                                                                        audio
-                                                                            .play()
-                                                                            .catch((err) =>
-                                                                                console.error(
-                                                                                    "Preview failed",
-                                                                                    err
-                                                                                )
-                                                                            );
-                                                                    } else {
-                                                                        alert(
-                                                                            "No preview available for this voice."
-                                                                        );
-                                                                    }
-                                                                }}
-                                                                className="inline-flex items-center justify-center gap-2 px-5 h-[44px] rounded-xl border border-purple-500 text-purple-600 font-semibold hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
-                                                            >
-                                                                <Play className="w-4 h-4" /> Preview
-                                                            </button>
                                                         </div>
-                                                    );
-                                                })()}
-                                                <p className="form-help text-xs mt-1">
-                                                    This voice will be used when generating audio for this speaker.
+                                                    </div>
+
+                                                    {/* Voice picker (unchanged) */}
+                                                    <div>
+                                                        <label className="form-label">Voice</label>
+                                                        {loadingVoices ? (
+                                                            <p className="text-sm text-black/60 dark:text-white/60">
+                                                                Loading voices…
+                                                            </p>
+                                                        ) : voices.length === 0 ? (
+                                                            <p className="text-sm text-rose-500">
+                                                                No voices found. Check ElevenLabs config.
+                                                            </p>
+                                                        ) : (() => {
+                                                            const genderKey =
+                                                                (sp.gender || "").toLowerCase() === "female"
+                                                                    ? "female"
+                                                                    : "male";
+                                                            const pool = voiceGroups[genderKey].length
+                                                                ? voiceGroups[genderKey]
+                                                                : voices;
+                                                            const currentId = sp.voiceId || pool[0]?.id || "";
+                                                            return (
+                                                                <div className="flex items-center gap-3">
+                                                                    <select
+                                                                        className="form-input flex-1"
+                                                                        value={currentId}
+                                                                        onChange={(e) => {
+                                                                            const newVoice = e.target.value;
+
+                                                                            // Prevent duplicate assignment
+                                                                            const alreadyUsed = speakers.some(
+                                                                                (s, idx) => s.voiceId === newVoice && idx !== i
+                                                                            );
+
+                                                                            if (alreadyUsed) {
+                                                                                alert("⚠️ This voice is already used by another speaker. Please choose a different one.");
+                                                                                return;
+                                                                            }
+
+                                                                            setSpeakers((arr) => {
+                                                                                const n = [...arr];
+                                                                                n[i] = { ...n[i], voiceId: newVoice };
+                                                                                return n;
+                                                                            });
+                                                                        }}
+                                                                    >
+                                                                        <option value="">Select Voice</option>
+                                                                        {pool.map((v) => {
+                                                                            const isTaken = speakers.some(
+                                                                                (s, idx) => s.voiceId === v.id && idx !== i
+                                                                            );
+
+                                                                            return (
+                                                                                <option key={v.id} value={v.id} disabled={isTaken}>
+                                                                                    {v.name} {isTaken ? "(Already Used)" : ""}
+                                                                                </option>
+                                                                            );
+                                                                        })}
+                                                                    </select>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => {
+                                                                            const selected =
+                                                                                pool.find(
+                                                                                    (v) => v.id === currentId
+                                                                                ) || pool[0];
+                                                                            if (selected?.preview_url) {
+                                                                                const audio = new Audio(
+                                                                                    selected.preview_url
+                                                                                );
+                                                                                audio
+                                                                                    .play()
+                                                                                    .catch((err) =>
+                                                                                        console.error(
+                                                                                            "Preview failed",
+                                                                                            err
+                                                                                        )
+                                                                                    );
+                                                                            } else {
+                                                                                alert(
+                                                                                    "No preview available for this voice."
+                                                                                );
+                                                                            }
+                                                                        }}
+                                                                        className="inline-flex items-center justify-center gap-2 px-5 h-[44px] rounded-xl border border-purple-500 text-purple-600 font-semibold hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                                                    >
+                                                                        <Play className="w-4 h-4" /> Preview
+                                                                    </button>
+                                                                </div>
+                                                            );
+                                                        })()}
+                                                        <p className="form-help text-xs mt-1">
+                                                            This voice will be used when generating audio for this speaker.
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                            {(errors.speaker_names || errors.speakers) && <p className="text-rose-500 mt-4 text-center flex items-center gap-2 justify-center"><AlertCircle className="w-4 h-4" /> {errors.speaker_names || errors.speakers}</p>}
+                            <div className="mt-6 flex justify-between">
+                                <button onClick={() => setStep(1)} className="px-4 py-2 border rounded-xl">Back</button>
+                                <button onClick={onContinueFromSpeakers} className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold">Continue <ChevronRight className="w-4 h-4" /></button>
+                            </div>
+                        </section>
+                    )}
+
+                    {/* STEP 3: ENTER TEXT */}
+                    {step === 3 && (
+                        <section className="ui-card">
+                            <h2 className="ui-card-title flex items-center gap-2">
+                                <NotebookPen className="w-4 h-4" />
+                                Enter your text
+                            </h2>
+
+                            <textarea
+                                id="wecast_textarea"
+                                value={description}
+                                onChange={(e) => setDescription(e.target.value)}
+                                placeholder="Paste your text here (min 500, max 2500 words)…"
+                                className="form-textarea mt-3"
+                                rows={8}
+                            />
+                            <div className="mt-2 text-sm flex justify-between">
+                                <span
+                                    className={`${description.trim().split(/\s+/).filter(Boolean).length < MIN
+                                        ? "text-rose-500"
+                                        : "text-purple-500"
+                                        }`}
+                                >
+                                    {description.trim().split(/\s+/).filter(Boolean).length} / {MAX} words
+                                </span>
+                                {errors.description && (
+                                    <span className="text-rose-500">{errors.description}</span>
+                                )}
+                            </div>
+                            {errors.server && (
+                                <p className="text-rose-600 mt-3 flex items-center gap-2">
+                                    <AlertCircle className="w-4 h-4" /> {errors.server}
+                                </p>
+                            )}
+                            <div className="mt-6 flex justify-between">
+                                <button
+                                    onClick={() => setStep(2)}
+                                    className="px-4 py-2 border rounded-xl"
+                                >
+                                    Back
+                                </button>
+                                <button
+                                    onClick={handleGenerate}
+                                    disabled={submitting}
+                                    className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
+                                >
+                                    {submitting ? (
+                                        "Generating Script..."
+                                    ) : (
+                                        <>
+                                            Generate Script <Wand2 className="w-4 h-4" />
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+                        </section>
+                    )}
+
+                    {/* STEP 4: REVIEW & EDIT */}
+                    {step === 4 && generatedScript && (
+                        <section className="ui-card">
+                            <h2 className="ui-card-title flex items-center gap-2">
+                                <Edit className="w-4 h-4" />
+                                Review your script
+                            </h2>
+
+                            <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800 mb-6">
+                                <h3 className="text-xl font-bold text-green-700 dark:text-green-300 mb-4 flex items-center gap-2">
+                                    <Check className="w-5 h-5" /> Script Generated Successfully!
+                                </h3>
+
+                                {/* Script Information ABOVE the script */}
+                                <div className="bg-white dark:bg-neutral-800 rounded-xl p-4 mb-4">
+                                    <h4 className="font-semibold mb-3 text-black dark:text-white">
+                                        Script Information:
+                                    </h4>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                                        <div>
+                                            <p>
+                                                <strong>Style:</strong> {scriptStyle}
+                                            </p>
+                                            <p>
+                                                <strong>Speakers:</strong> {speakersCount}
+                                            </p>
+                                            <p>
+                                                <strong>Total Words:</strong>{" "}
+                                                {generatedScript.split(/\s+/).filter(Boolean).length}
+                                            </p>
+                                        </div>
+                                        <div>
+                                            <p>
+                                                <strong>Speaker Roles:</strong>{" "}
+                                                {speakers.map((s) => s.role).join(", ")}
+                                            </p>
+                                            <p>
+                                                <strong>Status:</strong> Ready for audio generation
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Script Preview */}
+                                <div className="bg-white dark:bg-neutral-800 rounded-xl p-4">
+                                    <h4 className="font-semibold mb-3 text-black dark:text-white">
+                                        Script Preview:
+                                    </h4>
+                                    <div className="whitespace-pre-wrap text-sm text-black/80 dark:text-white/80 leading-relaxed max-h-96 overflow-y-auto">
+                                        {displayedScript}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Action Buttons */}
+                            <div className="flex justify-between items-center">
+                                <button
+                                    onClick={() => {
+                                        // go back to text step and allow regeneration
+                                        setStep(3);
+                                    }}
+                                    className="px-4 py-2 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                >
+                                    Back to text
+                                </button>
+
+                                <div className="flex gap-3">
+                                    <button
+                                        onClick={navigateToEdit}
+                                        className="px-4 py-2 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                    >
+                                        Edit in Editor
+                                    </button>
+                                    <button
+                                        onClick={() => setStep(5)}
+                                        className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
+                                    >
+                                        Continue to Transition Music <ChevronRight className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            </div>
+                        </section>
+                    )}
+                    {/* STEP 5: TRANSITION MUSIC (placeholder) */}
+                    {step === 5 && (
+                        <section className="ui-card">
+                            <h2 className="ui-card-title flex items-center gap-2 justify-center">
+                                🎧 Select Transition Music
+                            </h2>
+
+                            <p className="text-center text-sm text-black/60 dark:text-white/60 mt-2">
+                                Choose a music category to preview intro, body, and outro tracks.
+                            </p>
+
+                            {/* CATEGORY SELECT */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
+                                {Object.keys(MUSIC_CATEGORIES).map((cat) => (
+                                    <label
+                                        key={cat}
+                                        onClick={() => {
+                                            setCategory(cat);
+                                            setAvailableTracks(MUSIC_CATEGORIES[cat]);
+                                        }}
+                                        className={`cursor-pointer group relative w-full p-5 rounded-xl border transition 
+                ${category === cat
+                                                ? "border-purple-500 bg-purple-50"
+                                                : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
+                                            }`}
+                                    >
+                                        <div className="flex items-center gap-3">
+                                            <input
+                                                type="radio"
+                                                checked={category === cat}
+                                                readOnly
+                                                className="accent-purple-600 mt-1"
+                                            />
+                                            <div>
+                                                <div className="font-semibold capitalize">{cat}</div>
+                                                <p className="text-xs text-black/60 dark:text-white/60">
+                                                    {cat === "dramatic" && "Epic emotional cinematic style."}
+                                                    {cat === "arabic" && "Middle eastern oud and oriental tones."}
+                                                    {cat === "chill" && "Relaxed lofi and smooth vibes."}
+                                                    {cat === "classics" && "Soft piano and orchestral melodies."}
                                                 </p>
                                             </div>
                                         </div>
-                                    </div>
-                                );
-                            })}
+
+                                        {category === cat && (
+                                            <span className="absolute top-2 right-3 text-purple-500 text-xs">
+                                                ✓ Selected
+                                            </span>
+                                        )}
+                                    </label>
+                                ))}
                             </div>
-                        )}
-                        {(errors.speaker_names || errors.speakers) && <p className="text-rose-500 mt-4 text-center flex items-center gap-2 justify-center"><AlertCircle className="w-4 h-4" /> {errors.speaker_names || errors.speakers}</p>}
-                        <div className="mt-6 flex justify-between">
-                            <button onClick={() => setStep(1)} className="px-4 py-2 border rounded-xl">Back</button>
-                            <button onClick={onContinueFromSpeakers} className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold">Continue <ChevronRight className="w-4 h-4" /></button>
-                        </div>
-                    </section>
-                )}
 
-                {/* STEP 3: ENTER TEXT */}
-                {step === 3 && (
-                    <section className="ui-card">
-                        <h2 className="ui-card-title flex items-center gap-2">
-                            <NotebookPen className="w-4 h-4" />
-                            Enter your text
-                        </h2>
+                            {/* TRACK LIST */}
+                            {category && availableTracks.length > 0 && (
+                                <div className="mt-8 space-y-4">
+                                    {["Intro", "Body", "Outro"].map((label, index) => (
+                                        <div key={label} className="flex items-center justify-between border p-3 rounded-xl dark:border-neutral-700">
+                                            <span className="font-medium">{label}</span>
 
-                        <textarea
-                            id="wecast_textarea"
-                            value={description}
-                            onChange={(e) => setDescription(e.target.value)}
-                            placeholder="Paste your text here (min 500, max 2500 words)…"
-                            className="form-textarea mt-3"
-                            rows={8}
-                        />
-                        <div className="mt-2 text-sm flex justify-between">
-                            <span
-                                className={`${
-                                    description.trim().split(/\s+/).filter(Boolean).length < MIN
-                                        ? "text-rose-500"
-                                        : "text-purple-500"
-                                }`}
-                            >
-                                {description.trim().split(/\s+/).filter(Boolean).length} / {MAX} words
-                            </span>
-                            {errors.description && (
-                                <span className="text-rose-500">{errors.description}</span>
+                                            <div className="flex items-center gap-3">
+                                                <select
+                                                    className="p-2 rounded-lg border dark:bg-neutral-800 dark:border-neutral-700"
+                                                    value={
+                                                        index === 0 ? introMusic : index === 1 ? bodyMusic : outroMusic
+                                                    }
+                                                    onChange={(e) => {
+                                                        if (index === 0) setIntroMusic(e.target.value);
+                                                        if (index === 1) setBodyMusic(e.target.value);
+                                                        if (index === 2) setOutroMusic(e.target.value);
+                                                    }}
+                                                >
+                                                    <option value="">-- Select --</option>
+                                                    {availableTracks.map((track) => (
+                                                        <option key={track.file} value={track.file}>{track.name}</option>
+                                                    ))}
+                                                </select>
+
+                                                <button
+                                                    className={`px-4 py-2 rounded-xl border flex items-center gap-2 ${(index === 0 && !introMusic) ||
+                                                        (index === 1 && !bodyMusic) ||
+                                                        (index === 2 && !outroMusic)
+                                                        ? "opacity-40 cursor-not-allowed"
+                                                        : "border-purple-500 text-purple-600 hover:bg-purple-50"
+                                                        }`}
+                                                    onClick={() => {
+                                                        const selected =
+                                                            index === 0 ? introMusic : index === 1 ? bodyMusic : outroMusic;
+                                                        if (selected) {
+                                                            setMusicPreview(`http://localhost:5000/static/music/${selected}`);
+                                                        }
+                                                    }}
+                                                >
+                                                    ▶ Preview
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+
+                                    {musicPreview && (
+                                        <audio autoPlay src={musicPreview} onEnded={() => setMusicPreview(null)} />
+                                    )}
+                                </div>
                             )}
-                        </div>
-                        {errors.server && (
-                            <p className="text-rose-600 mt-3 flex items-center gap-2">
-                                <AlertCircle className="w-4 h-4" /> {errors.server}
-                            </p>
-                        )}
-                        <div className="mt-6 flex justify-between">
-                            <button
-                                onClick={() => setStep(2)}
-                                className="px-4 py-2 border rounded-xl"
-                            >
-                                Back
-                            </button>
-                            <button
-                                onClick={handleGenerate}
-                                disabled={submitting}
-                                className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
-                            >
-                                {submitting ? (
-                                    "Generating Script..."
-                                ) : (
-                                    <>
-                                        Generate Script <Wand2 className="w-4 h-4" />
-                                    </>
-                                )}
-                            </button>
-                        </div>
-                    </section>
-                )}
 
-                {/* STEP 4: REVIEW & EDIT */}
-                {step === 4 && generatedScript && (
-                    <section className="ui-card">
-                        <h2 className="ui-card-title flex items-center gap-2">
-                            <Edit className="w-4 h-4" />
-                            Review your script
-                        </h2>
+                            <div className="mt-8 flex justify-between items-center">
+                                <button
+                                    onClick={() => setStep(4)}
+                                    className="px-4 py-2 border rounded-xl"
+                                >
+                                    Back
+                                </button>
 
-                        <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800 mb-6">
-                            <h3 className="text-xl font-bold text-green-700 dark:text-green-300 mb-4 flex items-center gap-2">
-                                <Check className="w-5 h-5" /> Script Generated Successfully!
-                            </h3>
+                                <div className="flex items-center gap-3">
+                                    {/* Skip Button */}
+                                    <button
+                                        onClick={async () => {
+                                            try {
+                                                // Clear saved music on backend
+                                                await fetch("/api/save-music", {
+                                                    method: "POST",
+                                                    credentials: "include",
+                                                    headers: { "Content-Type": "application/json" },
+                                                    body: JSON.stringify({
+                                                        introMusic: null,
+                                                        bodyMusic: null,
+                                                        outroMusic: null,
+                                                    }),
+                                                });
+                                            } catch (e) {
+                                                console.error("Failed to clear music selection", e);
+                                            }
 
-                            {/* Script Information ABOVE the script */}
-                            <div className="bg-white dark:bg-neutral-800 rounded-xl p-4 mb-4">
-                                <h4 className="font-semibold mb-3 text-black dark:text-white">
-                                    Script Information:
-                                </h4>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                                    <div>
-                                        <p>
-                                            <strong>Style:</strong> {scriptStyle}
-                                        </p>
-                                        <p>
-                                            <strong>Speakers:</strong> {speakersCount}
-                                        </p>
-                                        <p>
-                                            <strong>Total Words:</strong>{" "}
-                                            {generatedScript.split(/\s+/).filter(Boolean).length}
-                                        </p>
-                                    </div>
-                                    <div>
-                                        <p>
-                                            <strong>Speaker Roles:</strong>{" "}
-                                            {speakers.map((s) => s.role).join(", ")}
-                                        </p>
-                                        <p>
-                                            <strong>Status:</strong> Ready for audio generation
-                                        </p>
-                                    </div>
+                                            // Clear on frontend too
+                                            setIntroMusic("");
+                                            setBodyMusic("");
+                                            setOutroMusic("");
+
+                                            // Go to audio step without music
+                                            setStep(6);
+                                        }}
+                                        className="px-5 py-2 rounded-xl border border-neutral-400 text-neutral-700 dark:text-neutral-200 hover:bg-black/5 dark:hover:bg-white/10 transition"
+                                    >
+                                        Skip
+                                    </button>
+
+
+                                    {/* Continue Button */}
+                                    <button
+                                        disabled={!introMusic || !bodyMusic || !outroMusic}
+                                        onClick={async () => {
+                                            await fetch("/api/save-music", {
+                                                method: "POST",
+                                                credentials: "include",
+                                                headers: { "Content-Type": "application/json" },
+                                                body: JSON.stringify({ introMusic, bodyMusic, outroMusic }),
+                                            });
+                                            setStep(6);
+                                        }}
+                                        className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
+                                    >
+                                        Continue to Audio →
+                                    </button>
                                 </div>
                             </div>
 
-                            {/* Script Preview */}
-                            <div className="bg-white dark:bg-neutral-800 rounded-xl p-4">
-                                <h4 className="font-semibold mb-3 text-black dark:text-white">
-                                    Script Preview:
-                                </h4>
-                                <div className="whitespace-pre-wrap text-sm text-black/80 dark:text-white/80 leading-relaxed max-h-96 overflow-y-auto">
-                                    {displayedScript}
+                        </section>
+                    )}
+
+
+                    {/* STEP 6: AUDIO */}
+                    {step === 6 && (
+                        <section className="ui-card">
+                            <h2 className="ui-card-title flex items-center gap-2 justify-center"><Mic2 className="w-4 h-4" /> Generate Audio</h2>
+
+                            {!generatedAudio ? (
+                                // Audio generation section
+                                <div className="text-center space-y-6">
+                                    <div className="bg-purple-50 dark:bg-purple-900/20 rounded-2xl p-6 border border-purple-200 dark:border-purple-800">
+                                        <h3 className="text-xl font-bold text-purple-700 dark:text-purple-300 mb-3">Ready to Generate Audio</h3>
+                                        <p className="text-black/70 dark:text-white/70 mb-4">
+                                            Your script has been generated successfully! Now you can create the audio version of your podcast using the voices you selected.
+                                        </p>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 text-left">
+                                            <div>
+                                                <h4 className="font-semibold mb-2">Podcast Details:</h4>
+                                                <p><strong>Style:</strong> {scriptStyle}</p>
+                                                <p><strong>Speakers:</strong> {speakersCount}</p>
+                                                <p><strong>Words:</strong> {generatedScript.split(/\s+/).filter(Boolean).length}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex gap-4 justify-center flex-wrap">
+                                        <button
+                                            onClick={() => setStep(5)}
+                                            className="px-6 py-3 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                        >
+                                            Back
+                                        </button>
+                                        <button
+                                            onClick={handleGenerateAudio}
+                                            disabled={generatingAudio}
+                                            className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
+                                        >
+                                            {generatingAudio ? "Generating Audio..." : <>Generate Audio <Play className="w-4 h-4" /></>}
+                                        </button>
+                                        <button
+                                            onClick={navigateToEdit}
+                                            className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                        >
+                                            Edit Script First
+                                        </button>
+                                    </div>
                                 </div>
-                            </div>
-                        </div>
+                            ) : (
+                                // Audio playback section
+                                <div className="space-y-6">
+                                    <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800">
+                                        <h3 className="text-xl font-bold text-green-700 dark:text-green-300 mb-4 flex items-center gap-2 justify-center">
+                                            <Check className="w-5 h-5" /> Audio Generated Successfully! 🎉
+                                        </h3>
 
-                        {/* Action Buttons */}
-                        <div className="flex justify-between items-center">
-                            <button
-                                onClick={() => {
-                                    // go back to text step and allow regeneration
-                                    setStep(3);
-                                }}
-                                className="px-4 py-2 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
-                            >
-                                Back to text
-                            </button>
+                                        {/* Audio Player */}
+                                        <div className="mt-6">
+                                            <WeCastAudioPlayer
+                                                src={generatedAudio}
+                                                title={audioTitle}
+                                            />
+                                        </div>
 
-                            <div className="flex gap-3">
-                                <button
-                                    onClick={navigateToEdit}
-                                    className="px-4 py-2 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
-                                >
-                                    Edit in Editor
-                                </button>
-                                <button
-                                    onClick={() => setStep(5)}
-                                    className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
-                                >
-                                    Continue to Transition Music <ChevronRight className="w-4 h-4" />
-                                </button>
-                            </div>
-                        </div>
-                    </section>
-                )}
-                {/* STEP 5: TRANSITION MUSIC (placeholder) */}
-{step === 5 && (
-<section className="ui-card">
-    <h2 className="ui-card-title flex items-center gap-2 justify-center">
-        🎧 Select Transition Music
-    </h2>
-
-    <p className="text-center text-sm text-black/60 dark:text-white/60 mt-2">
-        Choose a music category to preview intro, body, and outro tracks.
-    </p>
-
-    {/* CATEGORY SELECT */}
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
-        {Object.keys(MUSIC_CATEGORIES).map((cat) => (
-            <label
-                key={cat}
-                onClick={() => {
-                    setCategory(cat);
-                    setAvailableTracks(MUSIC_CATEGORIES[cat]);
-                }}
-                className={`cursor-pointer group relative w-full p-5 rounded-xl border transition 
-                ${
-                    category === cat
-                        ? "border-purple-500 bg-purple-50"
-                        : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
-                }`}
-            >
-                <div className="flex items-center gap-3">
-                    <input 
-                        type="radio" 
-                        checked={category === cat} 
-                        readOnly 
-                        className="accent-purple-600 mt-1"
-                    />
-                    <div>
-                        <div className="font-semibold capitalize">{cat}</div>
-                        <p className="text-xs text-black/60 dark:text-white/60">
-                            {cat === "dramatic" && "Epic emotional cinematic style."}
-                            {cat === "arabic" && "Middle eastern oud and oriental tones."}
-                            {cat === "chill" && "Relaxed lofi and smooth vibes."}
-                            {cat === "classics" && "Soft piano and orchestral melodies."}
-                        </p>
-                    </div>
-                </div>
-
-                {category === cat && (
-                    <span className="absolute top-2 right-3 text-purple-500 text-xs">
-                        ✓ Selected
-                    </span>
-                )}
-            </label>
-        ))}
-    </div>
-
-    {/* TRACK LIST */}
-    {category && availableTracks.length > 0 && (
-        <div className="mt-8 space-y-4">
-            {["Intro", "Body", "Outro"].map((label, index) => (
-                <div key={label} className="flex items-center justify-between border p-3 rounded-xl dark:border-neutral-700">
-                    <span className="font-medium">{label}</span>
-                    
-                    <div className="flex items-center gap-3">
-                        <select
-                            className="p-2 rounded-lg border dark:bg-neutral-800 dark:border-neutral-700"
-                            value={
-                                index === 0 ? introMusic : index === 1 ? bodyMusic : outroMusic
-                            }
-                            onChange={(e) => {
-                                if (index === 0) setIntroMusic(e.target.value);
-                                if (index === 1) setBodyMusic(e.target.value);
-                                if (index === 2) setOutroMusic(e.target.value);
-                            }}
-                        >
-                            <option value="">-- Select --</option>
-                            {availableTracks.map((track) => (
-                                <option key={track.file} value={track.file}>{track.name}</option>
-                            ))}
-                        </select>
-
-                        <button
-                            className={`px-4 py-2 rounded-xl border flex items-center gap-2 ${
-                                (index === 0 && !introMusic) ||
-                                (index === 1 && !bodyMusic) ||
-                                (index === 2 && !outroMusic)
-                                ? "opacity-40 cursor-not-allowed"
-                                : "border-purple-500 text-purple-600 hover:bg-purple-50"
-                            }`}
-                            onClick={() => {
-                                const selected =
-                                    index === 0 ? introMusic : index === 1 ? bodyMusic : outroMusic;
-                                if (selected) {
-                                    setMusicPreview(`http://localhost:5000/static/music/${selected}`);
-                                }
-                            }}
-                        >
-                            ▶ Preview
-                        </button>
-                    </div>
-                </div>
-            ))}
-
-            {musicPreview && (
-                <audio autoPlay src={musicPreview} onEnded={() => setMusicPreview(null)} />
-            )}
-        </div>
-    )}
-
-    <div className="mt-8 flex justify-between">
-        <button
-            onClick={() => setStep(4)}
-            className="px-4 py-2 border rounded-xl"
-        >
-            Back
-        </button>
-        <button
-            disabled={!introMusic || !bodyMusic || !outroMusic}
-            onClick={async () => {
-                await fetch("/api/save-music", {
-                    method: "POST",
-                    credentials: "include",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ introMusic, bodyMusic, outroMusic }),
-                });
-                setStep(6);
-            }}
-            className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
-        >
-            Continue to Audio →
-        </button>
-    </div>
-</section>
-)}
-
-
-                {/* STEP 6: AUDIO */}
-                {step === 6 && (
-                    <section className="ui-card">
-                        <h2 className="ui-card-title flex items-center gap-2 justify-center"><Mic2 className="w-4 h-4" /> Generate Audio</h2>
-                        
-                        {!generatedAudio ? (
-                            // Audio generation section
-                            <div className="text-center space-y-6">
-                                <div className="bg-purple-50 dark:bg-purple-900/20 rounded-2xl p-6 border border-purple-200 dark:border-purple-800">
-                                    <h3 className="text-xl font-bold text-purple-700 dark:text-purple-300 mb-3">Ready to Generate Audio</h3>
-                                    <p className="text-black/70 dark:text-white/70 mb-4">
-                                        Your script has been generated successfully! Now you can create the audio version of your podcast using the voices you selected.
-                                    </p>
-                                    
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 text-left">
-                                        <div>
-                                            <h4 className="font-semibold mb-2">Podcast Details:</h4>
-                                            <p><strong>Style:</strong> {scriptStyle}</p>
-                                            <p><strong>Speakers:</strong> {speakersCount}</p>
-                                            <p><strong>Words:</strong> {generatedScript.split(/\s+/).filter(Boolean).length}</p>
+                                        {/* Additional Actions */}
+                                        <div className="mt-6 flex gap-4 justify-center flex-wrap">
+                                            <button
+                                                onClick={() => setStep(4)}
+                                                className="px-6 py-3 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                            >
+                                                Back to Script
+                                            </button>
+                                            <button
+                                                onClick={handleGenerateAudio}
+                                                disabled={generatingAudio}
+                                                className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                            >
+                                                Regenerate Audio
+                                            </button>
+                                            <button
+                                                onClick={navigateToEdit}
+                                                className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                            >
+                                                Edit Script
+                                            </button>
                                         </div>
                                     </div>
                                 </div>
-
-                                <div className="flex gap-4 justify-center flex-wrap">
-                                    <button 
-                                        onClick={() => setStep(5)} 
-                                        className="px-6 py-3 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
-                                    >
-                                        Back
-                                    </button>
-                                    <button 
-                                        onClick={handleGenerateAudio} 
-                                        disabled={generatingAudio}
-                                        className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
-                                    >
-                                        {generatingAudio ? "Generating Audio..." : <>Generate Audio <Play className="w-4 h-4" /></>}
-                                    </button>
-                                    <button 
-                                        onClick={navigateToEdit} 
-                                        className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
-                                    >
-                                        Edit Script First
-                                    </button>
-                                </div>
-                            </div>
-                        ) : (
-                            // Audio playback section
-                            <div className="space-y-6">
-                                <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800">
-                                    <h3 className="text-xl font-bold text-green-700 dark:text-green-300 mb-4 flex items-center gap-2 justify-center">
-                                        <Check className="w-5 h-5" /> Audio Generated Successfully! 🎉
-                                    </h3>
-                                    
-                                    {/* Audio Player */}
-                                    <div className="mt-6">
-                                        <WeCastAudioPlayer 
-                                            src={generatedAudio} 
-                                            title={`${scriptStyle} Podcast - ${speakersCount} Speakers`}
-                                        />
-                                    </div>
-
-                                    {/* Additional Actions */}
-                                    <div className="mt-6 flex gap-4 justify-center flex-wrap">
-                                        <button 
-                                            onClick={() => setStep(4)} 
-                                            className="px-6 py-3 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
-                                        >
-                                            Back to Script
-                                        </button>
-                                        <button 
-                                            onClick={handleGenerateAudio} 
-                                            disabled={generatingAudio}
-                                            className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
-                                        >
-                                            Regenerate Audio
-                                        </button>
-                                        <button 
-                                            onClick={navigateToEdit} 
-                                            className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
-                                        >
-                                            Edit Script
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                    </section>
-                )}
+                            )}
+                        </section>
+                    )}
                 </div>
+
                 {/* overlays */}
                 <LoadingOverlay show={submitting} type="script" />
                 <LoadingOverlay show={generatingAudio} type="audio" />

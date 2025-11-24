@@ -6,6 +6,13 @@ import { auth, googleProvider, githubProvider } from "../firebaseClient"; // adj
 
 const API_BASE = "http://127.0.0.1:5000";
 
+function getRedirectTarget() {
+    const hash = window.location.hash || "";
+    // Example: "#/login?redirect=edit"
+    const match = hash.match(/redirect=([^&]+)/);
+    return match ? decodeURIComponent(match[1]) : "";
+}
+
 export default function Login() {
     const [email, setEmail] = useState("");
     const [pwd, setPwd] = useState("");
@@ -20,53 +27,62 @@ export default function Login() {
 
         try {
             const res = await fetch(`${API_BASE}/api/login`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                email,
-                password: pwd,
-            }),
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    email,
+                    password: pwd,
+                }),
             });
 
             let data = {};
             try {
-            data = await res.json();
+                data = await res.json();
             } catch {
-            data = {};
+                data = {};
             }
 
             // Backend reachable but login failed (wrong password, etc.)
             if (!res.ok) {
-            setError(data.error || "Invalid email or password.");
-            return;
+                setError(data.error || "Invalid email or password.");
+                return;
             }
 
             // SUCCESS CASE
             if (data.token) {
-            localStorage.setItem("token", data.token);
+                localStorage.setItem("token", data.token);
             }
             if (data.user) {
-            localStorage.setItem("user", JSON.stringify(data.user));
+                localStorage.setItem("user", JSON.stringify(data.user));
             }
 
             // Let the header know auth changed (so it hides Login/Sign Up)
+            // Let the header know auth changed (so it hides Login/Sign Up)
             window.dispatchEvent(
-            new StorageEvent("storage", { key: "token", newValue: data.token || "" })
+                new StorageEvent("storage", { key: "token", newValue: data.token || "" })
             );
 
-            // Go to home / dashboard
-            window.location.hash = "#/";
+            // Decide where to go next
+            const redirect = getRedirectTarget();
+            if (redirect === "edit") {
+                window.location.hash = "#/edit";
+            } else if (redirect === "create") {
+                window.location.hash = "#/create";
+            } else {
+                window.location.hash = "#/";
+            }
+
         } catch (err) {
             console.error("LOGIN NETWORK ERROR:", err);
             setError("Failed to connect to the server. Please try again.");
         } finally {
             setLoading(false);
         }
-        };
+    };
 
-        const handleGoogleLogin = async () => {
+    const handleGoogleLogin = async () => {
         setError("");
         setLoading(true);
 
@@ -95,7 +111,15 @@ export default function Login() {
             localStorage.setItem("user", JSON.stringify(data.user));
 
             window.dispatchEvent(new StorageEvent("storage", { key: "token", newValue: data.token }));
-            window.location.hash = "#/";
+
+            const redirect = getRedirectTarget();
+            if (redirect === "edit") {
+                window.location.hash = "#/edit";
+            } else if (redirect === "create") {
+                window.location.hash = "#/create";
+            } else {
+                window.location.hash = "#/";
+            }
 
         } catch (err) {
             console.error("GOOGLE LOGIN ERROR:", err);
@@ -105,42 +129,51 @@ export default function Login() {
         }
     };
 
-        const handleGithubLogin = async () => {
-            setError("");
-            setLoading(true);
+    const handleGithubLogin = async () => {
+        setError("");
+        setLoading(true);
 
-            try {
-                const result = await signInWithPopup(auth, githubProvider);
-                const user = result.user;
-                const idToken = await user.getIdToken();
+        try {
+            const result = await signInWithPopup(auth, githubProvider);
+            const user = result.user;
+            const idToken = await user.getIdToken();
 
-                const res = await fetch(`${API_BASE}/api/social-login`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    credentials: "include",
-                    body: JSON.stringify({ idToken })
-                });
+            const res = await fetch(`${API_BASE}/api/social-login`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ idToken })
+            });
 
-                const data = await res.json();
+            const data = await res.json();
 
-                if (!res.ok) {
-                    setError(data.error || "Login failed.");
-                    return;
-                }
-
-                localStorage.setItem("token", data.token);
-                localStorage.setItem("user", JSON.stringify(data.user));
-
-                window.dispatchEvent(new StorageEvent("storage", { key: "token", newValue: data.token }));
-                window.location.hash = "#/";
-
-            } catch (err) {
-                console.error("GITHUB LOGIN ERROR:", err);
-                setError("GitHub login failed. Please try again.");
-            } finally {
-                setLoading(false);
+            if (!res.ok) {
+                setError(data.error || "Login failed.");
+                return;
             }
-        };
+
+            localStorage.setItem("token", data.token);
+            localStorage.setItem("user", JSON.stringify(data.user));
+
+            window.dispatchEvent(new StorageEvent("storage", { key: "token", newValue: data.token }));
+
+            const redirect = getRedirectTarget();
+            if (redirect === "edit") {
+                window.location.hash = "#/edit";
+            } else if (redirect === "create") {
+                window.location.hash = "#/create";
+            } else {
+                window.location.hash = "#/";
+            }
+
+
+        } catch (err) {
+            console.error("GITHUB LOGIN ERROR:", err);
+            setError("GitHub login failed. Please try again.");
+        } finally {
+            setLoading(false);
+        }
+    };
     return (
         <div className="min-h-screen relative overflow-hidden flex items-center justify-center bg-cream dark:bg-[#0a0a1a] transition-colors  pb-20 md:pb-28">
             {/* RIGHT animated shapes (optional, subtle in dark) */}

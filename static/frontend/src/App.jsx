@@ -33,7 +33,7 @@ export default function App() {
   const isSignup = hash.startsWith('#/signup');
   const isLogin = hash.startsWith('#/login');
   const isCreate = hash.startsWith("#/create") && (hash.includes("guest=true") || isAuthenticated());
-  const isEdit = hash.startsWith('#/edit') && isAuthenticated();
+  const isEdit = hash.startsWith('#/edit');
 
   useEffect(() => {
     const sectionLinks = ['#about', '#episodes'];

@@ -1,36 +1,77 @@
 # ==============================================
-# 🧠 WeCast — Quick Setup & Run Instructions
+# 🧠 WeCast — Full Setup & Run Instructions
 # ==============================================
 # 1️⃣ Create and activate the virtual environment
-# python -m venv venv
-# venv\Scripts\activate (Windows)
-# source venv/bin/activate (Mac/Linux)
+#     python -m venv venv
+#     venv\Scripts\activate       (Windows)
+#     source venv/bin/activate    (Mac/Linux)
+#
 # 2️⃣ Install all Python dependencies
-# pip install -r requirements.txt
-# 3️⃣ Start the Flask backend
-# python app.py
+#     pip install -r requirements.txt
+#
+# 3️⃣ Install FFmpeg (Required for audio processing)
+# --------------------------------------------------
+#   • Windows:
+#       Download from: https://www.gyan.dev/ffmpeg/builds/
+#       Extract the ZIP
+#       Set the full path in .env file:
+#
+#       FFMPEG_PATH=C:/path/to/ffmpeg/bin/ffmpeg.exe
+#       FFPROBE_PATH=C:/path/to/ffmpeg/bin/ffprobe.exe
+#
+#   • Mac:
+#       brew install ffmpeg
+#
+#   • Linux (Ubuntu):
+#       sudo apt install ffmpeg
+#
+#   ⚠️ Very Important:
+#   Your .env file MUST contain the correct paths, otherwise
+#   audio generation will fail.
+#
+# --------------------------------------------------
+#
+# 4️⃣ Environment Variables Required (create .env file next to app.py)
+# --------------------------------------------------
+# OPENAI_API_KEY=your_key_here
+# ELEVENLABS_API_KEY=your_key_here
+# FFMPEG_PATH=C:/full/path/to/ffmpeg.exe
+# FFPROBE_PATH=C:/full/path/to/ffprobe.exe
+#
+# --------------------------------------------------
+#
+# 5️⃣ Start the Flask backend
+#     python app.py
 # → Backend runs at: http://127.0.0.1:5000
-# → NOTE: This route redirects automatically to React (http://localhost:5173
-# )
-# 4️⃣ Setup React (Frontend)
-# cd static/frontend
-# npm install
-# 5️⃣ Run the React development server
-# npm run dev
+#
+# 6️⃣ Setup React (Frontend)
+#     cd static/frontend
+#     npm install
+#
+# 7️⃣ Run the React development server
+#     npm run dev
 # → Frontend runs at: http://localhost:5173
-# 6️⃣ How the system works (development mode)
-# ✅ React = frontend (UI)
-# ✅ Flask = backend (API)
-# ✅ Both must run at the same time
-# ✅ Visiting Flask root (http://127.0.0.1:5000
-# ) redirects to React
-# ✅ React connects to Flask APIs through /api/ routes
-# 7️⃣ (Optional) Build React for production
-# npm run build
-# → Creates "dist/" folder (used only for deployment, not needed for local dev)
-# 8️⃣ Stop servers
-# Press CTRL+C in each terminal
+#
+# --------------------------------------------------
+#
+# 8️⃣ Development notes
+#   • Flask backend handles all API routes (/api/*)
+#   • React frontend handles all UI
+#   • Both must run at the same time
+#   • Flask root URL redirects automatically to React
+#
+# --------------------------------------------------
+#
+# 9️⃣ Optional: Build React for production
+#     npm run build
+#
+# 1️⃣0️⃣ Stop servers
+#     Press CTRL+C in each terminal
+#
 # ==============================================
+# Python Dependencies
+# ==============================================
+
 Flask==3.0.3
 Flask-Cors
 gunicorn
@@ -40,3 +81,4 @@ python-dotenv==1.0.1
 httpx<0.28
 elevenlabs
 firebase-admin
+pydub

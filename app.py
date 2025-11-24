@@ -14,6 +14,7 @@ from flask_session import Session
 from dotenv import load_dotenv
 from openai import OpenAI
 from pydub import AudioSegment
+from pydub.utils import which
 from io import BytesIO
 from elevenlabs.client import ElevenLabs
 import os
@@ -67,6 +68,22 @@ Session(app)
 # Load .env
 load_dotenv()
 app.secret_key = "supersecretkey"
+
+# Configure pydub to find FFmpeg in a portable way
+from pydub.utils import which
+
+ffmpeg_path = os.getenv("FFMPEG_PATH") or which("ffmpeg")
+ffprobe_path = os.getenv("FFPROBE_PATH") or which("ffprobe")
+
+print("DEBUG ffmpeg_path:", ffmpeg_path)
+print("DEBUG ffprobe_path:", ffprobe_path)
+
+if ffmpeg_path:
+    AudioSegment.converter = ffmpeg_path
+if ffprobe_path:
+    AudioSegment.ffprobe = ffprobe_path
+
+
 
 def create_token(user_id, email):
     payload = {

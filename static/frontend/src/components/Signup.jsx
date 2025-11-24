@@ -5,6 +5,25 @@ import { auth, googleProvider, githubProvider } from "../firebaseClient";
 
 const API_BASE = "http://127.0.0.1:5000";
 
+function getRedirectTarget() {
+    const hash = window.location.hash || "";
+    // Example: "#/signup?redirect=edit"
+    const match = hash.match(/redirect=([^&]+)/);
+    return match ? decodeURIComponent(match[1]) : "";
+}
+
+function redirectAfterAuth() {
+    const redirect = getRedirectTarget();
+    if (redirect === "edit") {
+        window.location.hash = "#/edit";
+    } else if (redirect === "create") {
+        window.location.hash = "#/create";
+    } else {
+        window.location.hash = "#/";
+    }
+}
+
+
 export default function Signup() {
     const [form, setForm] = useState({ username: "", email: "", password: "" });
     const [showPw, setShowPw] = useState(false);
@@ -41,6 +60,7 @@ export default function Signup() {
                 headers: {
                     "Content-Type": "application/json",
                 },
+                credentials: "include",   // ← ADD THIS LINE
                 body: JSON.stringify({
                     name: form.username,      // backend expects "name"
                     email: form.email,
@@ -65,8 +85,13 @@ export default function Signup() {
                 localStorage.setItem("user", JSON.stringify(data.user));
             }
 
-            // redirect to dashboard/home (#/)
-            window.location.hash = "#/";
+            // notify header and redirect based on redirect=...
+            window.dispatchEvent(
+                new StorageEvent("storage", { key: "token", newValue: data.token || "" })
+            );
+
+            redirectAfterAuth();
+
 
         } catch (err) {
             console.error("SIGNUP ERROR:", err);
@@ -77,76 +102,82 @@ export default function Signup() {
     };
 
     const handleGoogleSignup = async () => {
-    setError("");
-    setLoading(true);
+        setError("");
+        setLoading(true);
 
-    try {
-        const result = await signInWithPopup(auth, googleProvider);
-        const user = result.user;
-        const idToken = await user.getIdToken();
+        try {
+            const result = await signInWithPopup(auth, googleProvider);
+            const user = result.user;
+            const idToken = await user.getIdToken();
 
-        const res = await fetch(`${API_BASE}/api/social-login`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ idToken }),
-        });
+            const res = await fetch(`${API_BASE}/api/social-login`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ idToken }),
+            });
 
-        const data = await res.json();
+            const data = await res.json();
 
-        if (!res.ok) {
-            setError(data.error || "Signup failed.");
-            return;
+            if (!res.ok) {
+                setError(data.error || "Signup failed.");
+                return;
+            }
+
+            localStorage.setItem("token", data.token);
+            localStorage.setItem("user", JSON.stringify(data.user));
+
+            window.dispatchEvent(
+                new StorageEvent("storage", { key: "token", newValue: data.token })
+            );
+
+            redirectAfterAuth();
+
+
+        } catch (err) {
+            console.error("GOOGLE SIGNUP ERROR:", err);
+            setError("Google signup failed. Please try again.");
+        } finally {
+            setLoading(false);
         }
+    };
 
-        localStorage.setItem("token", data.token);
-        localStorage.setItem("user", JSON.stringify(data.user));
+    const handleGithubSignup = async () => {
+        setError("");
+        setLoading(true);
 
-        window.dispatchEvent(new StorageEvent("storage", { key: "token", newValue: data.token }));
-        window.location.hash = "#/";
+        try {
+            const result = await signInWithPopup(auth, githubProvider);
+            const user = result.user;
+            const idToken = await user.getIdToken();
 
-    } catch (err) {
-        console.error("GOOGLE SIGNUP ERROR:", err);
-        setError("Google signup failed. Please try again.");
-    } finally {
-        setLoading(false);
-    }
-};
+            const res = await fetch(`${API_BASE}/api/social-login`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ idToken }),
+            });
 
-const handleGithubSignup = async () => {
-    setError("");
-    setLoading(true);
+            const data = await res.json();
 
-    try {
-        const result = await signInWithPopup(auth, githubProvider);
-        const user = result.user;
-        const idToken = await user.getIdToken();
+            if (!res.ok) {
+                setError(data.error || "Signup failed.");
+                return;
+            }
 
-        const res = await fetch(`${API_BASE}/api/social-login`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ idToken }),
-        });
+            localStorage.setItem("token", data.token);
+            localStorage.setItem("user", JSON.stringify(data.user));
 
-        const data = await res.json();
+            window.dispatchEvent(new StorageEvent("storage", { key: "token", newValue: data.token }));
+            window.location.hash = "#/";
 
-        if (!res.ok) {
-            setError(data.error || "Signup failed.");
-            return;
+        } catch (err) {
+            console.error("GITHUB SIGNUP ERROR:", err);
+            setError("GitHub signup failed. Please try again.");
+        } finally {
+            setLoading(false);
         }
-
-        localStorage.setItem("token", data.token);
-        localStorage.setItem("user", JSON.stringify(data.user));
-
-        window.dispatchEvent(new StorageEvent("storage", { key: "token", newValue: data.token }));
-        window.location.hash = "#/";
-
-    } catch (err) {
-        console.error("GITHUB SIGNUP ERROR:", err);
-        setError("GitHub signup failed. Please try again.");
-    } finally {
-        setLoading(false);
-    }
-};
+    };
 
     return (
         <div className="relative min-h-screen flex items-center justify-center bg-cream dark:bg-[#0a0a1a] text-black dark:text-white px-4 py-12 overflow-hidden">
@@ -266,8 +297,8 @@ const handleGithubSignup = async () => {
                                             passwordScore >= 4
                                                 ? "#22c55e"
                                                 : passwordScore >= 3
-                                                ? "#f59e0b"
-                                                : "#ef4444",
+                                                    ? "#f59e0b"
+                                                    : "#ef4444",
                                     }}
                                 />
                             </div>
@@ -291,45 +322,47 @@ const handleGithubSignup = async () => {
                         {loading ? "Creating account..." : "Create account"}
                     </button>
                     <div className="flex items-center gap-4 my-4">
-                    <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
-                    <span className="text-xs text-black/50 dark:text-white/50">or</span>
-                    <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
+                        <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
+                        <span className="text-xs text-black/50 dark:text-white/50">or</span>
+                        <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
                     </div>
 
-                  <div className="space-y-3">
-                    <button
-                        type="button"
-                        onClick={handleGoogleSignup}
-                        disabled={loading}
-                        className="w-full inline-flex items-center justify-center gap-3 border rounded-lg py-2.5 font-medium transition
+                    <div className="space-y-3">
+                        <button
+                            type="button"
+                            onClick={handleGoogleSignup}
+                            disabled={loading}
+                            className="w-full inline-flex items-center justify-center gap-3 border rounded-lg py-2.5 font-medium transition
                         hover:bg-black/5 dark:hover:bg-white/10
                         border-black/10 dark:border-white/15
                         text-black dark:text-white"
-                    >
-                        <svg viewBox="0 0 48 48" className="w-5 h-5">
-                        <path fill="#FFC107" d="M43.611 ..."/>
-                        <path fill="#FF3D00" d="M6.306 ..."/>
-                        <path fill="#4CAF50" d="M24 ..."/>
-                        <path fill="#1976D2" d="M43.611 ..."/>
-                        </svg>
-                        Continue with Google
-                    </button>
+                        >
+                            <svg viewBox="0 0 48 48" className="w-5 h-5" aria-hidden>
+                                <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12S17.373 12 24 12c3.059 0 5.84 1.154 7.957 3.043l5.657-5.657C34.842 6.053 29.704 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.345-.138-2.655-.389-3.917z" />
+                                <path fill="#FF3D00" d="M6.306 14.691l6.571 4.814C14.4 16.042 18.844 12 24 12c3.059 0 5.84 1.154 7.957 3.043l5.657-5.657C34.842 6.053 29.704 4 24 4 16.318 4 9.656 8.337 6.306 14.691z" />
+                                <path fill="#4CAF50" d="M24 44c5.164 0 9.86-1.977 13.39-5.205l-6.177-5.219C29.154 35.846 26.727 36.8 24 36.8c-5.192 0-9.602-3.317-11.242-7.943l-6.54 5.038C9.58 39.63 16.261 44 24 44z" />
+                                <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303c-.791 2.233-2.273 4.134-4.09 5.556l6.177 5.219C39.708 35.911 44 30.455 44 24c0-1.345-.138-2.655-.389-3.917z" />
+                            </svg>
 
-                    <button
-                        type="button"
-                        onClick={handleGithubSignup}
-                        disabled={loading}
-                        className="w-full inline-flex items-center justify-center gap-3 border rounded-lg py-2.5 font-medium transition
+                            Continue with Google
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={handleGithubSignup}
+                            disabled={loading}
+                            className="w-full inline-flex items-center justify-center gap-3 border rounded-lg py-2.5 font-medium transition
                         hover:bg-black/5 dark:hover:bg-white/10
                         border-black/10 dark:border-white/15
                         text-black dark:text-white"
-                    >
-                        <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor">
-                        <path d="M12 .5 ..."/>
-                        </svg>
-                        Continue with GitHub
-                    </button>
-                  </div>
+                        >
+                            <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor" aria-hidden>
+                                <path d="M12 .5a12 12 0 0 0-3.793 23.4c.6.11.82-.26.82-.58v-2.02c-3.338.73-4.04-1.61-4.04-1.61-.546-1.39-1.333-1.76-1.333-1.76-1.09-.75.083-.734.083-.734 1.205.086 1.84 1.238 1.84 1.238 1.07 1.835 2.807 1.305 3.492.998.108-.79.418-1.305.76-1.604-2.665-.304-5.467-1.333-5.467-5.93 0-1.31.47-2.38 1.236-3.22-.124-.304-.536-1.527.117-3.183 0 0 1.008-.322 3.303 1.23a11.5 11.5 0 0 1 6.006 0c2.294-1.552 3.301-1.23 3.301-1.23.655 1.656.243 2.879.12 3.183.77.84 1.235 1.91 1.235 3.22 0 4.61-2.807 5.624-5.48 5.922.43.37.816 1.102.816 2.222v3.293c0 .322.216.696.826.578A12 12 0 0 0 12 .5z" />
+                            </svg>
+
+                            Continue with GitHub
+                        </button>
+                    </div>
 
                     <p className="text-center text-sm text-neutral-600 dark:text-neutral-300">
                         Already have an account?{" "}
