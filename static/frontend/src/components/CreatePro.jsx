@@ -329,25 +329,30 @@ export default function CreatePro() {
     const [outroMusic, setOutroMusic] = useState("");
     const [availableTracks, setAvailableTracks] = useState([]);
 
-    //هذي بنخليها بالداتابيس ف اسحبوا عليها 
     const MUSIC_CATEGORIES = {
         dramatic: [
-            { file: "Music 1 intro C1.mp3", name: "Epic Build" },
-            { file: "Music 1 Body C1.mp3", name: "Dark Piano" },
-            { file: "Music 1 Outro C1.mp3", name: " Build" },
+            { file: "Music dramatic 1.mp3", name: "Deamatic 1" },
+            { file: "Music dramatic 2.mp3", name: "Deamatic 2" },
+            { file: "Music 3 dramatic.mp3", name: "Deamatic 3" },
 
         ],
         chill: [
-            { file: "chill1.mp3", name: "LoFi Breeze" },
-            { file: "chill2.mp3", name: "Soft Guitar" },
+            { file: "Music 1 chill.mp3", name: "Chill 1" },
+            { file: "Music 2 chill.mp3", name: "Chill 2" },
+            { file: "Music 3 chill.mp3", name: "Chill 3" },
+
         ],
         classics: [
-            { file: "classic1.mp3", name: "Beethoven Intro" },
-            { file: "classic2.mp3", name: "Soft Symphony" },
+            { file: "Music classic 1.mp3", name: "Classic 1" },
+            { file: "Music classic 2.mp3", name: "Classic 2" },
+            { file: "Music classic 3.mp3", name: "Classic 3" },
+
         ],
         arabic: [
-            { file: "oud1.mp3", name: "Deep Oud" },
-            { file: "oud2.mp3", name: "Modern Middle East" },
+            { file: "Arabic music 1.mp3", name: "Arabic 1" },
+            { file: "Arabic music 2.mp3", name: "Arabic 2" },
+            { file: "Arabic music 3.mp3", name: "Arabic 3" },
+
         ],
     };
 
