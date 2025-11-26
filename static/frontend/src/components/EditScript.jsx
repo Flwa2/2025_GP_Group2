@@ -346,7 +346,7 @@ export default function EditScript() {
     const badLine = findEmptySpeakerLine(script);
     if (badLine !== -1) {
       setSaveMsg(
-        "Each speaker line must include text after the colon. Please fix the highlighted line."
+        "Each speaker line must include text after the colon."
       );
       focusEmptySpeakerLine(script);
       return;
@@ -392,7 +392,7 @@ export default function EditScript() {
     const badLine = findEmptySpeakerLine(script);
     if (badLine !== -1) {
       setSaveMsg(
-        "Each speaker line must include text after the colon. Please fix the highlighted line before continuing."
+        "Each speaker line must include text after the colon."
       );
       focusEmptySpeakerLine(script);
       return;
@@ -629,7 +629,17 @@ export default function EditScript() {
                   </div>
                 </div>
 
-                <div className="mt-2 text-sm text-black/70 dark:text-white/70">{saveMsg}</div>
+                <div
+                  className={
+                    "mt-2 text-sm " +
+                    (saveMsg.includes("Each speaker line must include text after the colon")
+                      ? "text-red-500"
+                      : "text-black/70 dark:text-white/70")
+                  }
+                >
+                  {saveMsg}
+                </div>
+
 
 
               </>

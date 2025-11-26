@@ -52,6 +52,22 @@ export default function Signup() {
     const onSubmit = async (e) => {
         e.preventDefault();
         setError("");
+
+        const password = form.password || "";
+
+        // Password rule from AC
+        const hasMinLength = password.length >= 8;
+        const hasUppercase = /[A-Z]/.test(password);
+        const hasNumber = /\d/.test(password);
+        const hasSpecial = /[^A-Za-z0-9]/.test(password);
+
+        if (!hasMinLength || !hasUppercase || !hasNumber || !hasSpecial) {
+            setError(
+                "Password must be at least 8 characters and include one uppercase letter, one number, and one special symbol."
+            );
+            return;
+        }
+
         setLoading(true);
 
         try {
@@ -60,9 +76,9 @@ export default function Signup() {
                 headers: {
                     "Content-Type": "application/json",
                 },
-                credentials: "include",   // ← ADD THIS LINE
+                credentials: "include",
                 body: JSON.stringify({
-                    name: form.username,      // backend expects "name"
+                    name: form.username,
                     email: form.email,
                     password: form.password,
                 }),
@@ -71,13 +87,11 @@ export default function Signup() {
             const data = await res.json();
 
             if (!res.ok) {
-                // backend sends { error: "message" }
                 setError(data.error || "Signup failed. Please try again.");
                 setLoading(false);
                 return;
             }
 
-            // store token + user in localStorage
             if (data.token) {
                 localStorage.setItem("token", data.token);
             }
@@ -85,21 +99,21 @@ export default function Signup() {
                 localStorage.setItem("user", JSON.stringify(data.user));
             }
 
-            // notify header and redirect based on redirect=...
             window.dispatchEvent(
                 new StorageEvent("storage", { key: "token", newValue: data.token || "" })
             );
 
             redirectAfterAuth();
-
-
         } catch (err) {
             console.error("SIGNUP ERROR:", err);
-            setError(err.message || "Something went wrong. Please check your connection and try again.");
+            setError(
+                err.message ||
+                "Something went wrong. Please check your connection and try again."
+            );
             setLoading(false);
         }
-
     };
+
 
     const handleGoogleSignup = async () => {
         setError("");
