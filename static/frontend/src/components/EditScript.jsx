@@ -1,4 +1,4 @@
-// src/components/EditScript.jsx
+
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { Mic2 } from "lucide-react";
@@ -65,7 +65,7 @@ const StepLine = ({ on }) => (
 
 // ----------------------------------------------------------------------------------------
 
-function extractShowTitle(scriptText) {
+function extractTitleFromScript(scriptText) {
   if (!scriptText) return "";
 
   // Match titles inside quotation marks
@@ -77,6 +77,11 @@ function extractShowTitle(scriptText) {
   if (matchKeyword) return matchKeyword[1].trim();
 
   return "";
+}
+
+// Keep extractShowTitle as an alias for compatibility
+function extractShowTitle(scriptText) {
+  return extractTitleFromScript(scriptText);
 }
 
 
@@ -91,40 +96,47 @@ export default function EditScript() {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [titleJustUpdated, setTitleJustUpdated] = useState(false);
-  // NEW: auth + modal
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [toastMsg, setToastMsg] = useState("");
   const isAuthenticated = () => !!localStorage.getItem("token");
 
   const lastValidRef = useRef("");
   const textareaRef = useRef(null);
 
-  // what the user *sees* in the editor
+  
   const displayedScript = scriptTemplate
     ? scriptTemplate.replaceAll("{{SHOW_TITLE}}", showTitle || "Podcast Show")
     : script;
 
-  // NEW: editor change handler (replaces old onChangeSafe)
   const handleScriptChange = (e) => {
     const next = e.target.value;
+const prev = script;
 
-// prevent full wipe when user selects all & delete
-if (next === "" && script.trim() !== "") {
-  setSaveMsg("Script cannot be empty.");
-  return;
-}
-    
-    // don't allow clearing everything (keep your old behavior)
+  const musicRegex = /\[music\]/gi;
+  const prevMusicCount = (prev.match(musicRegex) || []).length;
+  const nextMusicCount = (next.match(musicRegex) || []).length;
+
+  if (nextMusicCount < prevMusicCount) {
+    setScript(lastValidRef.current);
+    return;
+  }
+
+  if (next === "" && script.trim() !== "") {
+    setScript(lastValidRef.current);
+    setToastMsg("You cannot clear the entire script!");
+    setTimeout(() => setToastMsg(""), 3000);
+    return;
+  }
+  
     if (next.trim() === "") {
       setScript(lastValidRef.current);
       setSaveMsg("You can't clear the entire script.");
       return;
     }
 
-    // visible script
     setScript(next);
     lastValidRef.current = next;
 
-    // keep template version in sync by replacing show title with placeholder
     const placeholder = "{{SHOW_TITLE}}";
     const title = showTitle || "Podcast Show";
     const templated = next.replaceAll(title, placeholder);
@@ -144,22 +156,18 @@ if (next === "" && script.trim() !== "") {
     const trimmed = draftTitle.trim();
     if (!trimmed) return;
 
-    // Decide what text we use as the base
     const currentTitle = showTitle || "Podcast Show";
     const placeholder = "{{SHOW_TITLE}}";
 
-    // If we do not have a template yet, derive it from the current script
     const baseText = scriptTemplate || script || "";
     if (!baseText) {
       setIsEditingTitle(false);
       return;
     }
-
-    // Build / update the template with the placeholder
+   
     const newTemplate = baseText.replaceAll(currentTitle, placeholder);
     setScriptTemplate(newTemplate);
 
-    // Now build the visible script with the new title
     const updatedVisible = newTemplate.replaceAll(placeholder, trimmed);
     setShowTitle(trimmed);
     setScript(updatedVisible);
@@ -184,14 +192,12 @@ if (next === "" && script.trim() !== "") {
       lastValidRef.current = initial;
       setLoadingDraft(false);
 
-      // Clear guest draft once it has been restored
       sessionStorage.removeItem("guestEditDraft");
       return;
 
     }
 
-    // 2) If still a guest, restore from editData (coming from CreatePro)
-    // 2) If still a guest, restore from editData (coming from CreatePro)
+    // 2) If still a guest, restore from editData 
     if (!isAuthenticated()) {
       const fromCreate = JSON.parse(sessionStorage.getItem("editData") || "{}");
 
@@ -234,7 +240,7 @@ if (next === "" && script.trim() !== "") {
         const template = (d.script || "").trim();        // template with {{SHOW_TITLE}}
         const show =
           (d.show_title || "").trim() ||                 // show name extracted from script
-          (d.title || "").trim();                        // 👈 OpenAI episode title as fallback
+          (d.title || "").trim();                       
 
         const visible = template
           ? template.replaceAll("{{SHOW_TITLE}}", show || "Podcast Show")
@@ -252,7 +258,6 @@ if (next === "" && script.trim() !== "") {
 
 
   useEffect(() => {
-    // Save edit data when component mounts for navigation back
     const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
     sessionStorage.setItem('editScriptStyle', editData.scriptStyle || '');
     sessionStorage.setItem('editSpeakersCount', editData.speakersCount || '');
@@ -277,36 +282,43 @@ if (next === "" && script.trim() !== "") {
     return { lineStart, lineEnd, colonIdx };
   };
 
-  const onKeyDownGuard = (e) => {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    const val = ta.value;
-    const { selectionStart: start, selectionEnd: end } = ta;
+const onKeyDownGuard = (e) => {
+  const ta = textareaRef.current;
+  if (!ta) return;
+  const val = ta.value;
+  const { selectionStart: start, selectionEnd: end } = ta;
 
-    const affects =
-      e.key.length === 1 ||
-      e.key === "Backspace" ||
-      e.key === "Delete" ||
-      e.key === "Enter" ||
-      e.key === "Tab";
-    if (!affects) return;
+  const affects =
+    e.key.length === 1 ||
+    e.key === "Backspace" ||
+    e.key === "Delete" ||
+    e.key === "Enter" ||
+    e.key === "Tab";
+  if (!affects) return;
 
-    const { lineStart, colonIdx } = getLineMeta(val, start);
-    if (colonIdx !== -1) {
-      const labelEnd = colonIdx + 1; // includes colon
-      const touchesLabel = start <= labelEnd || end <= labelEnd;
-      if (touchesLabel) {
-        e.preventDefault();
-        const safe =
-          val[colonIdx + 1] === " " ? colonIdx + 2 : colonIdx + 1;
-        requestAnimationFrame(() => {
-          ta.selectionStart = ta.selectionEnd = Math.max(safe, start, end);
-        });
-      }
+  if ((e.key === "Delete" || e.key === "Backspace") && start === 0 && end === val.length) {
+    e.preventDefault();
+    setToastMsg("You cannot delete the entire script!");
+    setTimeout(() => setToastMsg(""), 3000); 
+    return;
+  }
+
+  const { lineStart, colonIdx } = getLineMeta(val, start);
+  if (colonIdx !== -1) {
+    const labelEnd = colonIdx + 1; 
+    const touchesLabel = start <= labelEnd || end <= labelEnd;
+    if (touchesLabel) {
+      e.preventDefault();
+      const safe =
+        val[colonIdx + 1] === " " ? colonIdx + 2 : colonIdx + 1;
+      requestAnimationFrame(() => {
+        ta.selectionStart = ta.selectionEnd = Math.max(safe, start, end);
+      });
     }
-  };
+  }
+};
 
-  // returns index of first bad line, or -1 if all good
+
   const findEmptySpeakerLine = (text) => {
     if (!text) return -1;
 
@@ -315,7 +327,6 @@ if (next === "" && script.trim() !== "") {
       const raw = lines[i];
       const line = raw.trim();
 
-      // matches: "Marshall:" or "Host :" with nothing after the colon
       if (/^([^:：]+)\s*[:：]\s*$/.test(line)) {
         return i;
       }
@@ -331,10 +342,10 @@ if (next === "" && script.trim() !== "") {
     const badIndex = findEmptySpeakerLine(text);
     if (badIndex === -1) return;
 
-    // compute cursor position at end of that line
+ 
     let offset = 0;
     for (let i = 0; i < badIndex; i++) {
-      offset += lines[i].length + 1; // +1 for newline
+      offset += lines[i].length + 1; 
     }
     offset += lines[badIndex].length;
 
@@ -358,7 +369,6 @@ if (next === "" && script.trim() !== "") {
       return;
     }
 
-    // Guest: show login/signup window instead of calling backend
     if (!isAuthenticated()) {
       sessionStorage.setItem("guestEditDraft", content);
       setSaveMsg("Sign up or log in to save your script.");
@@ -366,7 +376,6 @@ if (next === "" && script.trim() !== "") {
       return;
     }
 
-    // Auth user: normal save
     setSaving(true);
     setSaveMsg("Saving…");
     try {
@@ -384,9 +393,6 @@ if (next === "" && script.trim() !== "") {
       setSaving(false);
     }
   };
-
-
-
 
   const navigateToAudio = async () => {
     const trimmed = script.trim();
@@ -406,7 +412,6 @@ if (next === "" && script.trim() !== "") {
 
     const content = trimmed;
 
-    // save to backend (optional)
     if (content) {
       setSaving(true);
       try {
@@ -423,7 +428,6 @@ if (next === "" && script.trim() !== "") {
       }
     }
 
-    // push everything back to CreatePro
     const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
     const updatedEditData = {
       ...editData,
@@ -455,7 +459,7 @@ if (next === "" && script.trim() !== "") {
           </p>
         </header>
 
-        {/* Stepper - matches CreatePro.jsx */}
+        {/* Stepper */}
         <div className="w-full rounded-2xl bg-white/60 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 p-4 mb-8">
           <div className="flex items-center gap-2">
             <StepDot n={1} label="Choose Style" done />
@@ -645,12 +649,7 @@ if (next === "" && script.trim() !== "") {
                 >
                   {saveMsg}
                 </div>
-
-
-
               </>
-
-
             )}
 
             {showAuthModal && (
@@ -704,6 +703,14 @@ if (next === "" && script.trim() !== "") {
           </div>
         </div>
       </main>
+      {/* Toast Notification */}
+{toastMsg && (
+  <div className="fixed top-6 right-6 z-[10000] bg-red-500 text-white px-6 py-3 rounded-xl shadow-2xl border border-red-300 animate-in slide-in-from-right-8 duration-300">
+    <div className="flex items-center gap-2 font-semibold">
+      {toastMsg}
+    </div>
+  </div>
+)}
     </div>
   );
 }
