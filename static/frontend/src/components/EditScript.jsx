@@ -107,6 +107,12 @@ export default function EditScript() {
   const handleScriptChange = (e) => {
     const next = e.target.value;
 
+// prevent full wipe when user selects all & delete
+if (next === "" && script.trim() !== "") {
+  setSaveMsg("Script cannot be empty.");
+  return;
+}
+    
     // don't allow clearing everything (keep your old behavior)
     if (next.trim() === "") {
       setScript(lastValidRef.current);
