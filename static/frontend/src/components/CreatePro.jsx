@@ -1,4 +1,4 @@
-// src/components/CreatePro.jsx
+
 import React, { useEffect, useMemo, useState } from "react";
 import {
     Mic2,
@@ -285,8 +285,6 @@ function Toast({ toast, onClose }) {
     );
 }
 
-/* ===================================================================== */
-
 function extractShowTitle(scriptText) {
     if (!scriptText) return "";
 
@@ -303,7 +301,6 @@ function extractShowTitle(scriptText) {
 
 
 export default function CreatePro() {
-    // steps: 1=Style, 2=Speakers, 3=Enter Text, 4=Review & Edit, 5=Transition Music, 6=Audio
     const [step, setStep] = useState(1);
     useEffect(() => {
         sessionStorage.setItem("currentStep", step);
@@ -389,8 +386,6 @@ export default function CreatePro() {
             const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
             const saved = sessionStorage.getItem("currentStep");
 
-            // 1) Coming from Edit
-            // 1) Coming from Edit
             if (editData.fromEdit && editData.generatedScript) {
                 setGeneratedScript(editData.generatedScript);
                 setScriptStyle(editData.scriptStyle || "");
@@ -404,7 +399,6 @@ export default function CreatePro() {
                     (editData.episodeTitle || "").trim();
 
                 if (!titleFromStorage) {
-                    // Last chance: read it from quotes in the script
                     titleFromStorage = extractTitleFromScript(
                         editData.generatedScript || editData.scriptTemplate || ""
                     );
@@ -427,21 +421,17 @@ export default function CreatePro() {
                 return;
             }
 
-
-            // 2) Forced step (for deep links etc)
             if (forceStep) {
                 setStep(parseInt(forceStep));
                 sessionStorage.removeItem("forceStep");
                 return;
             }
-
-            // 3) Step from URL
+      
             if (stepParam) {
                 setStep(parseInt(stepParam));
                 return;
             }
 
-            // 4) Fallback to last saved step
             if (saved) {
                 setStep(parseInt(saved));
             }
@@ -877,12 +867,12 @@ export default function CreatePro() {
         setGeneratedAudio(null);
 
         try {
-            const response = await fetch("/api/audio", {  // ← CHANGED TO /api/audio
+            const response = await fetch("/api/audio", {  
                 method: "POST",
                 credentials: "include",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    scriptText: generatedScript,  // ← CHANGED TO scriptText
+                    scriptText: generatedScript,  
                     script_style: scriptStyle,
                     speakers_info: speakers,
                 }),
@@ -890,11 +880,11 @@ export default function CreatePro() {
 
             const data = await response.json();
 
-            if (!response.ok || !data.url) {  // ← CHANGED TO data.url
+            if (!response.ok || !data.url) {  
                 throw new Error(data.error || "Audio generation failed");
             }
 
-            setGeneratedAudio(data.url + "?t=" + Date.now());  // ← CHANGED TO data.url
+            setGeneratedAudio(data.url + "?t=" + Date.now());  
             setToast({
                 type: "success",
                 message: "Audio generated successfully!",
@@ -939,7 +929,7 @@ export default function CreatePro() {
     };
 
 
-    /* ---------- stepper (done=gray) ---------- */
+    /* ---------- stepper ---------- */
     const StepDot = ({ n, label }) => {
         const state = step === n ? "active" : step > n ? "done" : "pending";
         const dot = state === "active" ? "bg-purple-600 text-white shadow" :
@@ -1135,7 +1125,7 @@ export default function CreatePro() {
                                                 key={i}
                                                 className="rounded-xl border border-neutral-300 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 w-full"
                                             >
-                                                {/* Card title now uses role label */}
+                                                {/* Card title */}
                                                 <h3 className="text-sm font-bold text-black/80 dark:text-white/80">
                                                     {label}
                                                 </h3>
@@ -1167,7 +1157,7 @@ export default function CreatePro() {
                                                         />
                                                     </div>
 
-                                                    {/* Gender ONLY (Role field removed) */}
+                                                    {/* Gender */}
                                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                                         <div>
                                                             <label className="form-label">Gender</label>
@@ -1195,7 +1185,7 @@ export default function CreatePro() {
                                                         </div>
                                                     </div>
 
-                                                    {/* Voice picker (unchanged) */}
+                                                    {/* Voice picker */}
                                                     <div>
                                                         <label className="form-label">Voice</label>
                                                         {loadingVoices ? (
@@ -1229,7 +1219,7 @@ export default function CreatePro() {
                                                                             );
 
                                                                             if (alreadyUsed) {
-                                                                                alert("⚠️ This voice is already used by another speaker. Please choose a different one.");
+                                                                                alert("This voice is already used by another speaker. Please choose a different one.");
                                                                                 return;
                                                                             }
 
@@ -1444,11 +1434,11 @@ export default function CreatePro() {
                             </div>
                         </section>
                     )}
-                    {/* STEP 5: TRANSITION MUSIC (placeholder) */}
+                    {/* STEP 5: TRANSITION MUSIC */}
                     {step === 5 && (
                         <section className="ui-card">
                             <h2 className="ui-card-title flex items-center gap-2 justify-center">
-                                🎧 Select Transition Music
+                                Select Transition Music
                             </h2>
 
                             <p className="text-center text-sm text-black/60 dark:text-white/60 mt-2">
@@ -1490,7 +1480,7 @@ export default function CreatePro() {
 
                                         {category === cat && (
                                             <span className="absolute top-2 right-3 text-purple-500 text-xs">
-                                                ✓ Selected
+                                                 Selected
                                             </span>
                                         )}
                                     </label>
@@ -1537,7 +1527,7 @@ export default function CreatePro() {
                                                         }
                                                     }}
                                                 >
-                                                    ▶ Preview
+                                                     Preview
                                                 </button>
                                             </div>
                                         </div>
@@ -1605,7 +1595,7 @@ export default function CreatePro() {
                                         }}
                                         className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
                                     >
-                                        Continue to Audio →
+                                        Continue to Audio 
                                     </button>
                                 </div>
                             </div>
@@ -1665,7 +1655,7 @@ export default function CreatePro() {
                                 <div className="space-y-6">
                                     <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800">
                                         <h3 className="text-xl font-bold text-green-700 dark:text-green-300 mb-4 flex items-center gap-2 justify-center">
-                                            <Check className="w-5 h-5" /> Audio Generated Successfully! 🎉
+                                            <Check className="w-5 h-5" /> Audio Generated Successfully! 
                                         </h3>
 
                                         {/* Audio Player */}
