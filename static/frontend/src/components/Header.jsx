@@ -16,11 +16,10 @@ export default function Header() {
   };
 
   useEffect(() => {
-    // check once on mount
-    const token = localStorage.getItem("token");
+    const token =
+      localStorage.getItem("token") || sessionStorage.getItem("token");
     setLoggedIn(!!token);
 
-    // optional: react to token changes from other tabs / logout
     const handleStorage = (e) => {
       if (e.key === "token") {
         setLoggedIn(!!e.newValue);
@@ -31,7 +30,7 @@ export default function Header() {
   }, []);
 
   const scrollToTop = () => {
-    window.location.hash = "#/"; 
+    window.location.hash = "#/";
     setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
   };
 
@@ -41,11 +40,11 @@ export default function Header() {
         {/* LEFT: logo + animated WeCast */}
         <div className="flex items-center gap-2">
           <button onClick={scrollToTop}>
-          <img
-            src="/logo.png"
-            alt="WeCast logo"
-            className="w-8 h-8 object-contain"
-          />
+            <img
+              src="/logo.png"
+              alt="WeCast logo"
+              className="w-8 h-8 object-contain"
+            />
           </button>
           <button onClick={scrollToTop} className="corner-logo block">
             <strong className="text-3xl md:text-2xl font-black tracking-wide text-black dark:text-white">

@@ -7,7 +7,6 @@ const API_BASE = "http://127.0.0.1:5000";
 
 function getRedirectTarget() {
     const hash = window.location.hash || "";
-    // Example: "#/signup?redirect=edit"
     const match = hash.match(/redirect=([^&]+)/);
     return match ? decodeURIComponent(match[1]) : "";
 }
@@ -54,8 +53,6 @@ export default function Signup() {
         setError("");
 
         const password = form.password || "";
-
-        // Password rule from AC
         const hasMinLength = password.length >= 8;
         const hasUppercase = /[A-Z]/.test(password);
         const hasNumber = /\d/.test(password);
@@ -209,7 +206,7 @@ export default function Signup() {
                 }}
             />
 
-            {/* ===== Animated Accent Shapes (Blah blah, leaving your UI as-is) ===== */}
+            {/* ===== Animated Accent Shapes ===== */}
             <div className="pointer-events-none absolute z-0 right-[30px] bottom-[60px] hidden md:block">
                 <div className="relative h-[200px] w-[200px]">
                     <span className="absolute left-1/2 top-1/2 -ml-2 -mt-2 h-4 w-4 rounded-full bg-purple-600/80 dark:bg-purple-400/80 animate-circular" />

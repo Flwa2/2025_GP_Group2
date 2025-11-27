@@ -22,9 +22,6 @@ from firebase_admin import firestore
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 import jwt
-import secrets
-import math
-
 from firebase_init import db  
 print("🔍 DEBUG in app.py:", db)
 
@@ -90,6 +87,21 @@ def create_token(user_id, email):
     token = jwt.encode(payload, app.config["SECRET_KEY"], algorithm="HS256")
     return token
 
+
+def get_current_user_email():
+    """Read JWT from Authorization header and return the email inside it."""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+
+    token = auth_header.split(" ", 1)[1].strip()
+    try:
+        payload = jwt.decode(token, app.config["SECRET_KEY"], algorithms=["HS256"])
+        return payload.get("email") or payload.get("user_id")
+    except Exception as e:
+        print("JWT decode failed:", e)
+        return None
+
 # ------------------------------------------------------------
 # API Clients (OpenAI + ElevenLabs)
 # ------------------------------------------------------------
@@ -108,98 +120,6 @@ if not ELEVENLABS_API_KEY:
 
 voice_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
-
-FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173")
-
-# ------------------------------------------------------------
-USE_REAL_EMAIL = False  
-
-# ------------------------------------------------------------
-# Password reset helper (console version for GP)
-# ------------------------------------------------------------
-
-def send_reset_email(to_email: str, reset_link: str):
-    """
-    For the GP demo:
-    We simulate sending a reset email by printing the content
-    to the backend console.
-
-    Later you can replace this with a real email provider
-    (Resend, Mailgun, Gmail SMTP, etc.) but keep the same function name.
-    """
-    subject = "WeCast password reset"
-
-    plain_text_body = f"""
-Hello from WeCast,
-
-We received a request to reset the password for your account.
-
-To choose a new password, please open the link below:
-
-{reset_link}
-
-This link is secure and valid only for a limited time.
-If you did not request a password reset, you can safely ignore this email.
-
-Best regards,
-WeCast Team
-"""
-
-    html_body = f"""
-<html>
-  <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #111827;">
-    <h2 style="color: #4f46e5;">WeCast password reset</h2>
-    <p>Hello from <strong>WeCast</strong>,</p>
-    <p>
-      We received a request to reset the password for your account.
-    </p>
-    <p>
-      To choose a new password, click the button below:
-    </p>
-    <p>
-      <a href="{reset_link}"
-         style="
-           display: inline-block;
-           padding: 10px 18px;
-           background-color: #4f46e5;
-           color: #ffffff;
-           text-decoration: none;
-           border-radius: 6px;
-           font-weight: 600;
-         ">
-        Reset your password
-      </a>
-    </p>
-    <p style="font-size: 14px; color: #6b7280;">
-      If the button does not work, copy and paste this link into your browser:<br/>
-      <span style="word-break: break-all;">{reset_link}</span>
-    </p>
-    <p style="font-size: 14px; color: #6b7280;">
-      This link is secure and valid only for a limited time.<br/>
-      If you did not request a password reset, you can safely ignore this email.
-    </p>
-    <p>Best regards,<br/>WeCast Team</p>
-  </body>
-</html>
-"""
-
-    # For now just print everything to the console
-    print("=== PASSWORD RESET EMAIL (SIMULATED) ===")
-    print("To:", to_email)
-    print("Subject:", subject)
-    print("----- PLAIN TEXT BODY -----")
-    print(plain_text_body)
-    print("----- HTML BODY (for real provider later) -----")
-    print(html_body)
-    print("=========================================")
-    """
-    For the GP demo, we just print the reset link to the terminal.
-    Later you can plug in Gmail, SendGrid, etc.
-    """
-    print("=== PASSWORD RESET EMAIL ===")
-    print("To:", to_email)
-    print("Reset link:", reset_link)
-    print("============================")
 
 # ------------------------------------------------------------
 # Helpers
@@ -571,19 +491,29 @@ def api_voices():
         return jsonify(error=str(e), voices=[]), 500
 
 
-
 @app.get("/api/me")
 def api_me():
     """
-    Simple fake user profile for Account.jsx (can be replaced later with real auth).
+    Return the logged-in user's basic profile from Firestore.
+    Uses the session user_id set during /api/login or /api/social-login.
     """
+    user_id = session.get("user_id")  # we stored email as user_id on login
+
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    user_ref = db.collection("users").document(user_id)
+    doc = user_ref.get()
+
+    if not doc.exists:
+        return jsonify(error="User not found"), 404
+
+    data = doc.to_dict() or {}
+
     return jsonify(
-        displayName="WeCast User",
-        handle="@wecast",
-        bio="I create AI-powered podcasts with WeCast.",
-        avatarUrl="",
-        email="user@example.com",
-        settings={"darkMode": False},
+        email=data.get("email", user_id),
+        displayName=data.get("name", "WeCast User"),  # your “username”
+        handle=data.get("handle", "@wecast"),         # optional, can stay default
     )
 
 @app.post("/api/generate")
@@ -632,8 +562,6 @@ def api_generate():
 
     # 4) Return both script + title to the frontend
     return jsonify(ok=True, script=script_template, title=title, show_title=show_title)
-
-
 
 @app.get("/api/draft")
 def api_draft():
@@ -693,37 +621,37 @@ def clean_script_for_tts(script: str) -> str:
         if not line:
             continue
 
-        # 🔥 Remove markdown headings (# Title)
+        # Remove markdown headings (# Title)
         if line.startswith("#"):
             continue
 
-        # 🔥 Remove INTRO / BODY / OUTRO labels
+        # Remove INTRO / BODY / OUTRO labels
         if re.fullmatch(r"(intro|body|outro)[:：]?\s*$", line, re.IGNORECASE):
             continue
 
-        # 🔥 Remove "Speaker: INTRO"
+        # Remove "Speaker: INTRO"
         if re.match(r"^([^:：]+)[:：]\s*(intro|body|outro)\s*$", line, re.IGNORECASE):
             continue
 
-        # 🔥 Remove standalone sound cue lines except [music]
+        # Remove standalone sound cue lines except [music]
         if re.fullmatch(r"\[[^\]]+\]", line):
             if line.lower() != "[music]":
                 continue
 
-        # 🔥 Remove ANY inline tag like [laugh], [pause], [music], etc.
+        # Remove ANY inline tag like [laugh], [pause], [music], etc.
         line = re.sub(r"\[[^\]]*]", "", line)
 
-        # 🔥 Remove leftover unicode formatting characters
+        # Remove leftover unicode formatting characters
         line = re.sub(r"[\u200B-\u200D\uFEFF]", "", line)
 
-        # 🔥 Remove long separators like ---- or ••••
+        # Remove long separators like ---- or ••••
         if re.fullmatch(r"[-_=*~•·\u2022]{2,}", line):
             continue
 
-        # 🔥 Remove speaker labels ("ga: Hello" → "Hello")
+        # Remove speaker labels ("ga: Hello" → "Hello")
         line = re.sub(r"^[A-Za-z0-9]{1,10}\s*[:：]\s*", "", line)
 
-        # 🔥 Remove accidental leftover beginning symbols
+        # Remove accidental leftover beginning symbols
         line = re.sub(r"^[^\w]+", "", line)
 
         # Cleanup extra spaces
@@ -733,8 +661,6 @@ def clean_script_for_tts(script: str) -> str:
             cleaned_lines.append(line)
 
     return "\n".join(cleaned_lines)
-
-
 
 def build_speaker_voice_map():
     """
@@ -803,7 +729,6 @@ def parse_script_into_segments(script: str):
             segments.append((last_speaker, stripped))
 
     return segments
-
 
 def synthesize_audio_from_script(script: str):
     """
@@ -897,8 +822,7 @@ def synthesize_audio_from_script(script: str):
 
     file_url = url_for("static", filename="output.mp3", _external=True)
     return True, file_url
-    
-    
+     
 @app.post("/api/audio")
 def api_audio():
     """
@@ -1010,7 +934,6 @@ def signup():
         201,
     )
 
-
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json()
@@ -1053,64 +976,15 @@ def login():
         200,
     )
 
-@app.post("/api/request-password-reset")
-def request_password_reset():
-    """
-    Step 1 of reset flow:
-    User submits email. We always respond with the same generic message,
-    and if the account exists we generate a short lived JWT reset token
-    and send a link.
-    """
+@app.post("/api/reset-password-direct")
+def reset_password_direct():
     data = request.get_json(silent=True) or {}
+
     email = (data.get("email") or "").strip().lower()
-
-    if not email:
-        return jsonify(error="Email is required."), 400
-
-    user_ref = db.collection("users").document(email)
-    doc = user_ref.get()
-
-    # Generic message to avoid leaking which emails exist
-    generic_msg = (
-        "If this email is registered, we have sent a secure, time-limited reset link."
-    )
-
-    if not doc.exists:
-        # Still return 200 to avoid user enumeration
-        return jsonify(message=generic_msg), 200
-
-    # Build JWT reset token (stateless, no DB fields)
-    payload = {
-        "email": email,
-        "type": "password_reset",
-        "exp": datetime.utcnow() + timedelta(minutes=30),
-    }
-
-    reset_token = jwt.encode(payload, app.config["SECRET_KEY"], algorithm="HS256")
-
-    # React route that will handle the reset form
-    reset_link = f"{FRONTEND_BASE_URL}/#/reset-password?token={reset_token}"
-
-    # For now we just print to backend console
-    send_reset_email(email, reset_link)
-
-    return jsonify(message=generic_msg), 200
-
-@app.post("/api/reset-password")
-def reset_password():
-    """
-    Step 2 of reset flow:
-    Frontend sends token + new password.
-    We verify the JWT, then update the password hash.
-    No reset data is stored in Firestore.
-    """
-    data = request.get_json(silent=True) or {}
-
-    token = (data.get("token") or "").strip()
     new_password = data.get("new_password") or ""
     confirm_password = data.get("confirm_password") or ""
 
-    if not token or not new_password or not confirm_password:
+    if not email or not new_password or not confirm_password:
         return jsonify(error="All fields are required."), 400
 
     if new_password != confirm_password:
@@ -1119,36 +993,31 @@ def reset_password():
     if len(new_password) < 8:
         return jsonify(error="Password must be at least 8 characters long."), 400
 
-    try:
-        decoded = jwt.decode(
-            token,
-            app.config["SECRET_KEY"],
-            algorithms=["HS256"],
-        )
-    except jwt.ExpiredSignatureError:
-        return jsonify(error="This reset link has expired."), 400
-    except jwt.InvalidTokenError:
-        return jsonify(error="Reset link is invalid."), 400
+    # same strong rule as signup
+    if (
+        not re.search(r"[A-Z]", new_password)
+        or not re.search(r"\d", new_password)
+        or not re.search(r"[^A-Za-z0-9]", new_password)
+    ):
+        return jsonify(
+            {
+                "error": (
+                    "Password must be at least 8 characters and include one "
+                    "uppercase letter, one number, and one special symbol."
+                )
+            }
+        ), 400
 
-    if decoded.get("type") != "password_reset":
-        return jsonify(error="Reset link is invalid."), 400
-
-    email = decoded.get("email")
-    if not email:
-        return jsonify(error="Reset link is invalid."), 400
-
-    # Look up user
     user_ref = db.collection("users").document(email)
     doc = user_ref.get()
-    if not doc.exists:
-        return jsonify(error="User account not found."), 400
 
-    # Update password hash
+    if not doc.exists:
+        return jsonify(error="Email is not registered."), 404
+
     new_hash = generate_password_hash(new_password)
     user_ref.update(
         {
             "password_hash": new_hash,
-            # if later you track failed_attempts / lock_until, reset them here
             "failed_attempts": 0,
             "lock_until": None,
         }

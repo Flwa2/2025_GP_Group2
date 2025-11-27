@@ -15,7 +15,6 @@ export default function HowItWorks() {
           no setup, no mic, no editing.
         </p>
 
-        {/* keep original spacing */}
         {/* 3-step overview */}
         <ol className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
           
@@ -115,7 +114,6 @@ export default function HowItWorks() {
         </ol>
 
 
-        {/* CTA (unchanged size) */}
         <div className="mt-10 flex flex-col items-center gap-3">
           <a
             href="'#/create'"

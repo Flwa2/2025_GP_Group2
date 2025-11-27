@@ -15,7 +15,10 @@ import {
     RotateCcw,
     RotateCw,
     Download,
+    Headphones,
+    Music2,
 } from "lucide-react";
+
 
 /* -------------------- Audio Player Component -------------------- */
 function WeCastAudioPlayer({ src, title = "Generated Audio" }) {
@@ -302,6 +305,7 @@ function extractShowTitle(scriptText) {
 
 export default function CreatePro() {
     const [step, setStep] = useState(1);
+    
     useEffect(() => {
         sessionStorage.setItem("currentStep", step);
     }, [step]);
@@ -426,7 +430,7 @@ export default function CreatePro() {
                 sessionStorage.removeItem("forceStep");
                 return;
             }
-      
+
             if (stepParam) {
                 setStep(parseInt(stepParam));
                 return;
@@ -634,29 +638,62 @@ export default function CreatePro() {
     };
 
 
-    /* ---------- when style changes: reset speakers ---------- */
-    useEffect(() => {
-        if (!scriptStyle) return;
-        const count = defaultCount(scriptStyle);
-        setSpeakersCount(count);
+/* ---------- when style changes: keep existing speaker names ---------- */
+useEffect(() => {
+    if (!scriptStyle) return;
 
+    const count = defaultCount(scriptStyle);
+    setSpeakersCount(count);
+
+    setSpeakers((prev) => {
+        const next = Array.from({ length: count }).map((_, i) => {
+            const old = prev[i] || {};
+            const gender = old.gender || (i === 0 ? "Male" : "Female");
+
+            return {
+                // keep what the user already typed
+                name: old.name || "",
+                gender,
+                role: old.role || "host",
+                // voice will be filled later if empty
+                voiceId: old.voiceId || "",
+            };
+        });
+
+        // apply roles according to the style, but do NOT touch .name
         if (scriptStyle === "Interview") {
-            setSpeakers([
-                { name: "", gender: "Male", role: "host", voiceId: defaultVoiceForGender("Male") },
-                { name: "", gender: "Female", role: "guest", voiceId: defaultVoiceForGender("Female") },
-            ]);
+            if (count === 2) {
+                next[0].role = "host";
+                next[1].role = "guest";
+            } else {
+                next[0].role = "host";
+                next[1].role = "host";
+                next[2].role = "guest";
+            }
         } else if (scriptStyle === "Conversational") {
-            setSpeakers([
-                { name: "", gender: "Male", role: "host", voiceId: defaultVoiceForGender("Male") },
-                { name: "", gender: "Female", role: "host", voiceId: defaultVoiceForGender("Female") },
-            ]);
-        } else {
-            setSpeakers([
-                { name: "", gender: "Male", role: "host", voiceId: defaultVoiceForGender("Male") },
-            ]);
+            next.forEach((s) => {
+                s.role = "host";
+            });
+        } else if (scriptStyle === "Educational" || scriptStyle === "Storytelling") {
+            if (count === 1) {
+                next[0].role = "host";
+            } else if (count === 2) {
+                next[0].role = "host";
+                next[1].role = "guest";
+            } else if (count === 3) {
+                next[0].role = "host";
+                next[1].role = "guest";
+                next[2].role = "guest";
+            }
         }
-        setErrors({});
-    }, [scriptStyle, voices.length]);
+        // other styles fall back to whatever is already there
+
+        return next;
+    });
+
+    setErrors({});
+}, [scriptStyle]);
+
 
     /* ---------- when voices finish loading, fill missing voiceIds ---------- */
     useEffect(() => {
@@ -814,7 +851,6 @@ export default function CreatePro() {
             // template from backend
             const template = data.script;
 
-            // Try all possible keys from backend
             const backendTitle =
                 data.show_title || data.title || "Podcast Episode";
 
@@ -867,12 +903,12 @@ export default function CreatePro() {
         setGeneratedAudio(null);
 
         try {
-            const response = await fetch("/api/audio", {  
+            const response = await fetch("/api/audio", {
                 method: "POST",
                 credentials: "include",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    scriptText: generatedScript,  
+                    scriptText: generatedScript,
                     script_style: scriptStyle,
                     speakers_info: speakers,
                 }),
@@ -880,11 +916,11 @@ export default function CreatePro() {
 
             const data = await response.json();
 
-            if (!response.ok || !data.url) {  
+            if (!response.ok || !data.url) {
                 throw new Error(data.error || "Audio generation failed");
             }
 
-            setGeneratedAudio(data.url + "?t=" + Date.now());  
+            setGeneratedAudio(data.url + "?t=" + Date.now());
             setToast({
                 type: "success",
                 message: "Audio generated successfully!",
@@ -1438,7 +1474,10 @@ export default function CreatePro() {
                     {step === 5 && (
                         <section className="ui-card">
                             <h2 className="ui-card-title flex items-center gap-2 justify-center">
-                                Select Transition Music
+                                <span className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-purple-100 text-purple-600 dark:bg-purple-900/40">
+                                    <Headphones className="w-4 h-4" />
+                                </span>
+                                <span>Select Transition Music</span>
                             </h2>
 
                             <p className="text-center text-sm text-black/60 dark:text-white/60 mt-2">
@@ -1447,44 +1486,85 @@ export default function CreatePro() {
 
                             {/* CATEGORY SELECT */}
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
-                                {Object.keys(MUSIC_CATEGORIES).map((cat) => (
-                                    <label
-                                        key={cat}
-                                        onClick={() => {
-                                            setCategory(cat);
-                                            setAvailableTracks(MUSIC_CATEGORIES[cat]);
-                                        }}
-                                        className={`cursor-pointer group relative w-full p-5 rounded-xl border transition 
-                ${category === cat
-                                                ? "border-purple-500 bg-purple-50"
-                                                : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
-                                            }`}
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            <input
-                                                type="radio"
-                                                checked={category === cat}
-                                                readOnly
-                                                className="accent-purple-600 mt-1"
-                                            />
-                                            <div>
-                                                <div className="font-semibold capitalize">{cat}</div>
-                                                <p className="text-xs text-black/60 dark:text-white/60">
-                                                    {cat === "dramatic" && "Epic emotional cinematic style."}
-                                                    {cat === "arabic" && "Middle eastern oud and oriental tones."}
-                                                    {cat === "chill" && "Relaxed lofi and smooth vibes."}
-                                                    {cat === "classics" && "Soft piano and orchestral melodies."}
-                                                </p>
-                                            </div>
-                                        </div>
+                                {Object.keys(MUSIC_CATEGORIES).map((cat) => {
+                                    const isActive = category === cat;
 
-                                        {category === cat && (
-                                            <span className="absolute top-2 right-3 text-purple-500 text-xs">
-                                                 Selected
-                                            </span>
-                                        )}
-                                    </label>
-                                ))}
+                                    const labelText =
+                                        cat === "dramatic"
+                                            ? "Dramatic"
+                                            : cat === "chill"
+                                                ? "Chill"
+                                                : cat === "classics"
+                                                    ? "Classics"
+                                                    : "Arabic";
+
+                                    const description =
+                                        cat === "dramatic"
+                                            ? "Epic emotional cinematic style."
+                                            : cat === "arabic"
+                                                ? "Middle eastern oud and oriental tones."
+                                                : cat === "chill"
+                                                    ? "Relaxed lofi and smooth vibes."
+                                                    : "Soft piano and orchestral melodies.";
+
+                                    return (
+                                        <label
+                                            key={cat}
+                                            onClick={() => {
+                                                // Only reset if user actually switched to a different category
+                                                if (category !== cat) {
+                                                    setCategory(cat);
+                                                    setAvailableTracks(MUSIC_CATEGORIES[cat]);
+
+                                                    // reset selections when switching category
+                                                    setIntroMusic("");
+                                                    setBodyMusic("");
+                                                    setOutroMusic("");
+
+                                                    // stop any playing preview
+                                                    setMusicPreview(null);
+                                                }
+                                            }}
+                                            className={`cursor-pointer group relative w-full p-5 rounded-2xl border transition 
+                                          ${isActive
+                                                    ? "border-purple-500 bg-purple-50 dark:bg-purple-900/20 shadow-sm"
+                                                    : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
+                                                }`}
+                                        >
+                                            <div className="flex items-start gap-3">
+                                                <input
+                                                    type="radio"
+                                                    checked={isActive}
+                                                    readOnly
+                                                    className="accent-purple-600 mt-1"
+                                                />
+
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-2">
+                                                        {/* tiny music icon bubble */}
+                                                        <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-purple-100 text-purple-600 dark:bg-purple-900/50">
+                                                            <Music2 className="w-3 h-3" />
+                                                        </span>
+
+                                                        <div className="flex flex-col">
+                                                            <span className="font-semibold">{labelText}</span>
+                                                            <p className="text-xs text-black/60 dark:text-white/60 mt-0.5">
+                                                                {description}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {isActive && (
+                                                <span className="absolute top-3 right-4 inline-flex items-center gap-1 rounded-full bg-purple-100 text-purple-600 dark:bg-purple-900/60 px-2.5 py-1 text-[11px] font-semibold">
+                                                    <Check className="w-3 h-3" />
+                                                    Selected
+                                                </span>
+                                            )}
+                                        </label>
+                                    );
+                                })}
                             </div>
 
                             {/* TRACK LIST */}
@@ -1513,22 +1593,27 @@ export default function CreatePro() {
                                                 </select>
 
                                                 <button
-                                                    className={`px-4 py-2 rounded-xl border flex items-center gap-2 ${(index === 0 && !introMusic) ||
-                                                        (index === 1 && !bodyMusic) ||
-                                                        (index === 2 && !outroMusic)
-                                                        ? "opacity-40 cursor-not-allowed"
-                                                        : "border-purple-500 text-purple-600 hover:bg-purple-50"
+                                                    className={`px-4 py-2 rounded-xl border flex items-center gap-2 text-sm font-semibold
+                                                         ${(index === 0 && !introMusic) ||
+                                                            (index === 1 && !bodyMusic) ||
+                                                            (index === 2 && !outroMusic)
+                                                            ? "opacity-40 cursor-not-allowed border-neutral-300 dark:border-neutral-700 text-neutral-400"
+                                                            : "border-purple-500 text-purple-600 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20"
                                                         }`}
                                                     onClick={() => {
                                                         const selected =
                                                             index === 0 ? introMusic : index === 1 ? bodyMusic : outroMusic;
                                                         if (selected) {
-                                                            setMusicPreview(`http://localhost:5000/static/music/${selected}`);
+                                                            setMusicPreview(
+                                                                `http://localhost:5000/static/music/${selected}`
+                                                            );
                                                         }
                                                     }}
                                                 >
-                                                     Preview
+                                                    <Play className="w-4 h-4" />
+                                                    <span>Preview</span>
                                                 </button>
+
                                             </div>
                                         </div>
                                     ))}
@@ -1595,7 +1680,7 @@ export default function CreatePro() {
                                         }}
                                         className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
                                     >
-                                        Continue to Audio 
+                                        Continue to Audio
                                     </button>
                                 </div>
                             </div>
@@ -1655,7 +1740,7 @@ export default function CreatePro() {
                                 <div className="space-y-6">
                                     <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800">
                                         <h3 className="text-xl font-bold text-green-700 dark:text-green-300 mb-4 flex items-center gap-2 justify-center">
-                                            <Check className="w-5 h-5" /> Audio Generated Successfully! 
+                                            <Check className="w-5 h-5" /> Audio Generated Successfully!
                                         </h3>
 
                                         {/* Audio Player */}
@@ -1699,7 +1784,7 @@ export default function CreatePro() {
                 <LoadingOverlay show={submitting} type="script" />
                 <LoadingOverlay show={generatingAudio} type="audio" />
                 <Toast toast={toast} onClose={() => setToast(null)} />
-            </main>
-        </div>
+            </main >
+        </div >
     );
 }

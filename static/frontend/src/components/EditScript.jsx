@@ -98,36 +98,37 @@ export default function EditScript() {
   const [titleJustUpdated, setTitleJustUpdated] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
-  const isAuthenticated = () => !!localStorage.getItem("token");
+  const isAuthenticated = () =>
+    !!(localStorage.getItem("token") || sessionStorage.getItem("token"));
 
   const lastValidRef = useRef("");
   const textareaRef = useRef(null);
 
-  
+
   const displayedScript = scriptTemplate
     ? scriptTemplate.replaceAll("{{SHOW_TITLE}}", showTitle || "Podcast Show")
     : script;
 
   const handleScriptChange = (e) => {
     const next = e.target.value;
-const prev = script;
+    const prev = script;
 
-  const musicRegex = /\[music\]/gi;
-  const prevMusicCount = (prev.match(musicRegex) || []).length;
-  const nextMusicCount = (next.match(musicRegex) || []).length;
+    const musicRegex = /\[music\]/gi;
+    const prevMusicCount = (prev.match(musicRegex) || []).length;
+    const nextMusicCount = (next.match(musicRegex) || []).length;
 
-  if (nextMusicCount < prevMusicCount) {
-    setScript(lastValidRef.current);
-    return;
-  }
+    if (nextMusicCount < prevMusicCount) {
+      setScript(lastValidRef.current);
+      return;
+    }
 
-  if (next === "" && script.trim() !== "") {
-    setScript(lastValidRef.current);
-    setToastMsg("You cannot clear the entire script!");
-    setTimeout(() => setToastMsg(""), 3000);
-    return;
-  }
-  
+    if (next === "" && script.trim() !== "") {
+      setScript(lastValidRef.current);
+      setToastMsg("You cannot clear the entire script!");
+      setTimeout(() => setToastMsg(""), 3000);
+      return;
+    }
+
     if (next.trim() === "") {
       setScript(lastValidRef.current);
       setSaveMsg("You can't clear the entire script.");
@@ -164,7 +165,7 @@ const prev = script;
       setIsEditingTitle(false);
       return;
     }
-   
+
     const newTemplate = baseText.replaceAll(currentTitle, placeholder);
     setScriptTemplate(newTemplate);
 
@@ -237,10 +238,10 @@ const prev = script;
     fetch("/api/draft", { credentials: "include" })
       .then((r) => r.json())
       .then((d) => {
-        const template = (d.script || "").trim();        // template with {{SHOW_TITLE}}
+        const template = (d.script || "").trim();        
         const show =
-          (d.show_title || "").trim() ||                 // show name extracted from script
-          (d.title || "").trim();                       
+          (d.show_title || "").trim() ||                
+          (d.title || "").trim();
 
         const visible = template
           ? template.replaceAll("{{SHOW_TITLE}}", show || "Podcast Show")
@@ -282,41 +283,41 @@ const prev = script;
     return { lineStart, lineEnd, colonIdx };
   };
 
-const onKeyDownGuard = (e) => {
-  const ta = textareaRef.current;
-  if (!ta) return;
-  const val = ta.value;
-  const { selectionStart: start, selectionEnd: end } = ta;
+  const onKeyDownGuard = (e) => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const val = ta.value;
+    const { selectionStart: start, selectionEnd: end } = ta;
 
-  const affects =
-    e.key.length === 1 ||
-    e.key === "Backspace" ||
-    e.key === "Delete" ||
-    e.key === "Enter" ||
-    e.key === "Tab";
-  if (!affects) return;
+    const affects =
+      e.key.length === 1 ||
+      e.key === "Backspace" ||
+      e.key === "Delete" ||
+      e.key === "Enter" ||
+      e.key === "Tab";
+    if (!affects) return;
 
-  if ((e.key === "Delete" || e.key === "Backspace") && start === 0 && end === val.length) {
-    e.preventDefault();
-    setToastMsg("You cannot delete the entire script!");
-    setTimeout(() => setToastMsg(""), 3000); 
-    return;
-  }
-
-  const { lineStart, colonIdx } = getLineMeta(val, start);
-  if (colonIdx !== -1) {
-    const labelEnd = colonIdx + 1; 
-    const touchesLabel = start <= labelEnd || end <= labelEnd;
-    if (touchesLabel) {
+    if ((e.key === "Delete" || e.key === "Backspace") && start === 0 && end === val.length) {
       e.preventDefault();
-      const safe =
-        val[colonIdx + 1] === " " ? colonIdx + 2 : colonIdx + 1;
-      requestAnimationFrame(() => {
-        ta.selectionStart = ta.selectionEnd = Math.max(safe, start, end);
-      });
+      setToastMsg("You cannot delete the entire script!");
+      setTimeout(() => setToastMsg(""), 3000);
+      return;
     }
-  }
-};
+
+    const { lineStart, colonIdx } = getLineMeta(val, start);
+    if (colonIdx !== -1) {
+      const labelEnd = colonIdx + 1;
+      const touchesLabel = start <= labelEnd || end <= labelEnd;
+      if (touchesLabel) {
+        e.preventDefault();
+        const safe =
+          val[colonIdx + 1] === " " ? colonIdx + 2 : colonIdx + 1;
+        requestAnimationFrame(() => {
+          ta.selectionStart = ta.selectionEnd = Math.max(safe, start, end);
+        });
+      }
+    }
+  };
 
 
   const findEmptySpeakerLine = (text) => {
@@ -342,10 +343,10 @@ const onKeyDownGuard = (e) => {
     const badIndex = findEmptySpeakerLine(text);
     if (badIndex === -1) return;
 
- 
+
     let offset = 0;
     for (let i = 0; i < badIndex; i++) {
-      offset += lines[i].length + 1; 
+      offset += lines[i].length + 1;
     }
     offset += lines[badIndex].length;
 
@@ -606,8 +607,8 @@ const onKeyDownGuard = (e) => {
                       const updatedEditData = {
                         ...editData,
                         generatedScript: script,      // edited script
-                        scriptTemplate,               // updated template with {{SHOW_TITLE}}
-                        showTitle,                    // new title
+                        scriptTemplate,               
+                        showTitle,                   
                         episodeTitle: showTitle,
                         fromEdit: true,
                       };
@@ -704,13 +705,13 @@ const onKeyDownGuard = (e) => {
         </div>
       </main>
       {/* Toast Notification */}
-{toastMsg && (
-  <div className="fixed top-6 right-6 z-[10000] bg-red-500 text-white px-6 py-3 rounded-xl shadow-2xl border border-red-300 animate-in slide-in-from-right-8 duration-300">
-    <div className="flex items-center gap-2 font-semibold">
-      {toastMsg}
-    </div>
-  </div>
-)}
+      {toastMsg && (
+        <div className="fixed top-6 right-6 z-[10000] bg-red-500 text-white px-6 py-3 rounded-xl shadow-2xl border border-red-300 animate-in slide-in-from-right-8 duration-300">
+          <div className="flex items-center gap-2 font-semibold">
+            {toastMsg}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

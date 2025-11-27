@@ -25,7 +25,6 @@ function AbstractArt() {
           />
         </div>
 
-        {/* ===== Main vinyl record ===== */}
         <div className="absolute left-1/4 top-1/2 transform -translate-y-1/2 w-48 h-48 z-10">
           <div className="w-full h-full bg-orange-bright rounded-full relative border-4 border-black">
             <div className="absolute inset-6 bg-blue-bright rounded-full">
@@ -38,24 +37,24 @@ function AbstractArt() {
           </div>
         </div>
         
-        {/* ===== Abstract organic shapes ===== */}
+        {/* ===== Abstract shapes ===== */}
         <div className="absolute top-0 left-0 w-full h-full z-20">
           {/* Pink blob */}
           <div className="absolute top-12 right-1/4 w-32 h-24 bg-pink-bright rounded-full opacity-80 transform rotate-45"></div>
           
-          {/* Blue organic shape */}
+          {/* Blue shape */}
           <div className="absolute bottom-16 left-12 w-40 h-32 bg-blue-bright rounded-full opacity-70 transform -rotate-12"></div>
           
           {/* Yellow shape */}
           <div className="absolute top-8 left-1/3 w-24 h-36 bg-yellow-bright rounded-full opacity-60 transform rotate-12"></div>
           
-          {/* Green accent */}
+          {/* Green */}
           <div className="absolute bottom-8 right-12 w-28 h-20 bg-green-bright rounded-full opacity-75 transform rotate-45"></div>
           
           {/* Purple cloud */}
           <div className="absolute top-1/2 left-12 w-36 h-24 bg-purple-light rounded-full opacity-60"></div>
           
-          {/* Orange accent */}
+          {/* Orange */}
           <div className="absolute bottom-1/4 right-1/3 w-20 h-28 bg-orange-bright rounded-full opacity-80 transform -rotate-30"></div>
         </div>
         

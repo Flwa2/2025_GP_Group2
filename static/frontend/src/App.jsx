@@ -11,7 +11,7 @@ import Account from './components/Account';
 import Signup from './components/Signup';
 import Login from './components/Login';
 import EditScript from './components/EditScript';
-import Create from './components/CreatePro'; // or './pages/CreatePro'
+import Create from './components/CreatePro'; 
 
 function isAuthenticated() {
   return !!localStorage.getItem("token");
@@ -58,7 +58,8 @@ export default function App() {
         ) : hash.startsWith("#/create") ? (
           (() => {
             const needsAuth = hash.includes("auth=required");
-            const token = localStorage.getItem("token");
+            const token =
+              localStorage.getItem("token") || sessionStorage.getItem("token");
 
             if (needsAuth && !token) {
               window.location.hash = "#/login?redirect=create";

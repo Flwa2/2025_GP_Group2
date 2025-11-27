@@ -1,5 +1,6 @@
 // src/components/Account.jsx
 import React, { useEffect, useRef, useState } from "react";
+import { LogOut } from "lucide-react";
 
 /* ---- Dark mode helper ---- */
 function applyDarkMode(enabled) {
@@ -44,32 +45,51 @@ export default function Account() {
       applyDarkMode(v);
     }
 
-    // 2) User info from localStorage (set by login/signup)
-    const storedUser = localStorage.getItem("user");
-    if (storedUser) {
+    // 2) Fallback: read user from local/session storage (from login)
+    const storedUserRaw =
+      localStorage.getItem("user") || sessionStorage.getItem("user");
+    if (storedUserRaw) {
       try {
-        const user = JSON.parse(storedUser);
-
-        // handle both shapes:
-        // { name, email } from backend / social login
-        // or { displayName, email } if you ever use that
-        const name =
-          user.displayName ||
-          user.name ||
-          profile.displayName;
-
+        const u = JSON.parse(storedUserRaw);
+        const name = u.displayName || u.name || profile.displayName;
         setProfile((p) => ({
           ...p,
           displayName: name,
-          email: user.email || p.email,
+          email: u.email || p.email,
         }));
       } catch {
-        // if parsing fails, ignore and keep defaults
+        // ignore parse error
       }
     }
-  }, []); // run once when Account mounts
 
-  // If there is no real avatar, generate one from the displayName
+    // 3) Real source of truth: fetch from backend /api/me (session cookie)
+    fetch("http://127.0.0.1:5000/api/me", {
+      method: "GET",
+      credentials: "include", 
+    })
+      .then((res) => {
+        if (!res.ok) {
+          console.warn("GET /api/me failed with status", res.status);
+          return null;
+        }
+        return res.json();
+      })
+      .then((data) => {
+        if (!data || data.error) return;
+        setProfile((p) => ({
+          ...p,
+          displayName: data.displayName || p.displayName,
+          handle: data.handle || p.handle,
+          email: data.email || p.email,
+        }));
+      })
+      .catch((err) => {
+        console.error("GET /api/me error:", err);
+      });
+  }, []);
+
+
+
   const shownAvatar =
     avatarPreview || profile.avatarUrl || dicebearAvatar(profile.displayName);
 
@@ -82,8 +102,6 @@ export default function Account() {
     if (!file) return;
     const url = URL.createObjectURL(file);
     setAvatarPreview(url);
-
-    // OPTIONAL: upload to backend later
   }
 
   function toggleDark(v) {
@@ -93,8 +111,27 @@ export default function Account() {
 
   async function save() {
     setSaving(true);
-    // OPTIONAL: send profile + darkMode to backend when you add endpoints
+    // later: send profile + darkMode to backend
     setTimeout(() => setSaving(false), 350);
+  }
+
+  function handleLogout() {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+
+    // flash message for home page
+    sessionStorage.setItem(
+      "wecast:flash",
+      "You have been logged out successfully."
+    );
+
+    // notify app
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: "token", newValue: "" })
+    );
+
+    // redirect
+    window.location.hash = "#/";
   }
 
   return (
@@ -204,35 +241,52 @@ export default function Account() {
         </div>
       </Card>
 
-      {/* Save */}
-      <div className="flex gap-3 items-center">
-        <button className="btn-cta" onClick={save} disabled={saving}>
-          {saving ? "Saving…" : "Save Changes"}
-        </button>
-      </div>
+      {/* ACTIONS: Save + Logout in one consistent card */}
+      <Card>
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div>
+            <p className="font-semibold text-black dark:text-white">
+              Account actions
+            </p>
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              Save your changes or sign out of WeCast on this device.
+            </p>
+          </div>
 
-      {/* Logout */}
-      <div className="pt-6">
-        <button
-          onClick={() => {
-            localStorage.removeItem("token");
-            localStorage.removeItem("user");
+          {/* Buttons group */}
+          <div className="flex gap-3 md:ml-auto">
+            {/* Save button - primary */}
+            <button
+              onClick={save}
+              disabled={saving}
+              className="inline-flex items-center justify-center px-6 py-3
+                   rounded-xl text-sm font-semibold
+                   bg-black text-white hover:bg-black/90
+                   dark:bg-white dark:text-black dark:hover:bg-white/90
+                   disabled:opacity-60 transition"
+            >
+              {saving ? "Saving…" : "Save Changes"}
+            </button>
 
-            // Notify state change
-            window.dispatchEvent(
-              new StorageEvent("storage", { key: "token", newValue: "" })
-            );
+            {/* Logout button - same size, outline style */}
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="inline-flex items-center justify-center px-6 py-3
+                   rounded-xl text-sm font-semibold
+                   border border-red-400 text-red-600 bg-transparent
+                   hover:bg-red-50 dark:hover:bg-red-900/20
+                   transition"
+            >
+              <LogOut className="w-4 h-4 mr-1" />
+              Log out
+            </button>
+          </div>
+        </div>
+      </Card>
 
-            // Redirect user
-            window.location.hash = "#/";
-          }}
-          className="w-full bg-red-500 hover:bg-red-600 text-white font-semibold py-3 rounded-xl transition"
-        >
-          Log Out
-        </button>
-      </div>
-    </div>   
-  );         
+    </div>
+  );
 }
 
 /* ---------- UI helpers ---------- */
@@ -263,11 +317,10 @@ function Toggle({ checked, onChange }) {
       role="switch"
       aria-checked={checked}
       onClick={() => onChange(!checked)}
-      className={`w-14 h-7 rounded-full flex items-center px-1 transition ${
-        checked
-          ? "bg-black dark:bg-white justify-end"
-          : "bg-gray-300 justify-start"
-      }`}
+      className={`w-14 h-7 rounded-full flex items-center px-1 transition ${checked
+        ? "bg-black dark:bg-white justify-end"
+        : "bg-gray-300 justify-start"
+        }`}
       title="Toggle dark mode"
     >
       <span className="w-5 h-5 rounded-full bg-white dark:bg-black shadow transition" />

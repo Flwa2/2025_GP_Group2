@@ -1,4 +1,4 @@
-// src/components/AboutSection.jsx (rename if you like)
+// src/components/AboutSection.jsx 
 import React from 'react';
 
 export default function AboutSection() {
@@ -40,7 +40,7 @@ export default function AboutSection() {
           <div className="absolute right-0 top-20 w-64 h-64 bg-pink-bright rounded-full blur-3xl opacity-30 animate-pulse"></div>
           <div className="absolute right-10 bottom-10 w-40 h-40 bg-yellow-bright rounded-full blur-2xl opacity-30 animate-bounce"></div>
 
-          {/* MIC IMAGE (kept slightly outside, but section has overflow-hidden) */}
+          {/* MIC IMAGE */}
           <img
             src="/img2.png"
             alt="WeCast microphone"
@@ -56,7 +56,7 @@ export default function AboutSection() {
         </div>
       </div>
 
-      {/* Soft overlay for depth (now works because section is relative) */}
+      {/* Soft overlay for depth */}
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-purple-800/40 via-transparent to-pink-500/20"></div>
     </section>
   );

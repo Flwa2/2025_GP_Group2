@@ -27,8 +27,14 @@ export default function Login() {
   const [mode, setMode] = useState("login"); // "login" | "reset"
   const [email, setEmail] = useState("");
   const [pwd, setPwd] = useState("");
+  const [rememberMe, setRememberMe] = useState(false);
   const [resetEmail, setResetEmail] = useState("");
+  const [resetPwd, setResetPwd] = useState("");
+  const [resetConfirm, setResetConfirm] = useState("");
+
   const [showPwd, setShowPwd] = useState(false);
+  const [showResetPwd, setShowResetPwd] = useState(false);
+
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
@@ -81,7 +87,7 @@ export default function Login() {
           const mins = data.lockMinutes ?? 15;
           setError(
             data.error ||
-              `Too many failed attempts. Your account is temporarily locked for ${mins} minutes.`
+            `Too many failed attempts. Your account is temporarily locked for ${mins} minutes.`
           );
           setLoading(false);
           return;
@@ -91,7 +97,7 @@ export default function Login() {
         if (typeof data.remainingAttempts === "number") {
           setError(
             data.error ||
-              `Invalid email or password. You have ${data.remainingAttempts} attempts left.`
+            `Invalid email or password. You have ${data.remainingAttempts} attempts left.`
           );
           setLoading(false);
           return;
@@ -103,10 +109,24 @@ export default function Login() {
       }
 
       if (data.token) {
-        localStorage.setItem("token", data.token);
+        if (rememberMe) {
+          // Keep user logged in across browser restarts
+          localStorage.setItem("token", data.token);
+        } else {
+          // Only until the tab or browser is closed
+          sessionStorage.setItem("token", data.token);
+        }
       }
+
       if (data.user) {
-        localStorage.setItem("user", JSON.stringify(data.user));
+        const userJson = JSON.stringify(data.user);
+        if (rememberMe) {
+          localStorage.setItem("user", userJson);
+          sessionStorage.removeItem("user");
+        } else {
+          sessionStorage.setItem("user", userJson);
+          localStorage.removeItem("user");
+        }
       }
 
       window.dispatchEvent(
@@ -122,25 +142,34 @@ export default function Login() {
     }
   };
 
-  // ------------------ RESET PASSWORD SUBMIT ------------------
+  // ------------------ RESET PASSWORD SUBMIT (DIRECT) ------------------
   const handleResetSubmit = async (e) => {
     e.preventDefault();
     setError("");
     setInfo("");
 
-    if (!resetEmail.trim()) {
-      setError("Please enter your registered email.");
+    if (!resetEmail.trim() || !resetPwd.trim() || !resetConfirm.trim()) {
+      setError("Please fill in all fields.");
+      return;
+    }
+
+    if (resetPwd !== resetConfirm) {
+      setError("Passwords do not match.");
       return;
     }
 
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_BASE}/api/request-password-reset`, {
+      const res = await fetch(`${API_BASE}/api/reset-password-direct`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ email: resetEmail }),
+        body: JSON.stringify({
+          email: resetEmail,
+          new_password: resetPwd,
+          confirm_password: resetConfirm,
+        }),
       });
 
       let data = {};
@@ -151,12 +180,17 @@ export default function Login() {
       }
 
       if (!res.ok) {
-        setError(data.error || "Could not send reset link. Please try again.");
+        // Backend already sends clear messages like:
+        // "Email is not registered." or password rule errors
+        setError(data.error || "Could not reset password. Please try again.");
       } else {
         setInfo(
-          data.message ||
-            "If this email is registered, we have sent a secure, time-limited reset link."
+          data.message || "Password updated successfully. You can now log in."
         );
+        // Optional: auto switch back to login after a short delay
+        // setTimeout(() => {
+        //   switchToLogin();
+        // }, 1800);
       }
     } catch (err) {
       console.error("RESET PASSWORD ERROR:", err);
@@ -273,7 +307,7 @@ export default function Login() {
 
       {/* LOGIN / RESET CARD */}
       <div className="relative z-10 w-full max-w-md">
-        <div className="bg-white/90 dark:bg-white/5 backdrop-blur-xl shadow-xl dark:shadow-black/20 rounded-2xl p-8 border border-black/5 dark:border-white/10 transition-colors">
+        <div className="bg-white/90 dark:bg:white/5 backdrop-blur-xl shadow-xl dark:shadow-black/20 rounded-2xl p-8 border border-black/5 dark:border-white/10 transition-colors">
           {/* Top back button only in reset mode */}
           {mode === "reset" && (
             <button
@@ -306,8 +340,7 @@ export default function Login() {
                   Reset your password
                 </h2>
                 <p className="text-sm text-black/60 dark:text-white/60 mt-1">
-                  Enter your registered email and we will send you a secure,
-                  time-limited reset link.
+                  Enter your registered email and choose a new password. If the email exists, your password will be updated directly.
                 </p>
               </>
             )}
@@ -351,16 +384,16 @@ export default function Login() {
 
               {/* Password */}
               <div>
-                <label className="block text-sm font-medium text-black dark:text-white mb-2">
+                <label className="block text-sm font-medium text-black dark:text:white mb-2">
                   Password
                 </label>
-                <div className="flex items-center border rounded-lg bg-white dark:bg-white/5 border-black/10 dark:border-white/15 focus-within:ring-2 focus-within:ring-purple-500">
-                  <span className="pl-3 text-black/60 dark:text-white/60">
+                <div className="flex items-center border rounded-lg bg-white dark:bg:white/5 border-black/10 dark:border:white/15 focus-within:ring-2 focus-within:ring-purple-500">
+                  <span className="pl-3 text-black/60 dark:text:white/60">
                     <Lock className="w-5 h-5" />
                   </span>
                   <input
                     type={showPwd ? "text" : "password"}
-                    className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text-white placeholder-black/50 dark:placeholder-white/50"
+                    className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text:white placeholder-black/50 dark:placeholder:white/50"
                     placeholder="Your password"
                     value={pwd}
                     onChange={(e) => setPwd(e.target.value)}
@@ -370,7 +403,7 @@ export default function Login() {
                   <button
                     type="button"
                     onClick={() => setShowPwd((v) => !v)}
-                    className="pr-3 text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white transition"
+                    className="pr-3 text-black/60 dark:text:white/60 hover:text:black dark:hover:text:white transition"
                     aria-label={showPwd ? "Hide password" : "Show password"}
                   >
                     {showPwd ? (
@@ -388,6 +421,8 @@ export default function Login() {
                   <input
                     type="checkbox"
                     className="w-4 h-4 accent-purple-600"
+                    checked={rememberMe}
+                    onChange={(e) => setRememberMe(e.target.checked)}
                   />
                   <span className="text-black/80 dark:text-white/80">
                     Remember me
@@ -396,7 +431,7 @@ export default function Login() {
                 <button
                   type="button"
                   onClick={switchToReset}
-                  className="text-purple-700 dark:text-purple-300 hover:underline"
+                  className="text-purple-700 dark:text:purple-300 hover:underline"
                 >
                   Forgot password?
                 </button>
@@ -413,11 +448,11 @@ export default function Login() {
 
               {/* Divider */}
               <div className="flex items-center gap-4">
-                <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
-                <span className="text-xs text-black/50 dark:text-white/50">
+                <div className="h-px flex-1 bg-black/10 dark:bg:white/10" />
+                <span className="text-xs text:black/50 dark:text:white/50">
                   or continue with
                 </span>
-                <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
+                <div className="h-px flex-1 bg-black/10 dark:bg:white/10" />
               </div>
 
               {/* Social login */}
@@ -426,7 +461,7 @@ export default function Login() {
                   type="button"
                   onClick={handleGoogleLogin}
                   disabled={loading}
-                  className="w-full inline-flex items-center justify-center gap-3 border rounded-lg py-2.5 font-medium transition hover:bg-black/5 dark:hover:bg-white/10 border-black/10 dark:border-white/15 text-black dark:text-white"
+                  className="w-full inline-flex items-center justify-center gap-3 border rounded-lg py-2.5 font-medium transition hover:bg:black/5 dark:hover:bg:white/10 border-black/10 dark:border:white/15 text:black dark:text:white"
                 >
                   {/* Google icon */}
                   <svg
@@ -458,7 +493,7 @@ export default function Login() {
                   type="button"
                   onClick={handleGithubLogin}
                   disabled={loading}
-                  className="w-full inline-flex items-center justify-center gap-3 border rounded-lg py-2.5 font-medium transition hover:bg-black/5 dark:hover:bg-white/10 border-black/10 dark:border-white/15 text-black dark:text-white"
+                  className="w-full inline-flex items-center justify-center gap-3 border rounded-lg py-2.5 font-medium transition hover:bg:black/5 dark:hover:bg:white/10 border-black/10 dark:border:white/15 text:black dark:text:white"
                 >
                   {/* GitHub icon */}
                   <svg
@@ -473,11 +508,11 @@ export default function Login() {
                 </button>
               </div>
 
-              <p className="mt-6 text-center text-sm text-black/70 dark:text-white/70">
+              <p className="mt-6 text-center text-sm text-black/70 dark:text:white/70">
                 Do not have an account?{" "}
                 <a
                   href="#/signup"
-                  className="text-purple-700 dark:text-purple-300 hover:underline"
+                  className="text-purple-700 dark:text:purple-300 hover:underline"
                 >
                   Sign up
                 </a>
@@ -488,20 +523,76 @@ export default function Login() {
           {/* ------------------ RESET FORM ------------------ */}
           {mode === "reset" && (
             <form onSubmit={handleResetSubmit} className="space-y-5">
+              {/* Email */}
               <div>
-                <label className="block text-sm font-medium text-black dark:text-white mb-2">
+                <label className="block text-sm font-medium text-black dark:text:white mb-2">
                   Registered email
                 </label>
-                <div className="flex items-center border rounded-lg bg-white dark:bg-white/5 border-black/10 dark:border-white/15 focus-within:ring-2 focus-within:ring-purple-500">
-                  <span className="pl-3 text-black/60 dark:text-white/60">
+                <div className="flex items-center border rounded-lg bg-white dark:bg:white/5 border-black/10 dark:border:white/15 focus-within:ring-2 focus-within:ring-purple-500">
+                  <span className="pl-3 text-black/60 dark:text:white/60">
                     <Mail className="w-5 h-5" />
                   </span>
                   <input
                     type="email"
-                    className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text-white placeholder-black/50 dark:placeholder-white/50"
+                    className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text:white placeholder-black/50 dark:placeholder:white/50"
                     placeholder="you@example.com"
                     value={resetEmail}
                     onChange={(e) => setResetEmail(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* New password */}
+              <div>
+                <label className="block text-sm font-medium text-black dark:text:white mb-2">
+                  New password
+                </label>
+                <div className="flex items-center border rounded-lg bg-white dark:bg:white/5 border-black/10 dark:border:white/15 focus-within:ring-2 focus-within:ring-purple-500">
+                  <span className="pl-3 text-black/60 dark:text:white/60">
+                    <Lock className="w-5 h-5" />
+                  </span>
+                  <input
+                    type={showResetPwd ? "text" : "password"}
+                    className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text:white placeholder-black/50 dark:placeholder:white/50"
+                    placeholder="New password"
+                    value={resetPwd}
+                    onChange={(e) => setResetPwd(e.target.value)}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowResetPwd((v) => !v)}
+                    className="pr-3 text-black/60 dark:text:white/60 hover:text:black dark:hover:text:white transition"
+                    aria-label={showResetPwd ? "Hide password" : "Show password"}
+                  >
+                    {showResetPwd ? (
+                      <EyeOff className="w-5 h-5" />
+                    ) : (
+                      <Eye className="w-5 h-5" />
+                    )}
+                  </button>
+                </div>
+                <p className="mt-1 text-xs text-black/60 dark:text:white/60">
+                  At least 8 characters, including one uppercase letter, one number, and one symbol.
+                </p>
+              </div>
+
+              {/* Confirm password */}
+              <div>
+                <label className="block text-sm font-medium text-black dark:text:white mb-2">
+                  Confirm new password
+                </label>
+                <div className="flex items-center border rounded-lg bg-white dark:bg:white/5 border-black/10 dark:border:white/15 focus-within:ring-2 focus-within:ring-purple-500">
+                  <span className="pl-3 text-black/60 dark:text:white/60">
+                    <Lock className="w-5 h-5" />
+                  </span>
+                  <input
+                    type={showResetPwd ? "text" : "password"}
+                    className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text:white placeholder-black/50 dark:placeholder:white/50"
+                    placeholder="Confirm new password"
+                    value={resetConfirm}
+                    onChange={(e) => setResetConfirm(e.target.value)}
                     required
                   />
                 </div>
@@ -512,7 +603,7 @@ export default function Login() {
                 className="w-full btn-cta font-bold py-3 rounded-lg transition disabled:opacity-60"
                 disabled={loading}
               >
-                {loading ? "Sending link..." : "Send reset link"}
+                {loading ? "Updating password..." : "Change password"}
               </button>
             </form>
           )}
