@@ -1,17 +1,56 @@
-# Ignore virtual environment
+# ==========================
+# Python / Backend
+# ==========================
+
 venv/
-
-# Ignore Python cache files
 __pycache__/
+*.pyc
 
-# Ignore environment keys
+# Environment files
 .env
 *.env
 .env.local
+*.env.*
 
-# Ignore system files
+# Service account / private keys
+config/service_account.json
+
+# Logs
+*.log
+
+# ==========================
+# Node / React Frontend
+# ==========================
+
+# Node modules
+static/frontend/node_modules/
+node_modules/
+
+# Build outputs
+static/frontend/dist/
+dist/
+build/
+
+# Environment files (frontend)
+static/frontend/.env
+static/frontend/.env.local
+static/frontend/*.env
+static/frontend/.*.env
+
+# Temporary files
+static/frontend/.vite/
+static/frontend/.cache/
+static/frontend/.parcel-cache/
+*.tmp
+
+# ==========================
+# System files
+# ==========================
+
 .DS_Store
 Thumbs.db
 
-# Ignore database files
-config/service_account.json
+# Editor junk
+.vscode/
+.idea/
+
