@@ -288,20 +288,6 @@ function Toast({ toast, onClose }) {
     );
 }
 
-function extractShowTitle(scriptText) {
-    if (!scriptText) return "";
-
-    // Match titles inside quotation marks
-    const matchQuoted = scriptText.match(/["“](.*?)["”]/);
-    if (matchQuoted) return matchQuoted[1].trim();
-
-    // Match titles after “Title:” or “Episode Title:”
-    const matchKeyword = scriptText.match(/(?:title|episode title)\s*[:\-]\s*(.+)/i);
-    if (matchKeyword) return matchKeyword[1].trim();
-
-    return "";
-}
-
 
 export default function CreatePro() {
     const [step, setStep] = useState(1);
@@ -390,31 +376,30 @@ export default function CreatePro() {
             const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
             const saved = sessionStorage.getItem("currentStep");
 
-            if (editData.fromEdit && editData.generatedScript) {
-                setGeneratedScript(editData.generatedScript);
+            if (editData.fromEdit && (editData.generatedScript || editData.scriptTemplate)) {
+                const template =
+                    editData.scriptTemplate || editData.generatedScript || "";
+
+                const titleFromStorage =
+                    (editData.showTitle || "").trim() ||
+                    (editData.episodeTitle || "").trim() ||
+                    "Podcast Show";
+
+                // Always re-render the visible script from the template + title,
+                // so CreatePro and EditScript stay in sync
+                const rendered = template.includes("{{SHOW_TITLE}}")
+                    ? template.replaceAll("{{SHOW_TITLE}}", titleFromStorage)
+                    : template;
+
+                setGeneratedScript(rendered);
+                setScriptTemplate(template);
+                setShowTitle(titleFromStorage);
+                setEpisodeTitle(titleFromStorage);
+
                 setScriptStyle(editData.scriptStyle || "");
                 setSpeakersCount(editData.speakersCount || 0);
                 setSpeakers(editData.speakers || []);
                 setDescription(editData.description || "");
-
-                // Restore title and template as well
-                let titleFromStorage =
-                    (editData.showTitle || "").trim() ||
-                    (editData.episodeTitle || "").trim();
-
-                if (!titleFromStorage) {
-                    titleFromStorage = extractTitleFromScript(
-                        editData.generatedScript || editData.scriptTemplate || ""
-                    );
-                }
-
-                if (editData.scriptTemplate) {
-                    setScriptTemplate(editData.scriptTemplate);
-                }
-                if (titleFromStorage) {
-                    setShowTitle(titleFromStorage);
-                    setEpisodeTitle(titleFromStorage);
-                }
 
                 setStep(4);
 
@@ -424,6 +409,7 @@ export default function CreatePro() {
                 sessionStorage.setItem("editData", JSON.stringify(cleanEditData));
                 return;
             }
+
 
             if (forceStep) {
                 setStep(parseInt(forceStep));
@@ -466,10 +452,10 @@ export default function CreatePro() {
                         (editData.episodeTitle || "").trim();
 
                     if (!titleFromStorage) {
-                        titleFromStorage = extractTitleFromScript(
-                            editData.generatedScript || editData.scriptTemplate || ""
-                        );
+                        // instead of parsing from script, just fall back to a neutral default
+                        titleFromStorage = "Podcast Show";
                     }
+
 
                     if (editData.scriptTemplate) {
                         setScriptTemplate(editData.scriptTemplate);
@@ -611,19 +597,12 @@ export default function CreatePro() {
         loadVoices();
     }, []);
 
-    const defaultVoiceForGender = (gender = "Male") => {
+    const defaultVoiceForGender = (gender = "Male", usedIds = new Set()) => {
         const isFemale = (gender || "").toLowerCase() === "female";
         const key = isFemale ? "female" : "male";
 
         const pool = voiceGroups[key].length ? voiceGroups[key] : voices;
         if (!pool.length) return "";
-
-        // Voices already used by other speakers
-        const usedIds = new Set(
-            speakers
-                .map((s) => s.voiceId)
-                .filter(Boolean)
-        );
 
         // Try to find an unused voice in the gender pool
         const unusedInPool = pool.find((v) => !usedIds.has(v.id));
@@ -634,33 +613,42 @@ export default function CreatePro() {
         if (unusedAny) return unusedAny.id;
 
         // Fallback to first available
-        return pool[0].id || voices[0]?.id || "";
+        return pool[0]?.id || voices[0]?.id || "";
     };
+
 
 
 /* ---------- when style changes: keep existing speaker names ---------- */
 useEffect(() => {
     if (!scriptStyle) return;
 
-    const count = defaultCount(scriptStyle);
-    setSpeakersCount(count);
-
     setSpeakers((prev) => {
+        const limits = styleLimits[scriptStyle] || [];
+
+        // prefer existing count (from storage or user choice)
+        let count = prev.length || Number(speakersCount) || 0;
+
+        // if nothing valid, fall back to default for this style
+        if (!count || !limits.includes(count)) {
+            count = defaultCount(scriptStyle);
+            // update speakersCount ONLY in this case
+            setSpeakersCount(count);
+        }
+
         const next = Array.from({ length: count }).map((_, i) => {
             const old = prev[i] || {};
             const gender = old.gender || (i === 0 ? "Male" : "Female");
 
             return {
-                // keep what the user already typed
                 name: old.name || "",
                 gender,
+                // role will be rewritten below
                 role: old.role || "host",
-                // voice will be filled later if empty
                 voiceId: old.voiceId || "",
             };
         });
 
-        // apply roles according to the style, but do NOT touch .name
+        // apply roles according to the style (same logic as before)
         if (scriptStyle === "Interview") {
             if (count === 2) {
                 next[0].role = "host";
@@ -686,25 +674,39 @@ useEffect(() => {
                 next[2].role = "guest";
             }
         }
-        // other styles fall back to whatever is already there
+        // other styles: keep roles as they are
 
         return next;
     });
 
     setErrors({});
-}, [scriptStyle]);
+}, [scriptStyle, speakersCount]);
+
 
 
     /* ---------- when voices finish loading, fill missing voiceIds ---------- */
     useEffect(() => {
         if (loadingVoices || !voices.length || !speakers.length) return;
-        setSpeakers((prev) =>
-            prev.map((s) => ({
-                ...s,
-                voiceId: s.voiceId || defaultVoiceForGender(s.gender),
-            }))
-        );
-    }, [loadingVoices, voices.length]);
+
+        setSpeakers((prev) => {
+            // Start with any voices already assigned
+            const usedIds = new Set(
+                prev.map((s) => s.voiceId).filter(Boolean)
+            );
+
+            const next = prev.map((s) => {
+                if (s.voiceId) return s; // keep existing
+
+                const voiceId = defaultVoiceForGender(s.gender, usedIds);
+                if (voiceId) usedIds.add(voiceId);
+
+                return { ...s, voiceId };
+            });
+
+            return next;
+        });
+    }, [loadingVoices, voices.length, speakers.length]); // note: includes speakers.length
+
 
     /* ---------- when count changes: rebuild array & roles ---------- */
     useEffect(() => {
@@ -721,7 +723,7 @@ useEffect(() => {
                     name: old.name || "",
                     gender,
                     role: old.role || "host",
-                    voiceId: old.voiceId || defaultVoiceForGender(gender),
+                    voiceId: old.voiceId || "",
                 };
             });
 
@@ -1166,7 +1168,7 @@ useEffect(() => {
                                                     {label}
                                                 </h3>
                                                 <p className="mt-1 text-xs text-neutral-500">
-                                                    Roles are fixed for this style. You can edit the name, gender, and voice.
+                                                    You can edit the name, gender, and voice.
                                                 </p>
 
                                                 <div className="mt-3 space-y-3">
@@ -1201,16 +1203,26 @@ useEffect(() => {
                                                                 value={sp.gender}
                                                                 onChange={(e) =>
                                                                     setSpeakers((arr) => {
-                                                                        const n = [...arr];
                                                                         const gender = e.target.value;
-                                                                        n[i] = {
-                                                                            ...n[i],
+                                                                        const next = [...arr];
+
+                                                                        // Voices used by OTHER speakers
+                                                                        const usedIds = new Set(
+                                                                            next
+                                                                                .filter((_, idx) => idx !== i)
+                                                                                .map((s) => s.voiceId)
+                                                                                .filter(Boolean)
+                                                                        );
+
+                                                                        const voiceId = defaultVoiceForGender(gender, usedIds);
+
+                                                                        next[i] = {
+                                                                            ...next[i],
                                                                             gender,
-                                                                            voiceId:
-                                                                                n[i].voiceId ||
-                                                                                defaultVoiceForGender(gender),
+                                                                            voiceId, // assign a fresh unique voice for this gender
                                                                         };
-                                                                        return n;
+
+                                                                        return next;
                                                                     })
                                                                 }
                                                                 className="form-input"
@@ -1240,7 +1252,7 @@ useEffect(() => {
                                                             const pool = voiceGroups[genderKey].length
                                                                 ? voiceGroups[genderKey]
                                                                 : voices;
-                                                            const currentId = sp.voiceId || pool[0]?.id || "";
+                                                            const currentId = sp.voiceId || "";
                                                             return (
                                                                 <div className="flex items-center gap-3">
                                                                     <select
@@ -1251,34 +1263,35 @@ useEffect(() => {
 
                                                                             // Prevent duplicate assignment
                                                                             const alreadyUsed = speakers.some(
-                                                                                (s, idx) => s.voiceId === newVoice && idx !== i
+                                                                            (s, idx) => s.voiceId === newVoice && idx !== i
                                                                             );
 
                                                                             if (alreadyUsed) {
-                                                                                alert("This voice is already used by another speaker. Please choose a different one.");
-                                                                                return;
+                                                                            alert("This voice is already used by another speaker. Please choose a different one.");
+                                                                            return;
                                                                             }
 
                                                                             setSpeakers((arr) => {
-                                                                                const n = [...arr];
-                                                                                n[i] = { ...n[i], voiceId: newVoice };
-                                                                                return n;
+                                                                            const n = [...arr];
+                                                                            n[i] = { ...n[i], voiceId: newVoice };
+                                                                            return n;
                                                                             });
                                                                         }}
-                                                                    >
+                                                                        >
                                                                         <option value="">Select Voice</option>
                                                                         {pool.map((v) => {
                                                                             const isTaken = speakers.some(
-                                                                                (s, idx) => s.voiceId === v.id && idx !== i
+                                                                            (s, idx) => s.voiceId === v.id && idx !== i
                                                                             );
 
                                                                             return (
-                                                                                <option key={v.id} value={v.id} disabled={isTaken}>
-                                                                                    {v.name} {isTaken ? "(Already Used)" : ""}
-                                                                                </option>
+                                                                            <option key={v.id} value={v.id} disabled={isTaken}>
+                                                                                {v.name} {isTaken ? "(Already Used)" : ""}
+                                                                            </option>
                                                                             );
                                                                         })}
-                                                                    </select>
+                                                                        </select>
+
                                                                     <button
                                                                         type="button"
                                                                         onClick={() => {

@@ -13,7 +13,7 @@ from flask_session import Session
 from dotenv import load_dotenv
 from openai import OpenAI
 from pydub import AudioSegment
-from pydub.utils import which
+from shutil import which
 from io import BytesIO
 from elevenlabs.client import ElevenLabs
 import os
@@ -61,21 +61,37 @@ app.config.update(
 Session(app)
 
 # Load .env
+# Load .env variables
 load_dotenv()
-app.secret_key = "supersecretkey"
 
-# Configure pydub to find FFmpeg in a portable way
-ffmpeg_path = os.getenv("FFMPEG_PATH") or which("ffmpeg")
-ffprobe_path = os.getenv("FFPROBE_PATH") or which("ffprobe")
+# Get ffmpeg & ffprobe paths from .env
+ffmpeg_path = os.getenv("FFMPEG_PATH")
+ffprobe_path = os.getenv("FFPROBE_PATH")
 
 print("DEBUG ffmpeg_path:", ffmpeg_path)
 print("DEBUG ffprobe_path:", ffprobe_path)
 
-if ffmpeg_path:
+# If the paths exist, configure pydub AND PATH
+if ffmpeg_path and os.path.exists(ffmpeg_path):
     AudioSegment.converter = ffmpeg_path
-if ffprobe_path:
-    AudioSegment.ffprobe = ffprobe_path
+    ffmpeg_dir = os.path.dirname(ffmpeg_path)
+    os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+else:
+    print("⚠️ ffmpeg_path missing or invalid")
 
+if ffprobe_path and os.path.exists(ffprobe_path):
+    AudioSegment.ffprobe = ffprobe_path
+    ffprobe_dir = os.path.dirname(ffprobe_path)
+    if ffprobe_dir not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = ffprobe_dir + os.pathsep + os.environ.get("PATH", "")
+else:
+    print("⚠️ ffprobe_path missing or invalid")
+
+print("DEBUG AudioSegment.converter:", getattr(AudioSegment, "converter", None))
+print("DEBUG AudioSegment.ffprobe:", getattr(AudioSegment, "ffprobe", None))
+print("DEBUG PATH starts with:", os.environ["PATH"].split(os.pathsep)[0])
+
+app.secret_key = "supersecretkey"
 
 
 def create_token(user_id, email):
@@ -126,11 +142,28 @@ voice_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 # ------------------------------------------------------------
 
 def is_arabic(text: str) -> bool:
-    """Detect if input text is Arabic."""
+    """
+    Detect if text is *mostly* Arabic.
+    Returns True only if a reasonable percentage of letters are Arabic.
+    """
+    if not text:
+        return False
+
+    arabic_letters = 0
+    total_letters = 0
+
     for c in text:
-        if "\u0600" <= c <= "\u06ff" or "\u0750" <= c <= "\u08ff":
-            return True
-    return False
+        if c.isalpha():
+            total_letters += 1
+            if "\u0600" <= c <= "\u06FF" or "\u0750" <= c <= "\u08FF":
+                arabic_letters += 1
+
+    if total_letters == 0:
+        return False
+
+    # tweak this threshold if you want, 0.3 = 30% of letters
+    return (arabic_letters / total_letters) >= 0.30
+
 
 
 def generate_podcast_script(description: str, speakers_info: list, script_style: str):
@@ -142,6 +175,27 @@ def generate_podcast_script(description: str, speakers_info: list, script_style:
     arabic_instruction = (
         "Please write the script in Arabic." if is_arabic(description) else ""
     )
+    is_ar = is_arabic(description)
+
+    if is_ar:
+            intro_block = """
+            --------------------
+            INTRO
+            --------------------
+            - يجب أن تكون أول جملة منطوقة في المقدمة من المقدم الرئيسي (أول متحدث في القائمة).
+            - يجب أن تحتوي هذه الجملة على {{SHOW_TITLE}} حرفيًا داخل علامات اقتباس، مثال:
+            <اسم_المقدم>: مرحبًا بكم في حلقة جديدة من "{{SHOW_TITLE}}".
+            - بعد هذه الجملة، أكمل المقدمة بتقديم الموضوع والمتحدثين بشكل طبيعي.
+            """
+    else:
+            intro_block = """
+            --------------------
+            INTRO
+            --------------------
+            - Start with: Host greets listeners and says:
+            "<HostName>: Welcome to another episode of '{{SHOW_TITLE}}'."
+            - Then introduce the topic + speakers naturally.
+            """
 
     # Format speakers list for GPT
     num_speakers = len(speakers_info)
@@ -196,8 +250,9 @@ Follow these requirements:
 --------------------
 INTRO
 --------------------
-- Greet listeners.
-- Introduce topic + speakers.
+- Start with: Host greets listeners and says:
+  "Welcome to another episode of '{{SHOW_TITLE}}'."
+- Then introduce the topic + speakers naturally.
 
 --------------------
 BODY
@@ -216,12 +271,8 @@ RULES
 --------------------
 - The script MUST contain three sections in this exact format:
 
---------------------
-INTRO
---------------------
-[music]
-[script content here]
-[music]
+{intro_block}
+
 --------------------
 BODY
 --------------------
@@ -294,6 +345,36 @@ Transform the following text into a structured podcast script:
     )
 
     raw_script = response.choices[0].message.content.strip()
+    # ---- Ensure the SHOW_TITLE placeholder is present in the intro ----
+    PLACEHOLDER = SHOW_TITLE_PLACEHOLDER  # "{{SHOW_TITLE}}"
+
+    # 1) Normalize common wrong variants the model might output
+    if PLACEHOLDER not in raw_script:
+        # {SHOW_TITLE}  →  {{SHOW_TITLE}}
+        raw_script = re.sub(r"\{SHOW_TITLE\}", PLACEHOLDER, raw_script)
+        # Bare SHOW_TITLE → {{SHOW_TITLE}}
+        raw_script = re.sub(r"\bSHOW_TITLE\b", PLACEHOLDER, raw_script)
+
+    # 2) English-style fallback: "episode of 'Some Name'"
+    if PLACEHOLDER not in raw_script:
+        m = re.search(
+            r"(episode of\s+[\"“'«])(.+?)([\"”'»])",
+            raw_script,
+            flags=re.IGNORECASE,
+        )
+        if m:
+            bad_title = m.group(2)
+            raw_script = raw_script.replace(bad_title, PLACEHOLDER, 1)
+
+    # 3) Arabic-style fallback: … حلقة جديدة من "اسم البودكاست"
+    if PLACEHOLDER not in raw_script and is_arabic(raw_script):
+        m = re.search(
+            r"(?:حلقة جديدة من|حلقة من|من)\s*[\"“«](.+?)[\"”»]",
+            raw_script,
+        )
+        if m:
+            bad_title = m.group(1)
+            raw_script = raw_script.replace(bad_title, PLACEHOLDER, 1)
 
     # ============================================================
     # 🧹 CLEAN ONLY BAD LINES — DO NOT DELETE MAIN SCRIPT
@@ -393,35 +474,6 @@ Script:
         return "حلقة بدون عنوان" if is_ar else "Untitled Episode"
 
     return title
-
-
-def extract_show_title_and_template(script: str):
-    """
-    Detect the podcast *show* name inside the intro
-    and return (show_title, script_template_with_placeholder).
-    """
-    if not script.strip():
-        return "Podcast Show", script  # fallback
-
-    # Look only in the first few lines where the intro is
-    lines = script.splitlines()
-    head = "\n".join(lines[:10])
-
-    # Example we saw:
-    # host: Welcome, listeners, to another episode of "Cultural Conversations," where...
-    match = re.search(r'episode of\s+"([^"]+)"', head, flags=re.IGNORECASE)
-    if not match:
-        # more generic fallback: first quoted thing in the intro
-        match = re.search(r'"([^"]+)"', head)
-    if not match:
-        return "Podcast Show", script  # nothing found, don’t break anything
-
-    show_title = match.group(1)
-
-    # Replace ONLY the first occurrence of the show title with the placeholder
-    script_template = script.replace(show_title, SHOW_TITLE_PLACEHOLDER, 1)
-
-    return show_title, script_template
 
 
 def validate_roles(style: str, speakers_info: list):
@@ -541,13 +593,9 @@ def api_generate():
     title = generate_title_from_script(script, script_style)
 
     # 3) NEW: extract show title + turn script into a template
-    #    (uses the helper you added earlier)
-    show_title, script_template = extract_show_title_and_template(script)
-    
-    # If we could not detect a real show name,
-    # use the episode title instead of "Podcast Show"
-    if show_title == "Podcast Show" and title:
-        show_title = title
+    script_template = script  # script already contains {{SHOW_TITLE}}
+    show_title = title or "Podcast Show"
+
 
     # 4) Store everything in the session draft
     session["create_draft"] = {
@@ -570,40 +618,38 @@ def api_draft():
 
 @app.post("/api/edit/save")
 def api_edit_save():
-    payload = request.get_json(silent=True) or {}
-    edited = (
-        payload.get("edited_script") or request.form.get("edited_script") or ""
-    ).strip()
+    """Save edited script (and optionally updated title) into the current create_draft."""
+    user = current_user()
+    if not user:
+        return jsonify({"ok": False, "error": "Not authenticated"}), 401
 
-    if not edited:
-        return jsonify(error="Script cannot be empty."), 400
+    data = request.get_json(force=True, silent=True) or {}
+    edited_script = (data.get("edited_script") or "").strip()
+    new_show_title = (data.get("show_title") or "").strip()
 
-    # Update session draft but KEEP existing title
-    draft = session.get("create_draft", {})
-    draft["script"] = edited
+    if not edited_script:
+        return jsonify({"ok": False, "error": "Empty script"}), 400
+
+    draft = session.get("create_draft") or {}
+    if not draft:
+        return jsonify({"ok": False, "error": "No active draft"}), 400
+
+    # Always update script
+    draft["script"] = edited_script
+
+    # If a new title is provided, update both show_title and title
+    if new_show_title:
+        draft["show_title"] = new_show_title
+        draft["title"] = new_show_title
+
     session["create_draft"] = draft
 
-    # ---- Firestore save (you already have db configured above) ----
-    try:
-        user_id = session.get("user_id", "anonymous")
-        doc_ref = db.collection("scripts").add(
-            {
-                "user_id": user_id,
-                "script_style": draft.get("script_style"),
-                "title": draft.get("title"),          # 👈 save episode title
-                "script": edited,
-                "speakers_info": draft.get("speakers_info"),
-                "description": draft.get("description"),
-                "saved_at": firestore.SERVER_TIMESTAMP,
-            }
-        )
-        print("✅ Firestore save OK",
-              "user_id=", user_id,
-              "doc_id=", doc_ref[1].id)
-    except Exception as e:
-        print("⚠ Firestore save FAILED:", e)
+    return jsonify({
+        "ok": True,
+        "show_title": draft.get("show_title"),
+        "title": draft.get("title"),
+    })
 
-    return jsonify(ok=True)
 
 
 def clean_script_for_tts(script: str) -> str:

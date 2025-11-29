@@ -65,26 +65,6 @@ const StepLine = ({ on }) => (
 
 // ----------------------------------------------------------------------------------------
 
-function extractTitleFromScript(scriptText) {
-  if (!scriptText) return "";
-
-  // Match titles inside quotation marks
-  const matchQuoted = scriptText.match(/["“](.*?)["”]/);
-  if (matchQuoted) return matchQuoted[1].trim();
-
-  // Match titles after “Title:” or “Episode Title:”
-  const matchKeyword = scriptText.match(/(?:title|episode title)\s*[:\-]\s*(.+)/i);
-  if (matchKeyword) return matchKeyword[1].trim();
-
-  return "";
-}
-
-// Keep extractShowTitle as an alias for compatibility
-function extractShowTitle(scriptText) {
-  return extractTitleFromScript(scriptText);
-}
-
-
 export default function EditScript() {
 
   const [script, setScript] = useState("");
@@ -110,39 +90,52 @@ export default function EditScript() {
     : script;
 
   const handleScriptChange = (e) => {
-    const next = e.target.value;
-    const prev = script;
+      const next = e.target.value;
+      const prev = script;
 
-    const musicRegex = /\[music\]/gi;
-    const prevMusicCount = (prev.match(musicRegex) || []).length;
-    const nextMusicCount = (next.match(musicRegex) || []).length;
+      const musicRegex = /\[music\]/gi;
+      const prevMusicCount = (prev.match(musicRegex) || []).length;
+      const nextMusicCount = (next.match(musicRegex) || []).length;
 
-    if (nextMusicCount < prevMusicCount) {
-      setScript(lastValidRef.current);
-      return;
-    }
+      if (nextMusicCount < prevMusicCount) {
+        setScript(lastValidRef.current);
+        return;
+      }
 
-    if (next === "" && script.trim() !== "") {
-      setScript(lastValidRef.current);
-      setToastMsg("You cannot clear the entire script!");
-      setTimeout(() => setToastMsg(""), 3000);
-      return;
-    }
+      if (next === "" && script.trim() !== "") {
+        setScript(lastValidRef.current);
+        setToastMsg("You cannot clear the entire script!");
+        setTimeout(() => setToastMsg(""), 3000);
+        return;
+      }
 
-    if (next.trim() === "") {
-      setScript(lastValidRef.current);
-      setSaveMsg("You can't clear the entire script.");
-      return;
-    }
+      if (next.trim() === "") {
+        setScript(lastValidRef.current);
+        setSaveMsg("You can't clear the entire script.");
+        return;
+      }
 
-    setScript(next);
-    lastValidRef.current = next;
+      // ✅ Update visible script
+      setScript(next);
+      lastValidRef.current = next;
 
-    const placeholder = "{{SHOW_TITLE}}";
-    const title = showTitle || "Podcast Show";
-    const templated = next.replaceAll(title, placeholder);
-    setScriptTemplate(templated);
-  };
+      // ✅ Keep the TEMPLATE in sync (with {{SHOW_TITLE}})
+      const placeholder = "{{SHOW_TITLE}}";
+
+      if (showTitle && showTitle.trim().length >= 4) {
+        const escaped = showTitle
+          .trim()
+          .replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); // escape regex chars
+        const re = new RegExp(escaped, "g");
+        const templated = next.replace(re, placeholder);
+        setScriptTemplate(templated);
+      } else {
+        // title too short like "a" or "AI" → don't try to be smart
+        setScriptTemplate(next);
+      }
+    };
+
+
 
   const startEditTitle = () => {
     setDraftTitle(showTitle || "Podcast Show");
@@ -157,25 +150,19 @@ export default function EditScript() {
     const trimmed = draftTitle.trim();
     if (!trimmed) return;
 
-    const currentTitle = showTitle || "Podcast Show";
     const placeholder = "{{SHOW_TITLE}}";
+    const baseTemplate = scriptTemplate || script || "";
 
-    const baseText = scriptTemplate || script || "";
-    if (!baseText) {
-      setIsEditingTitle(false);
-      return;
-    }
+    // baseTemplate should already have {{SHOW_TITLE}} in the right spots
+    const updatedVisible = baseTemplate.includes(placeholder)
+      ? baseTemplate.replaceAll(placeholder, trimmed)
+      : baseTemplate;
 
-    const newTemplate = baseText.replaceAll(currentTitle, placeholder);
-    setScriptTemplate(newTemplate);
-
-    const updatedVisible = newTemplate.replaceAll(placeholder, trimmed);
     setShowTitle(trimmed);
     setScript(updatedVisible);
     lastValidRef.current = updatedVisible;
     setIsEditingTitle(false);
   };
-
 
   useEffect(() => {
     if (!showTitle) return;
@@ -209,10 +196,10 @@ export default function EditScript() {
         (fromCreate.episodeTitle || "").trim();
 
       if (!show) {
-        // Try to read from quotes in the script if title was not saved
-        const base = template || fromCreate.generatedScript || "";
-        show = extractTitleFromScript(base);
+        // No stored title? fall back to a neutral default.
+        show = "Podcast Show";
       }
+
 
       if (template) {
         const visible = template.replaceAll("{{SHOW_TITLE}}", show || "Podcast Show");
@@ -356,6 +343,7 @@ export default function EditScript() {
 
   const save = async () => {
     const content = script.trim();
+
     if (!content) {
       setSaveMsg("Script is empty.");
       return;
@@ -363,9 +351,7 @@ export default function EditScript() {
 
     const badLine = findEmptySpeakerLine(script);
     if (badLine !== -1) {
-      setSaveMsg(
-        "Each speaker line must include text after the colon."
-      );
+      setSaveMsg("Each speaker line must include text after the colon.");
       focusEmptySpeakerLine(script);
       return;
     }
@@ -384,7 +370,10 @@ export default function EditScript() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ edited_script: content }),
+        body: JSON.stringify({
+          edited_script: content,
+          show_title: showTitle || "",
+        }),
       });
       if (!r.ok) throw new Error();
       setSaveMsg("Last saved: " + new Date().toLocaleTimeString());
@@ -394,6 +383,7 @@ export default function EditScript() {
       setSaving(false);
     }
   };
+
 
   const navigateToAudio = async () => {
     const trimmed = script.trim();
@@ -420,7 +410,10 @@ export default function EditScript() {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ edited_script: content }),
+          body: JSON.stringify({ 
+            edited_script: content,
+            show_title: showTitle || "",
+          }),
         });
       } catch (error) {
         console.error("Failed to save script:", error);
@@ -588,15 +581,16 @@ export default function EditScript() {
                   Edit lines below
                 </label>
                 <textarea
-                  id="scriptArea"
-                  ref={textareaRef}
-                  className="form-textarea"
-                  style={{ minHeight: "52vh", lineHeight: 1.55 }}
-                  value={displayedScript}
-                  onChange={handleScriptChange}
-                  onKeyDown={onKeyDownGuard}
-                  placeholder="Host: …"
-                />
+                id="scriptArea"
+                ref={textareaRef}
+                className="form-textarea"
+                style={{ minHeight: "52vh", lineHeight: 1.55 }}
+                value={script}         
+                onChange={handleScriptChange}
+                onKeyDown={onKeyDownGuard}
+                placeholder="Host: …"
+              />
+
 
 
                 {/* actions row */}

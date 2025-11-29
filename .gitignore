@@ -6,6 +6,8 @@ __pycache__/
 
 # Ignore environment keys
 .env
+*.env
+.env.local
 
 # Ignore system files
 .DS_Store
