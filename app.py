@@ -246,13 +246,7 @@ Format the content into a natural podcast script. Do not exceed or invent story 
 STYLE: {script_style}
 
 Follow these requirements:
-
---------------------
-INTRO
---------------------
-- Start with: Host greets listeners and says:
-  "Welcome to another episode of '{{SHOW_TITLE}}'."
-- Then introduce the topic + speakers naturally.
+{intro_block}
 
 --------------------
 BODY
@@ -271,7 +265,12 @@ RULES
 --------------------
 - The script MUST contain three sections in this exact format:
 
-{intro_block}
+--------------------
+INTRO
+--------------------
+[music]
+[script content here]
+[music]
 
 --------------------
 BODY
@@ -618,37 +617,48 @@ def api_draft():
 
 @app.post("/api/edit/save")
 def api_edit_save():
-    """Save edited script (and optionally updated title) into the current create_draft."""
-    user = current_user()
-    if not user:
-        return jsonify({"ok": False, "error": "Not authenticated"}), 401
-
-    data = request.get_json(force=True, silent=True) or {}
+    """
+    Save edited script (and optionally updated title).
+    - دائماً نحدّث session["create_draft"]
+    - وإذا فيه user_id في الـ session، نخزن نفس الشيء في Firestore أيضاً
+    """
+    data = request.get_json(silent=True) or {}
     edited_script = (data.get("edited_script") or "").strip()
-    new_show_title = (data.get("show_title") or "").strip()
+    show_title = (data.get("show_title") or "").strip()
 
     if not edited_script:
-        return jsonify({"ok": False, "error": "Empty script"}), 400
+        return jsonify({"ok": False, "error": "Edited script is empty"}), 400
 
+    # 1) حدّث الـ session draft
     draft = session.get("create_draft") or {}
-    if not draft:
-        return jsonify({"ok": False, "error": "No active draft"}), 400
-
-    # Always update script
     draft["script"] = edited_script
 
-    # If a new title is provided, update both show_title and title
-    if new_show_title:
-        draft["show_title"] = new_show_title
-        draft["title"] = new_show_title
+    if show_title:
+        draft["show_title"] = show_title
+        draft["title"] = show_title
 
     session["create_draft"] = draft
+    session.modified = True
+
+    # 2) لو المستخدم مسجل دخول، خزّن نسخة في Firestore
+    user_id = session.get("user_id")
+    if user_id:
+        draft_ref = db.collection("drafts").document(user_id)
+        draft_ref.set(
+            {
+                "script": edited_script,
+                "show_title": show_title,
+                "updated_at": firestore.SERVER_TIMESTAMP,
+            },
+            merge=True,
+        )
 
     return jsonify({
         "ok": True,
-        "show_title": draft.get("show_title"),
-        "title": draft.get("title"),
+        "show_title": draft.get("show_title", ""),
+        "title": draft.get("title", ""),
     })
+
 
 
 

@@ -1344,61 +1344,72 @@ useEffect(() => {
 
                     {/* STEP 3: ENTER TEXT */}
                     {step === 3 && (
-                        <section className="ui-card">
-                            <h2 className="ui-card-title flex items-center gap-2">
-                                <NotebookPen className="w-4 h-4" />
-                                Enter your text
-                            </h2>
+                    <section className="ui-card">
+                        <h2 className="ui-card-title flex items-center gap-2">
+                        <NotebookPen className="w-4 h-4" />
+                        Enter your text
+                        </h2>
 
-                            <textarea
-                                id="wecast_textarea"
-                                value={description}
-                                onChange={(e) => setDescription(e.target.value)}
-                                placeholder="Paste your text here (min 500, max 2500 words)…"
-                                className="form-textarea mt-3"
-                                rows={8}
-                            />
+                        <textarea
+                        id="wecast_textarea"
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                        placeholder="Paste your text here (min 500, max 2500 words)…"
+                        className="form-textarea mt-3"
+                        rows={8}
+                        />
+
+                        {(() => {
+                        const wordCount = description.trim().split(/\s+/).filter(Boolean).length;
+
+                        return (
                             <div className="mt-2 text-sm flex justify-between">
-                                <span
-                                    className={`${description.trim().split(/\s+/).filter(Boolean).length < MIN
-                                        ? "text-rose-500"
-                                        : "text-purple-500"
-                                        }`}
-                                >
-                                    {description.trim().split(/\s+/).filter(Boolean).length} / {MAX} words
-                                </span>
-                                {errors.description && (
-                                    <span className="text-rose-500">{errors.description}</span>
-                                )}
-                            </div>
-                            {errors.server && (
-                                <p className="text-rose-600 mt-3 flex items-center gap-2">
-                                    <AlertCircle className="w-4 h-4" /> {errors.server}
-                                </p>
+                            <span
+                                className={
+                                wordCount < MIN || wordCount > MAX
+                                    ? "text-rose-500"      // red if too short OR too long
+                                    : "text-purple-500"    // normal color inside range
+                                }
+                            >
+                                {wordCount} / {MAX} words
+                            </span>
+                            {errors.description && (
+                                <span className="text-rose-500">{errors.description}</span>
                             )}
-                            <div className="mt-6 flex justify-between">
-                                <button
-                                    onClick={() => setStep(2)}
-                                    className="px-4 py-2 border rounded-xl"
-                                >
-                                    Back
-                                </button>
-                                <button
-                                    onClick={handleGenerate}
-                                    disabled={submitting}
-                                    className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
-                                >
-                                    {submitting ? (
-                                        "Generating Script..."
-                                    ) : (
-                                        <>
-                                            Generate Script <Wand2 className="w-4 h-4" />
-                                        </>
-                                    )}
-                                </button>
                             </div>
-                        </section>
+                        );
+                        })()}
+
+                        {errors.server && (
+                        <p className="text-rose-600 mt-3 flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4" /> {errors.server}
+                        </p>
+                        )}
+
+                        <div className="mt-6 flex justify-between">
+                        <button
+                            onClick={() => setStep(2)}
+                            className="px-4 py-2 border rounded-xl"
+                        >
+                            Back
+                        </button>
+                        <button
+                            onClick={handleGenerate}
+                            disabled={submitting}
+                            className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
+                        >
+                            {submitting ? (
+                            "Generating Script..."
+                            ) : (
+                            <>
+                                Generate Script <Wand2 className="w-4 h-4" />
+                            </>
+                            )}
+                        </button>
+                        </div>
+                    </section>
                     )}
+
 
                     {/* STEP 4: REVIEW & EDIT */}
                     {step === 4 && generatedScript && (
