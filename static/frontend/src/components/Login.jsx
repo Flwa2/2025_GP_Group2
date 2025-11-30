@@ -55,92 +55,80 @@ export default function Login() {
     if (email && !resetEmail) setResetEmail(email);
   };
 
-  // ------------------ LOGIN SUBMIT ------------------
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError("");
-    setInfo("");
+ // ------------------ LOGIN SUBMIT ------------------
+const handleSubmit = async (e) => {
+  e.preventDefault();
+  setError("");
+  setInfo("");
 
-    if (!email.trim() || !pwd.trim()) {
-      setError((t("login.required")));
+  if (!email.trim() || !pwd.trim()) {
+    setError(t("login.required"));
+    return;
+  }
+
+  setLoading(true);
+
+  try {
+    const res = await fetch(`${API_BASE}/api/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ email, password: pwd }),
+    });
+
+    let data = {};
+    try {
+      data = await res.json();
+    } catch {
+      data = {};
+    }
+
+    if (!res.ok) {
+      if (res.status === 401) {
+        setError(t("Invalid email or password")); 
+      } else if (data.locked) {
+        const mins = data.lockMinutes ?? 15;
+        setError(data.error || t("login.locked", { mins }));
+      } else if (typeof data.remainingAttempts === "number") {
+        setError(data.error || `You have ${data.remainingAttempts} attempts left.`);
+      } else {
+        setError(data.error || t("password is incorrect"));
+      }
+      setLoading(false);
       return;
     }
 
-    setLoading(true);
-
-    try {
-      const res = await fetch(`${API_BASE}/api/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ email, password: pwd }),
-      });
-
-      let data = {};
-      try {
-        data = await res.json();
-      } catch {
-        data = {};
+    if (data.token) {
+      if (rememberMe) {
+        localStorage.setItem("token", data.token);
+      } else {
+        sessionStorage.setItem("token", data.token);
       }
-
-      if (!res.ok) {
-        // account locked case (from backend)
-        if (data.locked) {
-          const mins = data.lockMinutes ?? 15;
-          setError(
-            data.error || t("login.locked", { mins })
-          );
-          setLoading(false);
-          return;
-        }
-
-        // remaining attempts
-        if (typeof data.remainingAttempts === "number") {
-          setError(
-            data.error || data.error || `t("login.locked", { mins }) attempts left.`
-          );
-          setLoading(false);
-          return;
-        }
-
-        setError(data.error || t("login.invalid"));
-        setLoading(false);
-        return;
-      }
-
-      if (data.token) {
-        if (rememberMe) {
-          // Keep user logged in across browser restarts
-          localStorage.setItem("token", data.token);
-        } else {
-          // Only until the tab or browser is closed
-          sessionStorage.setItem("token", data.token);
-        }
-      }
-
-      if (data.user) {
-        const userJson = JSON.stringify(data.user);
-        if (rememberMe) {
-          localStorage.setItem("user", userJson);
-          sessionStorage.removeItem("user");
-        } else {
-          sessionStorage.setItem("user", userJson);
-          localStorage.removeItem("user");
-        }
-      }
-
-      window.dispatchEvent(
-        new StorageEvent("storage", { key: "token", newValue: data.token || "" })
-      );
-
-      redirectAfterAuth();
-    } catch (err) {
-      console.error("LOGIN NETWORK ERROR:", err);
-      setError(t("general.networkError"));
-    } finally {
-      setLoading(false);
     }
-  };
+
+    if (data.user) {
+      const userJson = JSON.stringify(data.user);
+      if (rememberMe) {
+        localStorage.setItem("user", userJson);
+        sessionStorage.removeItem("user");
+      } else {
+        sessionStorage.setItem("user", userJson);
+        localStorage.removeItem("user");
+      }
+    }
+
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: "token", newValue: data.token || "" })
+    );
+
+    redirectAfterAuth();
+  } catch (err) {
+    console.error("LOGIN NETWORK ERROR:", err);
+    setError(t("Invalid email or password")); 
+  } finally {
+    setLoading(false);
+  }
+};
 
   // ------------------ RESET PASSWORD SUBMIT (DIRECT) ------------------
   const handleResetSubmit = async (e) => {
@@ -180,8 +168,7 @@ export default function Login() {
       }
 
       if (!res.ok) {
-        // Backend already sends clear messages like:
-        // "Email is not registered." or password rule errors
+     
         setError(data.error || t("reset.failed"));
       } else {
         setInfo(
@@ -284,7 +271,6 @@ export default function Login() {
 
   // ------------------------------------------------------------------
   // UI
-  // ------------------------------------------------------------------
   return (
     <div className="min-h-screen relative overflow-hidden flex items-center justify-center bg-cream dark:bg-[#0a0a1a] transition-colors pb-20 md:pb-28">
       {/* RIGHT animated shapes (your original ones) */}
@@ -391,7 +377,7 @@ export default function Login() {
                     <Lock className="w-5 h-5" />
                   </span>
                   <input
-                    type={showPwd ? "text" : "password"}
+                    type="password"
                     className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text:white placeholder-black/50 dark:placeholder:white/50"
                     placeholder={t("login.passwordPlaceholder")}
                     value={pwd}
@@ -399,18 +385,7 @@ export default function Login() {
                     required
                     autoComplete="current-password"
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowPwd((v) => !v)}
-                    className="pr-3 text-black/60 dark:text:white/60 hover:text:black dark:hover:text:white transition"
-                    aria-label={showPwd ? "Hide password" : "Show password"}
-                  >
-                    {showPwd ? (
-                      <EyeOff className="w-5 h-5" />
-                    ) : (
-                      <Eye className="w-5 h-5" />
-                    )}
-                  </button>
+                 
                 </div>
               </div>
 
@@ -559,18 +534,7 @@ export default function Login() {
                     onChange={(e) => setResetPwd(e.target.value)}
                     required
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowResetPwd((v) => !v)}
-                    className="pr-3 text-black/60 dark:text:white/60 hover:text:black dark:hover:text:white transition"
-                    aria-label={showResetPwd ? "Hide password" : "Show password"}
-                  >
-                    {showResetPwd ? (
-                      <EyeOff className="w-5 h-5" />
-                    ) : (
-                      <Eye className="w-5 h-5" />
-                    )}
-                  </button>
+                 
                 </div>
                 <p className="mt-1 text-xs text-black/60 dark:text:white/60">
                   {t("reset.subtitle")}                

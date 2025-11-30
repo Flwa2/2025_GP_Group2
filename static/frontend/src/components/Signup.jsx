@@ -27,7 +27,6 @@ function redirectAfterAuth() {
 export default function Signup() {
     const { t } = useTranslation();
     const [form, setForm] = useState({ username: "", email: "", password: "" });
-    const [showPw, setShowPw] = useState(false);
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
 
@@ -203,7 +202,7 @@ const pwLabel = strengthLabels[passwordScore];
 
     return (
         <div className="relative min-h-screen flex items-center justify-center bg-cream dark:bg-[#0a0a1a] text-black dark:text-white px-4 py-12 overflow-hidden">
-            {/* ===== Decorative Background (BlubSignup image) ===== */}
+            {/*Decorative Background (BlubSignup image)*/}
             <div
                 className="pointer-events-none absolute z-0 right-[40px] bottom-[20px] opacity-90"
                 style={{
@@ -217,7 +216,7 @@ const pwLabel = strengthLabels[passwordScore];
                 }}
             />
 
-            {/* ===== Animated Accent Shapes ===== */}
+            {/*Animated Accent Shapes*/}
             <div className="pointer-events-none absolute z-0 right-[30px] bottom-[60px] hidden md:block">
                 <div className="relative h-[200px] w-[200px]">
                     <span className="absolute left-1/2 top-1/2 -ml-2 -mt-2 h-4 w-4 rounded-full bg-purple-600/80 dark:bg-purple-400/80 animate-circular" />
@@ -249,7 +248,7 @@ const pwLabel = strengthLabels[passwordScore];
                 <div className="stripes-move h-[220px] w-[260px] rounded-3xl opacity-70"></div>
             </div>
 
-            {/* ===== Signup Card ===== */}
+            {/*Signup Card*/}
             <div className="ui-card relative z-10 w-full max-w-md p-8 backdrop-blur">
                 <div className="mb-8 text-center">
                     <h1 className="text-3xl font-extrabold text-black-medium dark:text-purple-400">
@@ -287,48 +286,41 @@ const pwLabel = strengthLabels[passwordScore];
                         />
                     </div>
 
-                    <div>
-                        <label className="form-label">{t("signup.password")}</label>
-                        <div className="relative">
-                            <input
-                                type={showPw ? "text" : "password"}
-                                name="password"
-                                value={form.password}
-                                onChange={onChange}
-                                placeholder="••••••••"
-                                required
-                                className="form-input pr-24"
-                            />
-                            <button
-                                type="button"
-                                onClick={() => setShowPw((s) => !s)}
-                                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg border border-neutral-300 dark:border-neutral-700 px-3 py-1 text-xs text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition"
-                            >
-                                {showPw ? t("signup.hide") : t("signup.show")}
-                            </button>
-                        </div>
+                   <div>
+    <label className="form-label">{t("signup.password")}</label>
+    <div className="relative">
+        <input
+            type="password"
+            name="password"
+            value={form.password}
+            onChange={onChange}
+            placeholder="••••••••"
+            required
+            className="form-input"
+        />
+    </div>
 
-                        {/* Password strength bar */}
-                        <div className="mt-3">
-                            <div className="h-2 w-full rounded bg-neutral-200 dark:bg-neutral-700">
-                                <div
-                                    className="h-2 rounded transition-all"
-                                    style={{
-                                        width: `${(passwordScore / 5) * 100}%`,
-                                        background:
-                                            passwordScore >= 4
-                                                ? "#22c55e"
-                                                : passwordScore >= 3
-                                                    ? "#f59e0b"
-                                                    : "#ef4444",
-                                    }}
-                                />
-                            </div>
-                            <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                                 {t("PasswordStrength.StrengthLabel")}: {pwLabel}
-                            </p>
-                        </div>
-                    </div>
+    {/* Password strength bar */}
+    <div className="mt-3">
+        <div className="h-2 w-full rounded bg-neutral-200 dark:bg-neutral-700">
+            <div
+                className="h-2 rounded transition-all"
+                style={{
+                    width: `${(passwordScore / 5) * 100}%`,
+                    background:
+                        passwordScore >= 4
+                            ? "#22c55e"
+                            : passwordScore >= 3
+                                ? "#f59e0b"
+                                : "#ef4444",
+                }}
+            />
+        </div>
+        <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
+             {t("PasswordStrength.StrengthLabel")}: {pwLabel}
+        </p>
+    </div>
+</div>
 
                     {error && (
                         <p className="text-sm text-red-500 text-center">
