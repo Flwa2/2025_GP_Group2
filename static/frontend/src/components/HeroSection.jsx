@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from "react";
 import CurvedWeCast from "./CurvedWeCast";
+import { useTranslation } from "react-i18next";
 
 function HeroSection() {
+  const { t } = useTranslation();
   const [flashMessage, setFlashMessage] = useState("");
 
   // Read and clear the one time flash message when Home loads
@@ -51,14 +53,16 @@ function HeroSection() {
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
         <div className="space-y-8">
           <h1>
-            <CurvedWeCast className="text-6xl lg:text-8xl" />
+            <div dir="ltr" className="inline-block">
+              <CurvedWeCast className="text-6xl lg:text-8xl" />
+            </div>
           </h1>
 
           <div className="relative">
             {/* Start Casting bubble */}
             <div className="transform rotate-12 text-sm font-medium text-black absolute -top-4 left-40 flex items-center space-x-2">
               <span className="text-sm animate-pulse text-black dark:text-gray-100">
-                Start Casting!!
+                {t("Start Casting!!")}
               </span>
               <div className="relative w-6 h-6">
                 <div className="absolute inset-0 w-6 h-6 bg-pink-bright rounded-full animate-spin"></div>
@@ -70,7 +74,7 @@ function HeroSection() {
             {/* Turn Text to Speech bubble */}
             <div className="transform -rotate-12 text-sm font-medium text-black absolute top-8 left-60 flex items-center space-x-2">
               <span className="text-sm animate-pulse text-black dark:text-gray-100">
-                Turn Text to speech!
+                {t("Turn Text to speech!")}
               </span>
               <div className="relative w-6 h-6">
                 <div
@@ -102,13 +106,11 @@ function HeroSection() {
 
         <div className="space-y-6 mt-10">
           <h2 className="text-3xl font-bold text-black dark:text-gray-100">
-            Give Your Words a Voice
-            <br />
-            with WeCast
+            {t("Give Your Words a Voice with WeCast")}
           </h2>
 
           <p className="text-lg text-black dark:text-gray-100 leading-relaxed">
-            Whether it is a blog post, essay, or research paper, WeCast transforms your text into a lifelike podcast episode ready to play in seconds.
+            {t("Hero Description")}
           </p>
 
           <button
@@ -123,7 +125,7 @@ function HeroSection() {
             }}
             className="relative inline-flex items-center justify-center px-8 py-3 font-semibold text-white rounded-full overflow-hidden group btn-cta"
           >
-            <span className="relative z-10">Let’s WeCast It</span>
+            <span className="relative z-10">{t("Let's WeCast It")}</span>
             <div className="absolute inset-0 bg-gradient-to-r from-pink-bright to-purple-medium opacity-0 group-hover:opacity-20 transition-opacity duration-300"></div>
           </button>
         </div>

@@ -1,6 +1,7 @@
 // src/components/Account.jsx
 import React, { useEffect, useRef, useState } from "react";
 import { LogOut } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 /* ---- Dark mode helper ---- */
 function applyDarkMode(enabled) {
@@ -17,6 +18,7 @@ function dicebearAvatar(name = "WeCast User") {
 }
 
 export default function Account() {
+  const { t } = useTranslation();
   const [saving, setSaving] = useState(false);
 
   // Profile state (default values, overwritten from localStorage)
@@ -137,14 +139,14 @@ export default function Account() {
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-8">
       <header className="space-y-1">
-        <h1 className="text-3xl font-extrabold">Account</h1>
+        <h1 className="text-3xl font-extrabold">{t("account.title")}</h1>
         <p className="text-sm text-gray-600 dark:text-gray-300">
-          Manage your profile and appearance.
+           {t("account.subtitle")}
         </p>
       </header>
 
       {/* PROFILE */}
-      <Card title="Profile">
+      <Card title={t("account.profile")}>
         <div className="flex flex-col gap-6">
           {/* Avatar + name row */}
           <div className="flex items-center gap-6">
@@ -173,9 +175,9 @@ export default function Account() {
 
             <div className="flex-1 grid md:grid-cols-2 gap-4 items-center">
               <Field
-                label="Display name"
-                full
-                hint="This appears on your public profile and episodes you publish."
+                label={t("account.displayName")}
+                hint={t("account.displayNameHint")}
+                placeholder={t("account.displayNamePlaceholder")}
               >
                 <input
                   className="form-input"
@@ -188,8 +190,8 @@ export default function Account() {
               </Field>
 
               <Field
-                label="Username (optional)"
-                hint="Use letters, numbers, underscores."
+                label={t("account.username")}
+                hint={t("account.usernameHint")}
               >
                 <input
                   className="form-input"
@@ -205,9 +207,9 @@ export default function Account() {
 
           {/* Bio */}
           <Field
-            label="Bio"
-            full
-            hint="A short sentence about what you create."
+            label={t("account.bio")}
+            hint={t("account.bioHint")}
+            placeholder={t("account.bioPlaceholder")}
           >
             <textarea
               className="form-textarea"
@@ -221,7 +223,7 @@ export default function Account() {
 
           {/* Email (read-only) */}
           {profile.email && (
-            <Field label="Email (read-only)">
+              <Field label={t("account.email")}>
               <input className="form-input" value={profile.email} readOnly />
             </Field>
           )}
@@ -229,12 +231,12 @@ export default function Account() {
       </Card>
 
       {/* APPEARANCE */}
-      <Card title="Appearance">
+      <Card title={t("account.appearance")}>
         <div className="flex items-center justify-between">
           <div>
-            <p className="font-semibold">Dark Mode</p>
+            <p className="font-semibold">{t("account.darkMode")}</p>
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              Switches the entire site theme on this device.
+               {t("account.darkModeHint")}     
             </p>
           </div>
           <Toggle checked={darkMode} onChange={toggleDark} />
@@ -246,10 +248,10 @@ export default function Account() {
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
             <p className="font-semibold text-black dark:text-white">
-              Account actions
+              {t("account.actions")}
             </p>
             <p className="text-sm text-gray-600 dark:text-gray-300">
-              Save your changes or sign out of WeCast on this device.
+               {t("account.actionsHint")}
             </p>
           </div>
 
@@ -265,7 +267,7 @@ export default function Account() {
                    dark:bg-white dark:text-black dark:hover:bg-white/90
                    disabled:opacity-60 transition"
             >
-              {saving ? "Saving…" : "Save Changes"}
+              {saving ? t("account.saving") : t("account.save")}
             </button>
 
             {/* Logout button - same size, outline style */}
@@ -279,7 +281,7 @@ export default function Account() {
                    transition"
             >
               <LogOut className="w-4 h-4 mr-1" />
-              Log out
+              {t("account.logout")}
             </button>
           </div>
         </div>

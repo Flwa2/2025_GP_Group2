@@ -1,17 +1,18 @@
 // src/App.jsx
-import React, { useEffect, useState } from 'react';
-import Header from './components/Header';
-import HeroSection from './components/HeroSection';
-import AbstractArt from './components/AbstractArt';
-import HowItWorks from './components/HowItWorks';
-import AboutSection from './components/AboutSection';
-import FooterArt from './components/FooterArt';
-import Footer from './components/Footer';
-import Account from './components/Account';
-import Signup from './components/Signup';
-import Login from './components/Login';
-import EditScript from './components/EditScript';
-import Create from './components/CreatePro'; 
+import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";  
+import Header from "./components/Header";
+import HeroSection from "./components/HeroSection";
+import AbstractArt from "./components/AbstractArt";
+import HowItWorks from "./components/HowItWorks";
+import AboutSection from "./components/AboutSection";
+import FooterArt from "./components/FooterArt";
+import Footer from "./components/Footer";
+import Account from "./components/Account";
+import Signup from "./components/Signup";
+import Login from "./components/Login";
+import EditScript from "./components/EditScript";
+import Create from "./components/CreatePro";
 
 function isAuthenticated() {
   return !!localStorage.getItem("token");
@@ -28,6 +29,7 @@ function useHashRoute() {
 }
 
 export default function App() {
+  const { i18n } = useTranslation();  
   const hash = useHashRoute();
   const isAccount = hash.startsWith('#/account');
   const isSignup = hash.startsWith('#/signup');

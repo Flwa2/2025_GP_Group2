@@ -1,9 +1,23 @@
 // src/components/Header.jsx
 import { useEffect, useState } from "react";
 import CurvedWeCast from "./CurvedWeCast";
+import { useTranslation } from "react-i18next";
+import { Globe } from "lucide-react";
 
 export default function Header() {
-  const [loggedIn, setLoggedIn] = useState(false);
+const [loggedIn, setLoggedIn] = useState(false);
+const { i18n , t } = useTranslation();
+
+const toggleLanguage = () => {
+  const newLang = i18n.language === "ar" ? "en" : "ar";
+  i18n.changeLanguage(newLang);
+
+  // Store preference
+  localStorage.setItem("wecast-lang", newLang);
+
+  // Updates direction dynamically
+  document.documentElement.dir = newLang === "ar" ? "rtl" : "ltr";
+};
 
   const goEpisodes = (e) => {
     e.preventDefault();
@@ -61,7 +75,7 @@ export default function Header() {
               onClick={scrollToTop}
               className="transition-colors duration-300 hover:text-purple-600"
             >
-              Home
+            {t("Home")}
             </button>
 
           </li>
@@ -73,7 +87,7 @@ export default function Header() {
                 href="#/account"
                 className="transition-colors duration-300 hover:text-purple-600"
               >
-                Profile
+                {t("Profile")}
               </a>
             </li>
           )}
@@ -81,6 +95,20 @@ export default function Header() {
 
         {/* RIGHT: auth buttons */}
         <div className="flex items-center gap-3">
+            {/* Language Icon button */}
+              <button
+                onClick={toggleLanguage}
+                className="w-10 h-10 flex items-center justify-center rounded-full border border-gray-300
+                          dark:border-gray-600 bg-white dark:bg-gray-900 hover:bg-gray-100 
+                          dark:hover:bg-gray-800 transition"
+                aria-label="Change language"
+              >
+                <Globe
+                  className="w-5 h-5 text-gray-700 dark:text-gray-300"
+                  style={{ transform: i18n.language === "ar" ? "scaleX(-1)" : "none" }}
+                />
+              </button>
+
           {!loggedIn && (
             <>
               <a
@@ -88,14 +116,14 @@ export default function Header() {
                 className="px-3 py-1.5 rounded-lg text-black dark:text-gray-100 font-normal transition-all duration-300 hover:font-semibold hover:underline underline-offset-4"
                 style={{ backgroundColor: "transparent", border: "none" }}
               >
-                Log in
+                {t("Login")}
               </a>
 
               <a
                 href="#/signup"
                 className="px-3 py-1.5 rounded-lg bg-black text-white font-bold border-2 border-black transition-all duration-300 hover:bg-pink-200 hover:text-black"
               >
-                Sign Up
+               {t("Signup")}
               </a>
             </>
           )}

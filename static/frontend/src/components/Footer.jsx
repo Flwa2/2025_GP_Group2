@@ -1,9 +1,11 @@
 // src/components/Footer.jsx
 import React from "react";
+import { useTranslation } from "react-i18next";
 
 const EMAIL = "WeCast@gmail.com";
 
 export default function Footer() {
+  const { t } = useTranslation();
   const mailto = `mailto:${EMAIL}?subject=${encodeURIComponent(
     "WeCast — Contact"
   )}`;
@@ -52,20 +54,20 @@ export default function Footer() {
 
         {/* Quick Links */}
         <div>
-          <h4 className="text-lg font-semibold mb-4">Quick Links</h4>
+          <h4 className="text-lg font-semibold mb-4">{t("footer.quickLinks")}</h4>
           <ul className="space-y-3 text-white/70 text-sm">
             <li>
               <button
                 onClick={scrollToTop}
                 className="hover:text-white transition cursor-pointer"
               >
-                Home
+                {t("footer.home")}
               </button>
 
             </li>
             <li>
               <a href="#/create" className="hover:text-white transition">
-                Create Script
+                  {t("footer.create")}
               </a>
             </li>
             <li>
@@ -77,7 +79,7 @@ export default function Footer() {
                 }}
                 className="hover:text-white transition cursor-pointer"
               >
-                How It Works
+                 {t("footer.how")}
               </a>
             </li>
             <li>
@@ -89,7 +91,7 @@ export default function Footer() {
                 }}
                 className="hover:text-white transition cursor-pointer"
               >
-                About Us
+                  {t("footer.about")}
               </a>
             </li>
           </ul>
@@ -97,7 +99,7 @@ export default function Footer() {
 
         {/* Contact */}
         <div>
-          <h4 className="text-lg font-semibold mb-4">Contact Us</h4>
+          <h4 className="text-lg font-semibold mb-4">{t("footer.contact")}</h4>
           <a
             href={mailto}
             className="text-white/80 underline underline-offset-4 hover:text-white transition"
@@ -109,7 +111,7 @@ export default function Footer() {
 
       {/* Copyright */}
       <div className="max-w-7xl mx-auto mt-10 pt-6 border-t border-white/10 text-center text-xs text-white/45">
-        © {new Date().getFullYear()} WeCast — All rights reserved.
+        © {new Date().getFullYear()} WeCast — {t("footer.rights")}
       </div>
     </footer>
   );

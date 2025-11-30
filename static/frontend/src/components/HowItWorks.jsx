@@ -1,18 +1,19 @@
 // src/components/HowItWorks.jsx
 import React from "react";
 import StepCard from "./StepCard";
+import { useTranslation } from "react-i18next";
 
 export default function HowItWorks() {
+  const { t } = useTranslation();
   return (
     <section className="bg-[#cfc2ff] dark:bg-[#0a0a1a] text-black dark:text-white pt-20 pb-20 md:pb-16 transition-colors duration-500">
       <div className="relative max-w-6xl mx-auto">
         <h2 className="text-4xl font-extrabold tracking-wide text-black text-center dark:text-gray-100">
-          How WeCast Works
+          {t("How WeCast Works")}
         </h2>
 
         <p className="mt-3 text-center text-black/70 dark:text-gray-300 max-w-2xl mx-auto">
-          Turn your text into a podcast in a few guided steps<br />
-          no setup, no mic, no editing.
+            {t("HowItWorks Line1")}<br />{t("HowItWorks Line2")}
         </p>
 
         {/* 3-step overview */}
@@ -34,15 +35,15 @@ export default function HowItWorks() {
             </div>
 
             <h3 className="text-2xl font-semibold mb-3 text-black dark:text-white">
-              Choose Style & Speakers
+              {t("Step1 Title")}
             </h3>
 
             <p className="text-black/80 dark:text-gray-300">
-              Pick how you want your podcast to sound, then choose the number of speakers and their voices.
+               {t("Step1 Body")}
             </p>
 
             <div className="mt-4 flex flex-wrap gap-3">
-              {["Interview", "Educational", "Storytelling", "Conversational"].map((style, i) => (
+              {["Interview", "Educational", "Storytelling", "Conversational"].map((translationKey, i) => (
                 <span
                   key={i}
                   className="inline-block rounded-full px-4 py-1.5 text-sm font-medium
@@ -51,7 +52,7 @@ export default function HowItWorks() {
                             hover:scale-105 hover:from-pink-500 hover:to-purple-600
                             cursor-default select-none"
                 >
-                  {style}
+                  {t(translationKey)}
                 </span>
               ))}
             </div>
@@ -73,12 +74,11 @@ export default function HowItWorks() {
             </div>
 
             <h3 className="text-2xl font-semibold mb-3 text-black dark:text-white">
-              Write & Refine Your Content
+               {t("Step2 Title")}
             </h3>
 
             <p className="text-black/80 dark:text-gray-300">
-              Paste your text and let WeCast turn it into a structured podcast script. 
-              Review it, make edits, and shape it the way you want.
+               {t("Step2 Body")}
             </p>
           </StepCard>
 
@@ -98,16 +98,15 @@ export default function HowItWorks() {
             </div>
 
             <h3 className="text-2xl font-semibold mb-3 text-black dark:text-white">
-              Add Music, Generate & Listen
+                {t("Step3 Title")}
             </h3>
 
             <p className="text-black/80 dark:text-gray-300">
-              Choose transition music, then generate natural, clear audio using the voices you selected.
-              Preview instantly, then download or share your episode.
+                 {t("Step3 Body")}
             </p>
 
             <p className="mt-3 text-sm text-black/60 dark:text-gray-400">
-              Natural Voices • Script Editing • Instant Playback
+                {t("Step3 Tagline")}
             </p>
           </StepCard>
 
@@ -120,9 +119,9 @@ export default function HowItWorks() {
             className="btn-cta
                        "
           >
-            Try WeCast Now
+               {t("Try WeCast Now Button")}
           </a>
-          <p className="text-xs text-black/60 dark:text-gray-400">No signup required to test it.</p>
+          <p className="text-xs text-black/60 dark:text-gray-400">{t("No Signup Required")}</p>
         </div>
       </div>
     </section>
