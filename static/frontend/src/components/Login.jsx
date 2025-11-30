@@ -180,8 +180,7 @@ export default function Login() {
       }
 
       if (!res.ok) {
-        // Backend already sends clear messages like:
-        // "Email is not registered." or password rule errors
+     
         setError(data.error || t("reset.failed"));
       } else {
         setInfo(
@@ -284,7 +283,6 @@ export default function Login() {
 
   // ------------------------------------------------------------------
   // UI
-  // ------------------------------------------------------------------
   return (
     <div className="min-h-screen relative overflow-hidden flex items-center justify-center bg-cream dark:bg-[#0a0a1a] transition-colors pb-20 md:pb-28">
       {/* RIGHT animated shapes (your original ones) */}
@@ -391,7 +389,7 @@ export default function Login() {
                     <Lock className="w-5 h-5" />
                   </span>
                   <input
-                    type={showPwd ? "text" : "password"}
+                    type="password"
                     className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text:white placeholder-black/50 dark:placeholder:white/50"
                     placeholder={t("login.passwordPlaceholder")}
                     value={pwd}
@@ -399,18 +397,7 @@ export default function Login() {
                     required
                     autoComplete="current-password"
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowPwd((v) => !v)}
-                    className="pr-3 text-black/60 dark:text:white/60 hover:text:black dark:hover:text:white transition"
-                    aria-label={showPwd ? "Hide password" : "Show password"}
-                  >
-                    {showPwd ? (
-                      <EyeOff className="w-5 h-5" />
-                    ) : (
-                      <Eye className="w-5 h-5" />
-                    )}
-                  </button>
+                 
                 </div>
               </div>
 
@@ -559,18 +546,7 @@ export default function Login() {
                     onChange={(e) => setResetPwd(e.target.value)}
                     required
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowResetPwd((v) => !v)}
-                    className="pr-3 text-black/60 dark:text:white/60 hover:text:black dark:hover:text:white transition"
-                    aria-label={showResetPwd ? "Hide password" : "Show password"}
-                  >
-                    {showResetPwd ? (
-                      <EyeOff className="w-5 h-5" />
-                    ) : (
-                      <Eye className="w-5 h-5" />
-                    )}
-                  </button>
+                 
                 </div>
                 <p className="mt-1 text-xs text-black/60 dark:text:white/60">
                   {t("reset.subtitle")}                
