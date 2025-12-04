@@ -115,7 +115,7 @@ export default function HowItWorks() {
 
         <div className="mt-10 flex flex-col items-center gap-3">
           <a
-            href="'#/create'"
+            href="#/create"
             className="btn-cta
                        "
           >
