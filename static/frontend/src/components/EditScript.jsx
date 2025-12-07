@@ -3,6 +3,10 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { Mic2 } from "lucide-react";
 
+const API_BASE = import.meta.env.PROD
+  ? "https://wecast.onrender.com"
+  : "http://localhost:5000";
+
 /* -------------------- overlay: rotating logo -------------------- */
 function LoadingOverlay({ show, logoSrc = "/logo.png" }) {
   if (!show) return null;
@@ -90,50 +94,50 @@ export default function EditScript() {
     : script;
 
   const handleScriptChange = (e) => {
-      const next = e.target.value;
-      const prev = script;
+    const next = e.target.value;
+    const prev = script;
 
-      const musicRegex = /\[music\]/gi;
-      const prevMusicCount = (prev.match(musicRegex) || []).length;
-      const nextMusicCount = (next.match(musicRegex) || []).length;
+    const musicRegex = /\[music\]/gi;
+    const prevMusicCount = (prev.match(musicRegex) || []).length;
+    const nextMusicCount = (next.match(musicRegex) || []).length;
 
-      if (nextMusicCount < prevMusicCount) {
-        setScript(lastValidRef.current);
-        return;
-      }
+    if (nextMusicCount < prevMusicCount) {
+      setScript(lastValidRef.current);
+      return;
+    }
 
-      if (next === "" && script.trim() !== "") {
-        setScript(lastValidRef.current);
-        setToastMsg("You cannot clear the entire script!");
-        setTimeout(() => setToastMsg(""), 3000);
-        return;
-      }
+    if (next === "" && script.trim() !== "") {
+      setScript(lastValidRef.current);
+      setToastMsg("You cannot clear the entire script!");
+      setTimeout(() => setToastMsg(""), 3000);
+      return;
+    }
 
-      if (next.trim() === "") {
-        setScript(lastValidRef.current);
-        setSaveMsg("You can't clear the entire script.");
-        return;
-      }
+    if (next.trim() === "") {
+      setScript(lastValidRef.current);
+      setSaveMsg("You can't clear the entire script.");
+      return;
+    }
 
-      // ✅ Update visible script
-      setScript(next);
-      lastValidRef.current = next;
+    // ✅ Update visible script
+    setScript(next);
+    lastValidRef.current = next;
 
-      // ✅ Keep the TEMPLATE in sync (with {{SHOW_TITLE}})
-      const placeholder = "{{SHOW_TITLE}}";
+    // ✅ Keep the TEMPLATE in sync (with {{SHOW_TITLE}})
+    const placeholder = "{{SHOW_TITLE}}";
 
-      if (showTitle && showTitle.trim().length >= 4) {
-        const escaped = showTitle
-          .trim()
-          .replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); // escape regex chars
-        const re = new RegExp(escaped, "g");
-        const templated = next.replace(re, placeholder);
-        setScriptTemplate(templated);
-      } else {
-        // title too short like "a" or "AI" → don't try to be smart
-        setScriptTemplate(next);
-      }
-    };
+    if (showTitle && showTitle.trim().length >= 4) {
+      const escaped = showTitle
+        .trim()
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); // escape regex chars
+      const re = new RegExp(escaped, "g");
+      const templated = next.replace(re, placeholder);
+      setScriptTemplate(templated);
+    } else {
+      // title too short like "a" or "AI" → don't try to be smart
+      setScriptTemplate(next);
+    }
+  };
 
 
 
@@ -222,12 +226,12 @@ export default function EditScript() {
 
 
     // 3) Logged in, load from backend
-    fetch("/api/draft", { credentials: "include" })
+    fetch(`${API_BASE}/api/draft`, { credentials: "include" })
       .then((r) => r.json())
       .then((d) => {
-        const template = (d.script || "").trim();        
+        const template = (d.script || "").trim();
         const show =
-          (d.show_title || "").trim() ||                
+          (d.show_title || "").trim() ||
           (d.title || "").trim();
 
         const visible = template
@@ -366,7 +370,7 @@ export default function EditScript() {
     setSaving(true);
     setSaveMsg("Saving…");
     try {
-      const r = await fetch("/api/edit/save", {
+      const r = await fetch(`${API_BASE}/api/edit/save`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -406,11 +410,11 @@ export default function EditScript() {
     if (content) {
       setSaving(true);
       try {
-        await fetch("/api/edit/save", {
+        await fetch(`${API_BASE}/api/edit/save`, {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ 
+          body: JSON.stringify({
             edited_script: content,
             show_title: showTitle || "",
           }),
@@ -581,15 +585,15 @@ export default function EditScript() {
                   Edit lines below
                 </label>
                 <textarea
-                id="scriptArea"
-                ref={textareaRef}
-                className="form-textarea"
-                style={{ minHeight: "52vh", lineHeight: 1.55 }}
-                value={script}         
-                onChange={handleScriptChange}
-                onKeyDown={onKeyDownGuard}
-                placeholder="Host: …"
-              />
+                  id="scriptArea"
+                  ref={textareaRef}
+                  className="form-textarea"
+                  style={{ minHeight: "52vh", lineHeight: 1.55 }}
+                  value={script}
+                  onChange={handleScriptChange}
+                  onKeyDown={onKeyDownGuard}
+                  placeholder="Host: …"
+                />
 
 
 
@@ -601,8 +605,8 @@ export default function EditScript() {
                       const updatedEditData = {
                         ...editData,
                         generatedScript: script,      // edited script
-                        scriptTemplate,               
-                        showTitle,                   
+                        scriptTemplate,
+                        showTitle,
                         episodeTitle: showTitle,
                         fromEdit: true,
                       };

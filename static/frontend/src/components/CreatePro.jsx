@@ -19,8 +19,12 @@ import {
     Music2,
 } from "lucide-react";
 
+const API_BASE = import.meta.env.PROD
+    ? "https://wecast.onrender.com"
+    : "http://localhost:5000";
 
 /* -------------------- Audio Player Component -------------------- */
+// بدل ما نستخدم <audio controls> العادي، بنينا مشغّل صوت كامل بتصميم WeCast:
 function WeCastAudioPlayer({ src, title = "Generated Audio" }) {
     const audioRef = React.useRef(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -31,6 +35,7 @@ function WeCastAudioPlayer({ src, title = "Generated Audio" }) {
 
     const SPEED_OPTIONS = [1, 1.25, 1.5, 2];
 
+    // تحول الثواني إلى وقت مقروء دقيقة:ثانية مثل 2:05.
     const formatTime = (sec) => {
         if (!sec || Number.isNaN(sec)) return "0:00";
         const m = Math.floor(sec / 60);
@@ -38,12 +43,17 @@ function WeCastAudioPlayer({ src, title = "Generated Audio" }) {
         return `${m}:${s.toString().padStart(2, "0")}`;
     };
 
+    // تحدث state speed وتعدل audioRef.current.playbackRate.
+
     const applySpeed = (rate) => {
         setSpeed(rate);
         const el = audioRef.current;
         if (el) el.playbackRate = rate;
     };
 
+    //     لو الصوت شغّال → يوقفه.
+
+    // لو متوقف → يضبط السرعة الحالية
     const togglePlay = () => {
         const el = audioRef.current;
         if (!el) return;
@@ -54,7 +64,7 @@ function WeCastAudioPlayer({ src, title = "Generated Audio" }) {
             el.play().catch((err) => console.error("Play error:", err));
         }
     };
-
+    // تنتقل 10 ثواني للأمام أو للخلف، مع حدود من 0 إلى نهاية المقطع.
     const skipSeconds = (delta) => {
         const el = audioRef.current;
         if (!el || !duration) return;
@@ -63,6 +73,14 @@ function WeCastAudioPlayer({ src, title = "Generated Audio" }) {
         setCurrentTime(nextTime);
         setProgress((nextTime / duration) * 100);
     };
+
+    // لما المستخدم يضغط على شريط التقدم:
+
+    // يحسب النسبة حسب مكان الكليك.
+
+    // يحوّلها إلى وقت.
+
+    // يعدل currentTime و progress.
 
     const handleBarClick = (e) => {
         const el = audioRef.current;
@@ -74,12 +92,17 @@ function WeCastAudioPlayer({ src, title = "Generated Audio" }) {
         setCurrentTime(nextTime);
         setProgress((nextTime / duration) * 100);
     };
-
+    // يجلب ملف الصوت من الرابط src باستخدام fetch.
     const handleDownload = async () => {
         if (!src) return;
 
         try {
             // Get the audio file data without leaving the page
+            /*
+          BACKEND CALL:
+          We fetch the generated audio file from the backend using "src".
+          This allows the user to download the MP3 file without leaving the page.
+             */
             const res = await fetch(src, { credentials: "include" });
             if (!res.ok) {
                 console.error("Download failed with status", res.status);
@@ -262,6 +285,9 @@ function LoadingOverlay({ show, logoSrc = "/logo.png", type = "audio" }) {
     );
 }
 
+
+// رسالة صغيرة في الزاوية العليا اليمنى.نستخدمها مثلاً لما:
+// يصير error في التحقق أو الباك اند.
 /* -------------------- tiny toast -------------------- */
 function Toast({ toast, onClose }) {
     if (!toast) return null;
@@ -291,7 +317,7 @@ function Toast({ toast, onClose }) {
 
 export default function CreatePro() {
     const [step, setStep] = useState(1);
-    
+
     useEffect(() => {
         sessionStorage.setItem("currentStep", step);
     }, [step]);
@@ -367,7 +393,12 @@ export default function CreatePro() {
 
     const MIN = 500;
     const MAX = 2500;
-
+    /*
+      Navigation + restore data:
+      This effect reads data from sessionStorage to keep CreatePro and EditScript in sync.
+      We do not call the backend here.
+      Instead we reuse the script and metadata that were already generated.
+    */
     useEffect(() => {
         const handleNavigation = () => {
             const urlParams = new URLSearchParams(window.location.search);
@@ -375,7 +406,14 @@ export default function CreatePro() {
             const forceStep = sessionStorage.getItem("forceStep");
             const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
             const saved = sessionStorage.getItem("currentStep");
-
+            /*
+                      If user came back from the EditScript page (fromEdit flag),
+                      we restore:
+                        - script template
+                        - final rendered script
+                        - style, speakers, description
+                      and jump directly to step 4 (Review & Edit).
+                    */
             if (editData.fromEdit && (editData.generatedScript || editData.scriptTemplate)) {
                 const template =
                     editData.scriptTemplate || editData.generatedScript || "";
@@ -431,7 +469,11 @@ export default function CreatePro() {
     }, []);
 
 
+    // لو صار #/edit ومعنا سكربت → نخلي step=4.
 
+    // لو #/create ومعنا editData.fromEdit → نرجع كل البيانات وندخل على step 4.
+
+    // هذا يخلي CreatePro و EditScript متزامنين.
     useEffect(() => {
         const handleHashChange = () => {
             const hash = window.location.hash;
@@ -494,6 +536,7 @@ export default function CreatePro() {
     }, [voices]);
 
     /* ---------- rules ---------- */
+    // limits the number of speakers per style
     const styleLimits = {
         Interview: [2, 3],
         Storytelling: [1, 2, 3],
@@ -575,10 +618,17 @@ export default function CreatePro() {
         style === "Interview" ? 2 : style === "Conversational" ? 2 : 1;
 
     /* ---------- load voices from backend ---------- */
+    /* 
+  BACKEND CALL - load available voices from ElevenLabs via Flask backend.
+  The frontend only calls "/api/voices".
+  The backend is responsible for:
+    - contacting ElevenLabs API
+    - returning a cleaned list of voices (with id, name, labels, preview_url).
+*/
     useEffect(() => {
         async function loadVoices() {
             try {
-                const res = await fetch("/api/voices");
+                const res = await fetch(`${API_BASE}/api/voices`);
                 const data = await res.json();
                 if (Array.isArray(data.voices)) {
                     setVoices(data.voices);
@@ -596,7 +646,7 @@ export default function CreatePro() {
         }
         loadVoices();
     }, []);
-
+    // auto-selecting a default voice based on gender
     const defaultVoiceForGender = (gender = "Male", usedIds = new Set()) => {
         const isFemale = (gender || "").toLowerCase() === "female";
         const key = isFemale ? "female" : "male";
@@ -618,69 +668,69 @@ export default function CreatePro() {
 
 
 
-/* ---------- when style changes: keep existing speaker names ---------- */
-useEffect(() => {
-    if (!scriptStyle) return;
+    /* ---------- when style changes: keep existing speaker names ---------- */
+    useEffect(() => {
+        if (!scriptStyle) return;
 
-    setSpeakers((prev) => {
-        const limits = styleLimits[scriptStyle] || [];
+        setSpeakers((prev) => {
+            const limits = styleLimits[scriptStyle] || [];
 
-        // prefer existing count (from storage or user choice)
-        let count = prev.length || Number(speakersCount) || 0;
+            // prefer existing count (from storage or user choice)
+            let count = prev.length || Number(speakersCount) || 0;
 
-        // if nothing valid, fall back to default for this style
-        if (!count || !limits.includes(count)) {
-            count = defaultCount(scriptStyle);
-            // update speakersCount ONLY in this case
-            setSpeakersCount(count);
-        }
+            // if nothing valid, fall back to default for this style
+            if (!count || !limits.includes(count)) {
+                count = defaultCount(scriptStyle);
+                // update speakersCount ONLY in this case
+                setSpeakersCount(count);
+            }
 
-        const next = Array.from({ length: count }).map((_, i) => {
-            const old = prev[i] || {};
-            const gender = old.gender || (i === 0 ? "Male" : "Female");
+            const next = Array.from({ length: count }).map((_, i) => {
+                const old = prev[i] || {};
+                const gender = old.gender || (i === 0 ? "Male" : "Female");
 
-            return {
-                name: old.name || "",
-                gender,
-                // role will be rewritten below
-                role: old.role || "host",
-                voiceId: old.voiceId || "",
-            };
+                return {
+                    name: old.name || "",
+                    gender,
+                    // role will be rewritten below
+                    role: old.role || "host",
+                    voiceId: old.voiceId || "",
+                };
+            });
+
+            // apply roles according to the style (same logic as before)
+            if (scriptStyle === "Interview") {
+                if (count === 2) {
+                    next[0].role = "host";
+                    next[1].role = "guest";
+                } else {
+                    next[0].role = "host";
+                    next[1].role = "host";
+                    next[2].role = "guest";
+                }
+            } else if (scriptStyle === "Conversational") {
+                next.forEach((s) => {
+                    s.role = "host";
+                });
+            } else if (scriptStyle === "Educational" || scriptStyle === "Storytelling") {
+                if (count === 1) {
+                    next[0].role = "host";
+                } else if (count === 2) {
+                    next[0].role = "host";
+                    next[1].role = "guest";
+                } else if (count === 3) {
+                    next[0].role = "host";
+                    next[1].role = "guest";
+                    next[2].role = "guest";
+                }
+            }
+            // other styles: keep roles as they are
+
+            return next;
         });
 
-        // apply roles according to the style (same logic as before)
-        if (scriptStyle === "Interview") {
-            if (count === 2) {
-                next[0].role = "host";
-                next[1].role = "guest";
-            } else {
-                next[0].role = "host";
-                next[1].role = "host";
-                next[2].role = "guest";
-            }
-        } else if (scriptStyle === "Conversational") {
-            next.forEach((s) => {
-                s.role = "host";
-            });
-        } else if (scriptStyle === "Educational" || scriptStyle === "Storytelling") {
-            if (count === 1) {
-                next[0].role = "host";
-            } else if (count === 2) {
-                next[0].role = "host";
-                next[1].role = "guest";
-            } else if (count === 3) {
-                next[0].role = "host";
-                next[1].role = "guest";
-                next[2].role = "guest";
-            }
-        }
-        // other styles: keep roles as they are
-
-        return next;
-    });
-
-    setErrors({});
-}, [scriptStyle, speakersCount]);
+        setErrors({});
+    }, [scriptStyle, speakersCount]);
 
 
 
@@ -767,11 +817,13 @@ useEffect(() => {
     /* ---------- helpers ---------- */
     const allowedCounts = useMemo(() => styleLimits[scriptStyle] || [], [scriptStyle]);
     const showRoleSelect = scriptStyle !== "Conversational" && scriptStyle !== "Educational" && scriptStyle !== "Storytelling" && scriptStyle !== "Interview";
+    //    Empty name detection
     const anyEmptySpeakerName = speakers.some((s) => !String(s.name || "").trim());
 
     const normalizeName = (s = "") =>
         s.trim().toLowerCase().replace(/\s+/g, " ");
 
+    // Duplicate names:
     const hasDuplicateNames = useMemo(() => {
         const names = speakers
             .map((s) => normalizeName(s.name))
@@ -815,9 +867,10 @@ useEffect(() => {
         }
     };
 
-
+    // 4. استدعاء توليد السكربت /api/generate
     const handleGenerate = async () => {
         const words = description.trim().split(/\s+/).filter(Boolean).length;
+        // Local validation in frontend only - enforce 500 to 2500 words
         if (words < MIN) {
             setErrors({ description: `At least ${MIN} words.` });
             return;
@@ -831,7 +884,23 @@ useEffect(() => {
         setErrors({});
 
         try {
-            const res = await fetch("/api/generate", {
+            /*
+         BACKEND CALL - script generation
+         Endpoint: POST /api/generate
+         Payload:
+           - script_style  (Interview, Storytelling, etc)
+           - speakers      (count)
+           - speakers_info (roles, genders, voices)
+           - description   (user text that will be converted into a podcast script)
+
+         The Flask backend:
+           - builds an AI prompt
+           - calls OpenAI model
+           - returns a "script template" with {{SHOW_TITLE}} placeholder
+           - may also return a suggested show_title or title
+       */
+            //   sends the user text to the backend
+            const res = await fetch(`${API_BASE}/api/generate`, {
                 method: "POST",
                 credentials: "include",
                 headers: { "Content-Type": "application/json" },
@@ -850,7 +919,7 @@ useEffect(() => {
                 return;
             }
 
-            // template from backend
+            // template from backend Script template returned from backend. It may contain {{SHOW_TITLE}}.
             const template = data.script;
 
             const backendTitle =
@@ -861,11 +930,16 @@ useEffect(() => {
             setShowTitle(backendTitle);
             setEpisodeTitle(backendTitle);
 
-            // rendered script that the user will SEE
+            // Rendered script that the user sees (placeholder replaced with title)
             const rendered = template.replaceAll("{{SHOW_TITLE}}", backendTitle);
             setGeneratedScript(rendered);
 
             // overwrite editData every generation
+            /*
+         Persist all generation data in sessionStorage.
+         This allows the EditScript page to open the same script
+         and keep CreatePro and EditScript consistent.
+       */
             const editData = {
                 scriptStyle,
                 speakersCount,
@@ -893,7 +967,7 @@ useEffect(() => {
         }
     };
 
-
+    // 5. استدعاء توليد الصوت /api/audio
     const handleGenerateAudio = async () => {
         if (!generatedScript) {
             setToast({ type: "error", message: "Please generate a script first." });
@@ -905,7 +979,21 @@ useEffect(() => {
         setGeneratedAudio(null);
 
         try {
-            const response = await fetch("/api/audio", {
+            /*
+         BACKEND CALL - audio generation
+         Endpoint: POST /api/audio
+
+         Payload:
+           - scriptText   final script after editing
+           - script_style chosen style
+           - speakers_info list of speakers with voiceId and roles
+
+         Backend responsibilities:
+           - generate TTS audio per speaker ( ElevenLabs)
+           - merge segments and optional transition music
+           - save final MP3 file and return a URL to the frontend
+       */
+            const response = await fetch(`${API_BASE}/api/audio`, {
                 method: "POST",
                 credentials: "include",
                 headers: { "Content-Type": "application/json" },
@@ -921,7 +1009,12 @@ useEffect(() => {
             if (!response.ok || !data.url) {
                 throw new Error(data.error || "Audio generation failed");
             }
+            // If backend returns "/static/output.mp3", prefix it with API_BASE
+            const baseAudioUrl = data.url.startsWith("http")
+                ? data.url
+                : `${API_BASE}${data.url}`;
 
+            // Add timestamp to bypass browser caching
             setGeneratedAudio(data.url + "?t=" + Date.now());
             setToast({
                 type: "success",
@@ -1263,34 +1356,34 @@ useEffect(() => {
 
                                                                             // Prevent duplicate assignment
                                                                             const alreadyUsed = speakers.some(
-                                                                            (s, idx) => s.voiceId === newVoice && idx !== i
+                                                                                (s, idx) => s.voiceId === newVoice && idx !== i
                                                                             );
 
                                                                             if (alreadyUsed) {
-                                                                            alert("This voice is already used by another speaker. Please choose a different one.");
-                                                                            return;
+                                                                                alert("This voice is already used by another speaker. Please choose a different one.");
+                                                                                return;
                                                                             }
 
                                                                             setSpeakers((arr) => {
-                                                                            const n = [...arr];
-                                                                            n[i] = { ...n[i], voiceId: newVoice };
-                                                                            return n;
+                                                                                const n = [...arr];
+                                                                                n[i] = { ...n[i], voiceId: newVoice };
+                                                                                return n;
                                                                             });
                                                                         }}
-                                                                        >
+                                                                    >
                                                                         <option value="">Select Voice</option>
                                                                         {pool.map((v) => {
                                                                             const isTaken = speakers.some(
-                                                                            (s, idx) => s.voiceId === v.id && idx !== i
+                                                                                (s, idx) => s.voiceId === v.id && idx !== i
                                                                             );
 
                                                                             return (
-                                                                            <option key={v.id} value={v.id} disabled={isTaken}>
-                                                                                {v.name} {isTaken ? "(Already Used)" : ""}
-                                                                            </option>
+                                                                                <option key={v.id} value={v.id} disabled={isTaken}>
+                                                                                    {v.name} {isTaken ? "(Already Used)" : ""}
+                                                                                </option>
                                                                             );
                                                                         })}
-                                                                        </select>
+                                                                    </select>
 
                                                                     <button
                                                                         type="button"
@@ -1344,70 +1437,70 @@ useEffect(() => {
 
                     {/* STEP 3: ENTER TEXT */}
                     {step === 3 && (
-                    <section className="ui-card">
-                        <h2 className="ui-card-title flex items-center gap-2">
-                        <NotebookPen className="w-4 h-4" />
-                        Enter your text
-                        </h2>
+                        <section className="ui-card">
+                            <h2 className="ui-card-title flex items-center gap-2">
+                                <NotebookPen className="w-4 h-4" />
+                                Enter your text
+                            </h2>
 
-                        <textarea
-                        id="wecast_textarea"
-                        value={description}
-                        onChange={(e) => setDescription(e.target.value)}
-                        placeholder="Paste your text here (min 500, max 2500 words)…"
-                        className="form-textarea mt-3"
-                        rows={8}
-                        />
+                            <textarea
+                                id="wecast_textarea"
+                                value={description}
+                                onChange={(e) => setDescription(e.target.value)}
+                                placeholder="Paste your text here (min 500, max 2500 words)…"
+                                className="form-textarea mt-3"
+                                rows={8}
+                            />
 
-                        {(() => {
-                        const wordCount = description.trim().split(/\s+/).filter(Boolean).length;
+                            {(() => {
+                                const wordCount = description.trim().split(/\s+/).filter(Boolean).length;
 
-                        return (
-                            <div className="mt-2 text-sm flex justify-between">
-                            <span
-                                className={
-                                wordCount < MIN || wordCount > MAX
-                                    ? "text-rose-500"      // red if too short OR too long
-                                    : "text-purple-500"    // normal color inside range
-                                }
-                            >
-                                {wordCount} / {MAX} words
-                            </span>
-                            {errors.description && (
-                                <span className="text-rose-500">{errors.description}</span>
+                                return (
+                                    <div className="mt-2 text-sm flex justify-between">
+                                        <span
+                                            className={
+                                                wordCount < MIN || wordCount > MAX
+                                                    ? "text-rose-500"      // red if too short OR too long
+                                                    : "text-purple-500"    // normal color inside range
+                                            }
+                                        >
+                                            {wordCount} / {MAX} words
+                                        </span>
+                                        {errors.description && (
+                                            <span className="text-rose-500">{errors.description}</span>
+                                        )}
+                                    </div>
+                                );
+                            })()}
+
+                            {errors.server && (
+                                <p className="text-rose-600 mt-3 flex items-center gap-2">
+                                    <AlertCircle className="w-4 h-4" /> {errors.server}
+                                </p>
                             )}
+
+                            <div className="mt-6 flex justify-between">
+                                <button
+                                    onClick={() => setStep(2)}
+                                    className="px-4 py-2 border rounded-xl"
+                                >
+                                    Back
+                                </button>
+                                <button
+                                    onClick={handleGenerate}
+                                    disabled={submitting}
+                                    className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
+                                >
+                                    {submitting ? (
+                                        "Generating Script..."
+                                    ) : (
+                                        <>
+                                            Generate Script <Wand2 className="w-4 h-4" />
+                                        </>
+                                    )}
+                                </button>
                             </div>
-                        );
-                        })()}
-
-                        {errors.server && (
-                        <p className="text-rose-600 mt-3 flex items-center gap-2">
-                            <AlertCircle className="w-4 h-4" /> {errors.server}
-                        </p>
-                        )}
-
-                        <div className="mt-6 flex justify-between">
-                        <button
-                            onClick={() => setStep(2)}
-                            className="px-4 py-2 border rounded-xl"
-                        >
-                            Back
-                        </button>
-                        <button
-                            onClick={handleGenerate}
-                            disabled={submitting}
-                            className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
-                        >
-                            {submitting ? (
-                            "Generating Script..."
-                            ) : (
-                            <>
-                                Generate Script <Wand2 className="w-4 h-4" />
-                            </>
-                            )}
-                        </button>
-                        </div>
-                    </section>
+                        </section>
                     )}
 
 
@@ -1629,8 +1722,9 @@ useEffect(() => {
                                                             index === 0 ? introMusic : index === 1 ? bodyMusic : outroMusic;
                                                         if (selected) {
                                                             setMusicPreview(
-                                                                `http://localhost:5000/static/music/${selected}`
+                                                                `${API_BASE}/static/music/${selected}`
                                                             );
+
                                                         }
                                                     }}
                                                 >
@@ -1661,8 +1755,13 @@ useEffect(() => {
                                     <button
                                         onClick={async () => {
                                             try {
+                                                /*
+                                            If the user skips music, we send null values to the backend.
+                                             This tells the audio pipeline to generate speech only without transitions.
+                                                */
                                                 // Clear saved music on backend
-                                                await fetch("/api/save-music", {
+                                                // saving the intro, body, and outro music selection
+                                                await fetch(`${API_BASE}/api/save-music`, {
                                                     method: "POST",
                                                     credentials: "include",
                                                     headers: { "Content-Type": "application/json" },
@@ -1692,9 +1791,14 @@ useEffect(() => {
 
                                     {/* Continue Button */}
                                     <button
+                                        /*
+                                         BACKEND CALL - save selected transition music for this session.
+                                        The audio endpoint will later read these choices and insert the
+                                        tracks at intro, body, and outro positions.
+                                            */
                                         disabled={!introMusic || !bodyMusic || !outroMusic}
                                         onClick={async () => {
-                                            await fetch("/api/save-music", {
+                                            await fetch(`${API_BASE}/api/save-music`, {
                                                 method: "POST",
                                                 credentials: "include",
                                                 headers: { "Content-Type": "application/json" },

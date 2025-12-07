@@ -31,18 +31,26 @@ SHOW_TITLE_PLACEHOLDER = "{{SHOW_TITLE}}"
 # ------------------------------------------------------------
 
 app = Flask(__name__)
+FRONTEND_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://wecast.onrender.com",  # put your real Render frontend here
+]
 
+# CORS configuration: allow React (localhost:5173) to call this backend
 CORS(
     app,
-    resources={r"/*": {"origins": ["http://localhost:5173", "http://127.0.0.1:5173"]}},
+    resources={r"/*": {"origins": FRONTEND_ORIGINS}},
     supports_credentials=True,
     allow_headers=["Content-Type", "Authorization"],
-    methods=["GET", "POST", "OPTIONS"]
+    methods=["GET", "POST", "OPTIONS"],
 )
 
 @app.after_request
 def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
+    origin = request.headers.get("Origin")
+    if origin in FRONTEND_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin
     response.headers["Access-Control-Allow-Credentials"] = "true"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
@@ -51,7 +59,7 @@ def add_cors_headers(response):
 
 # Server-side sessions (for create_draft, etc.)
 app.config.update(
-    SECRET_KEY= "WeCast2025",
+    SECRET_KEY= "WeCast2025", # used for Flask sessions and JWT
     SESSION_TYPE="filesystem",  # store sessions on disk
     SESSION_FILE_DIR="./.flask_session",
     SESSION_PERMANENT=False,
@@ -91,6 +99,8 @@ print("DEBUG AudioSegment.converter:", getattr(AudioSegment, "converter", None))
 print("DEBUG AudioSegment.ffprobe:", getattr(AudioSegment, "ffprobe", None))
 print("DEBUG PATH starts with:", os.environ["PATH"].split(os.pathsep)[0])
 
+# يوقّع الـ session cookie
+# يحميها من التعديل
 app.secret_key = "supersecretkey"
 
 
@@ -121,10 +131,10 @@ def get_current_user_email():
 # ------------------------------------------------------------
 # API Clients (OpenAI + ElevenLabs)
 # ------------------------------------------------------------
-
+# OpenAI client for script + title generation
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
-
+# ElevenLabs client for multi speaker TTS
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 print("ELEVENLABS_API_KEY present?", bool(ELEVENLABS_API_KEY))
 
@@ -745,7 +755,7 @@ def build_speaker_voice_map():
     default_voice = host_voice or any_voice or "21m00Tcm4TlvDq8ikWAM"
     return mapping, default_voice
 
-
+# هي أول خطوة أساسية قبل توليد الصوت.
 def parse_script_into_segments(script: str):
     """
     Turn the script into segments: [(speaker_name, text), ...]
@@ -758,7 +768,7 @@ def parse_script_into_segments(script: str):
     """
     segments = []
     last_speaker = None
-
+# 3) نبدأ قراءة السكربت سطر سطر
     for raw in script.splitlines():
         stripped = raw.strip()
         if not stripped:
@@ -793,18 +803,20 @@ def synthesize_audio_from_script(script: str):
     - Otherwise → single-voice fallback.
     Returns (ok: bool, result: url_or_error_message)
     """
+    # 1) تنظيف السكربت والتأكد أنه غير فارغ
     music_index = 0
     script = (script or "").strip()
     if not script:
         return False, "Script is empty."
-
+    # 2) تقسيم السكربت إلى أجزاء (متحدث + نص)
     segments = parse_script_into_segments(script)
     if not segments:
         return False, "Nothing to read after cleaning script."
 
+# 3) بناء خريطة المتحدث →  Voice mapping voiceId
     speaker_to_voice, default_voice = build_speaker_voice_map()
 
-    audio_parts = []   # <-- store pieces here
+    audio_parts = []   #  4) مصفوفة تخزين أجزاء الصوت
 
     for speaker, text in segments:
 
@@ -842,10 +854,12 @@ def synthesize_audio_from_script(script: str):
             tts_text = clean_script_for_tts(text)
 
         if tts_text.strip():
+            # اختيار الصوت المناسب للمتحدث:
             voice_id = speaker_to_voice.get(speaker, default_voice)
             tts_audio = b""
 
             # High-quality multilingual model for Arabic
+            # طلب الصوت من ElevenLabs
             for chunk in voice_client.text_to_speech.convert(
                 voice_id=voice_id,
                 model_id="eleven_multilingual_v2",
@@ -860,8 +874,9 @@ def synthesize_audio_from_script(script: str):
 
 
     # -----------------------------
-    # COMBINE EVERYTHING CLEANLY
+    # COMBINE EVERYTHING CLEANLY (Merge) music and audio 
     # -----------------------------
+    #  6) دمج كل شيء في ملف واحد
     if not audio_parts:
         return False, "No audio data generated."
 
@@ -870,7 +885,7 @@ def synthesize_audio_from_script(script: str):
     for item in audio_parts:
         final_audio += item
 
-
+# 💾 7) تصدير الملف النهائي
     output_path = os.path.join("static", "output.mp3")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -904,7 +919,7 @@ def api_audio():
 @app.post("/api/save-music")
 def save_music():
     data = request.get_json() or {}
-
+    # Save intro/body/outro music filenames in session for later TTS merge
     session["introMusic"] = data.get("introMusic", "")
     session["bodyMusic"] = data.get("bodyMusic", "")
     session["outroMusic"] = data.get("outroMusic", "")
