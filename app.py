@@ -34,7 +34,7 @@ app = Flask(__name__)
 FRONTEND_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://wecast.onrender.com",  # put your real Render frontend here
+    "https://wecast-frontend.onrender.com",  # put your real Render frontend here
 ]
 
 # CORS configuration: allow React (localhost:5173) to call this backend
