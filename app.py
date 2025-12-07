@@ -549,7 +549,6 @@ def api_me():
     Uses the session user_id set during /api/login or /api/social-login.
     """
     user_id = session.get("user_id")  # we stored email as user_id on login
-
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
@@ -563,8 +562,8 @@ def api_me():
 
     return jsonify(
         email=data.get("email", user_id),
-        displayName=data.get("name", "WeCast User"),  # your “username”
-        handle=data.get("handle", "@wecast"),         # optional, can stay default
+        displayName=data.get("name", "WeCast User"),  # optional, can stay default
+        handle=data.get("handle", "@wecast"),         # your “username”# 
     )
 
 @app.post("/api/generate")

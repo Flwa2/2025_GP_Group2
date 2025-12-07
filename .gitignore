@@ -54,3 +54,13 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Flask session junk
+.flask_session/
+
+# Audio outputs
+static/output.mp3
+static/voice_output.mp3
+
+# Node junk
+static/frontend/node_modules/
+static/frontend/package-lock.json

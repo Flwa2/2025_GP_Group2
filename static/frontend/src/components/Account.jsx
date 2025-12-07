@@ -181,10 +181,10 @@ export default function Account() {
               >
                 <input
                   className="form-input"
-                  placeholder="Enter your name"
-                  value={profile.displayName}
+                  placeholder="@username"
+                  value={profile.handle}
                   onChange={(e) =>
-                    setProfile({ ...profile, displayName: e.target.value })
+                    setProfile({ ...profile, handle: e.target.value })
                   }
                 />
               </Field>
@@ -195,10 +195,10 @@ export default function Account() {
               >
                 <input
                   className="form-input"
-                  placeholder="@username"
-                  value={profile.handle}
+                  placeholder="Enter your name"
+                  value={profile.displayName}
                   onChange={(e) =>
-                    setProfile({ ...profile, handle: e.target.value })
+                    setProfile({ ...profile, displayName: e.target.value })
                   }
                 />
               </Field>
