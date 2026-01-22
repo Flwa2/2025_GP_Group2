@@ -1,13 +1,12 @@
 // src/components/CurvedWeCast.jsx
 import React from "react";
-
 export default function CurvedWeCast({ className = "", variant = "hero" }) {
   const letters = "WeCast".split("");
 
   const curves = {
     hero: { y: [12, 6, -10, -14, -8, 4], r: [-18, -10, -4, 4, 10, 18] },
-    logo: { y: [6, 3, -4, -6, -3, 2],   r: [-10, -6, -2, 2, 6, 10] },
-  };
+    logo: { y: [6, 3, -4, -6, -3, 2],   r: [-10, -6, -2, 2, 6, 10] }, 
+  }; 
   const { y, r } = curves[variant] ?? curves.hero;
 
   return (

@@ -11,17 +11,17 @@ function applyDarkMode(enabled) {
   localStorage.setItem("wecast:dark", JSON.stringify(enabled));
 }
 
-/* Build a nice fallback avatar (no backend required) */
+/* Build a nice fallback avatar  */
 function dicebearAvatar(name = "WeCast User") {
   const seed = encodeURIComponent(name.trim() || "WeCast User");
-  return `https://api.dicebear.com/8.x/adventurer/svg?seed=${seed}`;
+  return `https://api.dicebear.com/8.x/adventurer/svg?seed=${seed}`; //A generated avatar from DiceBear API
 }
 
 export default function Account() {
   const { t } = useTranslation();
   const [saving, setSaving] = useState(false);
 
-  // Profile state (default values, overwritten from localStorage)
+  
   const [profile, setProfile] = useState({
     displayName: "WeCast User",
     handle: "@wecast",
@@ -30,16 +30,19 @@ export default function Account() {
     email: "user@example.com",
   });
 
-  // Dark mode state
+  // Dark mode state (saved to localStorage)
   const [darkMode, setDarkMode] = useState(false);
 
   // Local avatar preview (when user selects a new file)
+  // Preview for avatar image selected by user before saving
   const [avatarPreview, setAvatarPreview] = useState(null);
+
   const fileRef = useRef(null);
 
-  // Load dark mode + user from localStorage
-  useEffect(() => {
-    // 1) Dark mode
+  
+
+   useEffect(() => {
+    // --- Load Dark Mode from localStorage ---
     const saved = localStorage.getItem("wecast:dark");
     if (saved !== null) {
       const v = JSON.parse(saved);
@@ -64,8 +67,8 @@ export default function Account() {
       }
     }
 
-    // 3) Real source of truth: fetch from backend /api/me (session cookie)
-    fetch("http://127.0.0.1:5000/api/me", {
+
+       fetch("http://127.0.0.1:5000/api/me", {
       method: "GET",
       credentials: "include", 
     })
@@ -91,20 +94,21 @@ export default function Account() {
   }, []);
 
 
-
   const shownAvatar =
     avatarPreview || profile.avatarUrl || dicebearAvatar(profile.displayName);
-
+  // Trigger file input when user clicks "Change"
   function onPickAvatar() {
     fileRef.current?.click();
   }
 
+// Handle selected avatar file and create preview
   function onAvatarFile(e) {
     const file = e.target.files?.[0];
     if (!file) return;
     const url = URL.createObjectURL(file);
     setAvatarPreview(url);
   }
+  // Toggle dark mode and save it
 
   function toggleDark(v) {
     setDarkMode(v);
@@ -116,7 +120,7 @@ export default function Account() {
     // later: send profile + darkMode to backend
     setTimeout(() => setSaving(false), 350);
   }
-
+ 
   function handleLogout() {
     localStorage.removeItem("token");
     localStorage.removeItem("user");

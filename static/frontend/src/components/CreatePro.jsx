@@ -18,235 +18,12 @@ import {
     Headphones,
     Music2,
 } from "lucide-react";
+import WeCastAudioPlayer from "./WeCastAudioPlayer";
 
 const API_BASE = import.meta.env.PROD
     ? "https://wecast.onrender.com"
     : "http://localhost:5000";
 
-/* -------------------- Audio Player Component -------------------- */
-// بدل ما نستخدم <audio controls> العادي، بنينا مشغّل صوت كامل بتصميم WeCast:
-function WeCastAudioPlayer({ src, title = "Generated Audio" }) {
-    const audioRef = React.useRef(null);
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [progress, setProgress] = useState(0);
-    const [duration, setDuration] = useState(0);
-    const [currentTime, setCurrentTime] = useState(0);
-    const [speed, setSpeed] = useState(1);
-
-    const SPEED_OPTIONS = [1, 1.25, 1.5, 2];
-
-    // تحول الثواني إلى وقت مقروء دقيقة:ثانية مثل 2:05.
-    const formatTime = (sec) => {
-        if (!sec || Number.isNaN(sec)) return "0:00";
-        const m = Math.floor(sec / 60);
-        const s = Math.floor(sec % 60);
-        return `${m}:${s.toString().padStart(2, "0")}`;
-    };
-
-    // تحدث state speed وتعدل audioRef.current.playbackRate.
-
-    const applySpeed = (rate) => {
-        setSpeed(rate);
-        const el = audioRef.current;
-        if (el) el.playbackRate = rate;
-    };
-
-    //     لو الصوت شغّال → يوقفه.
-
-    // لو متوقف → يضبط السرعة الحالية
-    const togglePlay = () => {
-        const el = audioRef.current;
-        if (!el) return;
-        if (isPlaying) {
-            el.pause();
-        } else {
-            el.playbackRate = speed;
-            el.play().catch((err) => console.error("Play error:", err));
-        }
-    };
-    // تنتقل 10 ثواني للأمام أو للخلف، مع حدود من 0 إلى نهاية المقطع.
-    const skipSeconds = (delta) => {
-        const el = audioRef.current;
-        if (!el || !duration) return;
-        const nextTime = Math.min(Math.max(el.currentTime + delta, 0), duration);
-        el.currentTime = nextTime;
-        setCurrentTime(nextTime);
-        setProgress((nextTime / duration) * 100);
-    };
-
-    // لما المستخدم يضغط على شريط التقدم:
-
-    // يحسب النسبة حسب مكان الكليك.
-
-    // يحوّلها إلى وقت.
-
-    // يعدل currentTime و progress.
-
-    const handleBarClick = (e) => {
-        const el = audioRef.current;
-        if (!el || !duration) return;
-        const rect = e.currentTarget.getBoundingClientRect();
-        const ratio = (e.clientX - rect.left) / rect.width;
-        const nextTime = Math.min(Math.max(ratio * duration, 0), duration);
-        el.currentTime = nextTime;
-        setCurrentTime(nextTime);
-        setProgress((nextTime / duration) * 100);
-    };
-    // يجلب ملف الصوت من الرابط src باستخدام fetch.
-    const handleDownload = async () => {
-        if (!src) return;
-
-        try {
-            // Get the audio file data without leaving the page
-            /*
-          BACKEND CALL:
-          We fetch the generated audio file from the backend using "src".
-          This allows the user to download the MP3 file without leaving the page.
-             */
-            const res = await fetch(src, { credentials: "include" });
-            if (!res.ok) {
-                console.error("Download failed with status", res.status);
-                return;
-            }
-
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = (title || "Podcast Episode") + ".mp3";
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-
-            // Clean up in memory
-            URL.revokeObjectURL(url);
-        } catch (err) {
-            console.error("Download error:", err);
-        }
-    };
-
-
-    return (
-        <div className="w-full rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 px-5 py-4 shadow-md flex flex-col gap-3">
-            {/* hidden audio element */}
-            <audio
-                ref={audioRef}
-                src={src}
-                className="hidden"
-                onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
-                onLoadedMetadata={(e) => {
-                    const d = e.target.duration || 0;
-                    setDuration(d);
-                }}
-                onEnded={() => {
-                    setIsPlaying(false);
-                    setCurrentTime(duration);
-                    setProgress(100);
-                }}
-                onTimeUpdate={(e) => {
-                    const el = e.target;
-                    const t = el.currentTime;
-                    const d = el.duration || 1;
-                    setCurrentTime(t);
-                    setProgress((t / d) * 100);
-                }}
-            />
-
-            {/* TOP ROW: play + title + time + speed + download */}
-            <div className="flex items-center gap-4">
-                {/* Play / Pause button */}
-                <button
-                    onClick={togglePlay}
-                    className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 text-white shadow-lg hover:shadow-xl hover:brightness-110 active:scale-95 transition"
-                >
-                    {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
-                </button>
-
-                <div className="flex-1 flex items-center justify-between gap-3">
-                    {/* Title + time (left side) */}
-                    <div className="flex flex-col">
-                        <span className="text-sm font-semibold text-black/80 dark:text-white">
-                            {title}
-                        </span>
-                        <span className="text-xs text-black/60 dark:text-white/60">
-                            {formatTime(currentTime)} / {formatTime(duration)}
-                        </span>
-                    </div>
-
-                    {/* Time + speed options + download (right side) */}
-                    <div className="flex items-center gap-3">
-                        <span className="text-xs font-medium text-black/60 dark:text-white/60">
-                            {formatTime(currentTime)} / {formatTime(duration)}
-                        </span>
-
-                        {/* Speed pill */}
-                        <div className="flex items-center gap-1 rounded-full bg-black/5 dark:bg-white/5 px-2 py-1">
-                            <span className="text-[0.7rem] uppercase tracking-wide text-black/50 dark:text-white/50 mr-1">
-                                Speed
-                            </span>
-                            {SPEED_OPTIONS.map((opt) => (
-                                <button
-                                    key={opt}
-                                    type="button"
-                                    onClick={() => applySpeed(opt)}
-                                    className={`px-2 py-0.5 rounded-full text-[0.7rem] font-semibold border transition ${speed === opt
-                                        ? "bg-purple-600 text-white border-purple-600"
-                                        : "bg-transparent text-black/70 dark:text-white/70 border-transparent hover:bg-black/10 dark:hover:bg-white/10"
-                                        }`}
-                                >
-                                    {opt}×
-                                </button>
-                            ))}
-                        </div>
-
-                        {/* Download button */}
-                        <button
-                            type="button"
-                            onClick={handleDownload}
-                            className="inline-flex items-center justify-center w-9 h-9 rounded-full border border-neutral-300 dark:border-neutral-700 text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 transition"
-                            title="Download audio"
-                        >
-                            <Download className="w-4 h-4" />
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            {/* PROGRESS BAR */}
-            <div
-                className="mt-1 h-2 w-full rounded-full bg-black/5 dark:bg-white/10 overflow-hidden cursor-pointer"
-                onClick={handleBarClick}
-            >
-                <div
-                    className="h-full rounded-full bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 transition-[width]"
-                    style={{ width: `${progress}%` }}
-                />
-            </div>
-
-            {/* BOTTOM ROW: skip controls centered */}
-            <div className="flex items-center justify-center gap-4 mt-1">
-                <button
-                    type="button"
-                    onClick={() => skipSeconds(-10)}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full border border-neutral-300 dark:border-neutral-700 text-xs font-medium text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 transition"
-                >
-                    <RotateCcw className="w-4 h-4" />
-                    <span>-10s</span>
-                </button>
-                <button
-                    type="button"
-                    onClick={() => skipSeconds(10)}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full border border-neutral-300 dark:border-neutral-700 text-xs font-medium text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 transition"
-                >
-                    <RotateCw className="w-4 h-4" />
-                    <span>+10s</span>
-                </button>
-            </div>
-        </div>
-    );
-}
 
 /* -------------------- overlay: rotating logo -------------------- */
 function LoadingOverlay({ show, logoSrc = "/logo.png", type = "audio" }) {
@@ -285,9 +62,6 @@ function LoadingOverlay({ show, logoSrc = "/logo.png", type = "audio" }) {
     );
 }
 
-
-// رسالة صغيرة في الزاوية العليا اليمنى.نستخدمها مثلاً لما:
-// يصير error في التحقق أو الباك اند.
 /* -------------------- tiny toast -------------------- */
 function Toast({ toast, onClose }) {
     if (!toast) return null;
@@ -393,12 +167,7 @@ export default function CreatePro() {
 
     const MIN = 500;
     const MAX = 2500;
-    /*
-      Navigation + restore data:
-      This effect reads data from sessionStorage to keep CreatePro and EditScript in sync.
-      We do not call the backend here.
-      Instead we reuse the script and metadata that were already generated.
-    */
+    
     useEffect(() => {
         const handleNavigation = () => {
             const urlParams = new URLSearchParams(window.location.search);
@@ -406,14 +175,7 @@ export default function CreatePro() {
             const forceStep = sessionStorage.getItem("forceStep");
             const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
             const saved = sessionStorage.getItem("currentStep");
-            /*
-                      If user came back from the EditScript page (fromEdit flag),
-                      we restore:
-                        - script template
-                        - final rendered script
-                        - style, speakers, description
-                      and jump directly to step 4 (Review & Edit).
-                    */
+          
             if (editData.fromEdit && (editData.generatedScript || editData.scriptTemplate)) {
                 const template =
                     editData.scriptTemplate || editData.generatedScript || "";
@@ -423,8 +185,7 @@ export default function CreatePro() {
                     (editData.episodeTitle || "").trim() ||
                     "Podcast Show";
 
-                // Always re-render the visible script from the template + title,
-                // so CreatePro and EditScript stay in sync
+                
                 const rendered = template.includes("{{SHOW_TITLE}}")
                     ? template.replaceAll("{{SHOW_TITLE}}", titleFromStorage)
                     : template;
@@ -469,11 +230,6 @@ export default function CreatePro() {
     }, []);
 
 
-    // لو صار #/edit ومعنا سكربت → نخلي step=4.
-
-    // لو #/create ومعنا editData.fromEdit → نرجع كل البيانات وندخل على step 4.
-
-    // هذا يخلي CreatePro و EditScript متزامنين.
     useEffect(() => {
         const handleHashChange = () => {
             const hash = window.location.hash;
@@ -494,7 +250,6 @@ export default function CreatePro() {
                         (editData.episodeTitle || "").trim();
 
                     if (!titleFromStorage) {
-                        // instead of parsing from script, just fall back to a neutral default
                         titleFromStorage = "Podcast Show";
                     }
 
@@ -617,14 +372,7 @@ export default function CreatePro() {
     const defaultCount = (style) =>
         style === "Interview" ? 2 : style === "Conversational" ? 2 : 1;
 
-    /* ---------- load voices from backend ---------- */
-    /* 
-  BACKEND CALL - load available voices from ElevenLabs via Flask backend.
-  The frontend only calls "/api/voices".
-  The backend is responsible for:
-    - contacting ElevenLabs API
-    - returning a cleaned list of voices (with id, name, labels, preview_url).
-*/
+
     useEffect(() => {
         async function loadVoices() {
             try {
@@ -646,7 +394,6 @@ export default function CreatePro() {
         }
         loadVoices();
     }, []);
-    // auto-selecting a default voice based on gender
     const defaultVoiceForGender = (gender = "Male", usedIds = new Set()) => {
         const isFemale = (gender || "").toLowerCase() === "female";
         const key = isFemale ? "female" : "male";
@@ -654,34 +401,27 @@ export default function CreatePro() {
         const pool = voiceGroups[key].length ? voiceGroups[key] : voices;
         if (!pool.length) return "";
 
-        // Try to find an unused voice in the gender pool
         const unusedInPool = pool.find((v) => !usedIds.has(v.id));
         if (unusedInPool) return unusedInPool.id;
 
-        // If all gender voices are used, try any unused voice
         const unusedAny = voices.find((v) => !usedIds.has(v.id));
         if (unusedAny) return unusedAny.id;
 
-        // Fallback to first available
         return pool[0]?.id || voices[0]?.id || "";
     };
 
 
 
-    /* ---------- when style changes: keep existing speaker names ---------- */
     useEffect(() => {
         if (!scriptStyle) return;
 
         setSpeakers((prev) => {
             const limits = styleLimits[scriptStyle] || [];
 
-            // prefer existing count (from storage or user choice)
             let count = prev.length || Number(speakersCount) || 0;
 
-            // if nothing valid, fall back to default for this style
             if (!count || !limits.includes(count)) {
                 count = defaultCount(scriptStyle);
-                // update speakersCount ONLY in this case
                 setSpeakersCount(count);
             }
 
@@ -692,13 +432,11 @@ export default function CreatePro() {
                 return {
                     name: old.name || "",
                     gender,
-                    // role will be rewritten below
                     role: old.role || "host",
                     voiceId: old.voiceId || "",
                 };
             });
 
-            // apply roles according to the style (same logic as before)
             if (scriptStyle === "Interview") {
                 if (count === 2) {
                     next[0].role = "host";
@@ -734,18 +472,16 @@ export default function CreatePro() {
 
 
 
-    /* ---------- when voices finish loading, fill missing voiceIds ---------- */
     useEffect(() => {
         if (loadingVoices || !voices.length || !speakers.length) return;
 
         setSpeakers((prev) => {
-            // Start with any voices already assigned
             const usedIds = new Set(
                 prev.map((s) => s.voiceId).filter(Boolean)
             );
 
             const next = prev.map((s) => {
-                if (s.voiceId) return s; // keep existing
+                if (s.voiceId) return s; 
 
                 const voiceId = defaultVoiceForGender(s.gender, usedIds);
                 if (voiceId) usedIds.add(voiceId);
@@ -755,10 +491,9 @@ export default function CreatePro() {
 
             return next;
         });
-    }, [loadingVoices, voices.length, speakers.length]); // note: includes speakers.length
+    }, [loadingVoices, voices.length, speakers.length]); 
 
 
-    /* ---------- when count changes: rebuild array & roles ---------- */
     useEffect(() => {
         if (!scriptStyle || !speakersCount) return;
         const count = Number(speakersCount);
@@ -817,7 +552,6 @@ export default function CreatePro() {
     /* ---------- helpers ---------- */
     const allowedCounts = useMemo(() => styleLimits[scriptStyle] || [], [scriptStyle]);
     const showRoleSelect = scriptStyle !== "Conversational" && scriptStyle !== "Educational" && scriptStyle !== "Storytelling" && scriptStyle !== "Interview";
-    //    Empty name detection
     const anyEmptySpeakerName = speakers.some((s) => !String(s.name || "").trim());
 
     const normalizeName = (s = "") =>
@@ -867,10 +601,8 @@ export default function CreatePro() {
         }
     };
 
-    // 4. استدعاء توليد السكربت /api/generate
     const handleGenerate = async () => {
         const words = description.trim().split(/\s+/).filter(Boolean).length;
-        // Local validation in frontend only - enforce 500 to 2500 words
         if (words < MIN) {
             setErrors({ description: `At least ${MIN} words.` });
             return;
@@ -884,22 +616,7 @@ export default function CreatePro() {
         setErrors({});
 
         try {
-            /*
-         BACKEND CALL - script generation
-         Endpoint: POST /api/generate
-         Payload:
-           - script_style  (Interview, Storytelling, etc)
-           - speakers      (count)
-           - speakers_info (roles, genders, voices)
-           - description   (user text that will be converted into a podcast script)
-
-         The Flask backend:
-           - builds an AI prompt
-           - calls OpenAI model
-           - returns a "script template" with {{SHOW_TITLE}} placeholder
-           - may also return a suggested show_title or title
-       */
-            //   sends the user text to the backend
+          
             const res = await fetch(`${API_BASE}/api/generate`, {
                 method: "POST",
                 credentials: "include",
@@ -919,27 +636,19 @@ export default function CreatePro() {
                 return;
             }
 
-            // template from backend Script template returned from backend. It may contain {{SHOW_TITLE}}.
             const template = data.script;
 
             const backendTitle =
                 data.show_title || data.title || "Podcast Episode";
 
-            // store template + title
             setScriptTemplate(template);
             setShowTitle(backendTitle);
             setEpisodeTitle(backendTitle);
 
-            // Rendered script that the user sees (placeholder replaced with title)
             const rendered = template.replaceAll("{{SHOW_TITLE}}", backendTitle);
             setGeneratedScript(rendered);
 
-            // overwrite editData every generation
-            /*
-         Persist all generation data in sessionStorage.
-         This allows the EditScript page to open the same script
-         and keep CreatePro and EditScript consistent.
-       */
+          
             const editData = {
                 scriptStyle,
                 speakersCount,
@@ -967,7 +676,6 @@ export default function CreatePro() {
         }
     };
 
-    // 5. استدعاء توليد الصوت /api/audio
     const handleGenerateAudio = async () => {
         if (!generatedScript) {
             setToast({ type: "error", message: "Please generate a script first." });
@@ -979,20 +687,7 @@ export default function CreatePro() {
         setGeneratedAudio(null);
 
         try {
-            /*
-         BACKEND CALL - audio generation
-         Endpoint: POST /api/audio
-
-         Payload:
-           - scriptText   final script after editing
-           - script_style chosen style
-           - speakers_info list of speakers with voiceId and roles
-
-         Backend responsibilities:
-           - generate TTS audio per speaker ( ElevenLabs)
-           - merge segments and optional transition music
-           - save final MP3 file and return a URL to the frontend
-       */
+           
             const response = await fetch(`${API_BASE}/api/audio`, {
                 method: "POST",
                 credentials: "include",
@@ -1009,13 +704,22 @@ export default function CreatePro() {
             if (!response.ok || !data.url) {
                 throw new Error(data.error || "Audio generation failed");
             }
-            // If backend returns "/static/output.mp3", prefix it with API_BASE
             const baseAudioUrl = data.url.startsWith("http")
                 ? data.url
                 : `${API_BASE}${data.url}`;
 
-            // Add timestamp to bypass browser caching
-            setGeneratedAudio(data.url + "?t=" + Date.now());
+            const previewPayload = {
+                url: baseAudioUrl,
+                words: data.words || [],
+                title: audioTitle,
+            };
+            sessionStorage.setItem("wecast_preview", JSON.stringify(previewPayload));
+
+            setGeneratedAudio(baseAudioUrl + "?t=" + Date.now());
+
+            // Go to Preview automatically
+            window.location.hash = "#/preview";
+
             setToast({
                 type: "success",
                 message: "Audio generated successfully!",
@@ -1083,7 +787,6 @@ export default function CreatePro() {
         <div className={`h-[3px] flex-1 rounded-full ${on ? "bg-gradient-to-r from-purple-600 to-pink-500" : "bg-black/10 dark:bg-white/10"}`} />
     );
 
-    // Count how many of each role we have (host, guest, etc.)
     const roleCounts = useMemo(() => {
         const counts = {};
         speakers.forEach((s) => {
@@ -1218,17 +921,13 @@ export default function CreatePro() {
                             {speakers.length > 0 && (
                                 <div className={`mt-5 grid gap-5 ${speakers.length === 1 ? "grid-cols-1 max-w-md" : speakers.length === 2 ? "grid-cols-1 md:grid-cols-2 max-w-4xl" : "grid-cols-1 md:grid-cols-3 max-w-5xl"} mx-auto`}>
                                     {speakers.map((sp, i) => {
-                                        // 1) Normalize the role coming from your style
-                                        // Normalize the role name coming from the style
+                                       
                                         let rawRole = sp.role || "guest";
 
-                                        // Count how many hosts exist
                                         const totalHosts = roleCounts["Host"] || roleCounts["host"] || 0;
 
-                                        // Convert roles into UI roles
                                         let role;
 
-                                        // If multiple hosts → turn all of them into Co-hosts
                                         if (rawRole === "host" && totalHosts > 1) {
                                             role = "Co-host";
                                         } else if (rawRole === "host") {
@@ -1241,11 +940,9 @@ export default function CreatePro() {
                                             role = "Guest";
                                         }
 
-                                        // Track usage for numbering (Guest 1, Co-host 1, etc.)
                                         roleUsage[role] = (roleUsage[role] || 0) + 1;
                                         const occurrence = roleUsage[role];
 
-                                        // Build label
                                         const label =
                                             roleCounts[rawRole] > 1 && role !== "Host"
                                                 ? `${role} ${occurrence}`
@@ -1755,12 +1452,7 @@ export default function CreatePro() {
                                     <button
                                         onClick={async () => {
                                             try {
-                                                /*
-                                            If the user skips music, we send null values to the backend.
-                                             This tells the audio pipeline to generate speech only without transitions.
-                                                */
-                                                // Clear saved music on backend
-                                                // saving the intro, body, and outro music selection
+                                             
                                                 await fetch(`${API_BASE}/api/save-music`, {
                                                     method: "POST",
                                                     credentials: "include",
@@ -1791,11 +1483,7 @@ export default function CreatePro() {
 
                                     {/* Continue Button */}
                                     <button
-                                        /*
-                                         BACKEND CALL - save selected transition music for this session.
-                                        The audio endpoint will later read these choices and insert the
-                                        tracks at intro, body, and outro positions.
-                                            */
+                                     
                                         disabled={!introMusic || !bodyMusic || !outroMusic}
                                         onClick={async () => {
                                             await fetch(`${API_BASE}/api/save-music`, {
@@ -1895,11 +1583,19 @@ export default function CreatePro() {
                                                 Regenerate Audio
                                             </button>
                                             <button
+                                                onClick={() => window.location.hash = "#/preview"}
+                                                className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                            >
+                                                Open Preview
+                                            </button>
+
+                                            <button
                                                 onClick={navigateToEdit}
                                                 className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
                                             >
                                                 Edit Script
                                             </button>
+
                                         </div>
                                     </div>
                                 </div>
