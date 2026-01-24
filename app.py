@@ -944,15 +944,18 @@ def api_audio():
     payload = request.get_json(silent=True) or {}
     script = (payload.get("scriptText") or request.form.get("scriptText") or "").strip()
 
+    print("DEBUG /api/audio script length:", len(script))
+    print("DEBUG /api/audio first 200 chars:", script[:200])
+
     ok, result = synthesize_audio_from_script(script)
     if not ok:
+        print("ERROR /api/audio:", result)
         return jsonify(error=result), 400
 
-    # result is dict: {url, words}
     session["last_audio_url"] = result["url"]
     session.modified = True
-
     return jsonify(url=result["url"], words=result["words"])
+
 
 @app.get("/api/transcript/last")
 def api_transcript_last():

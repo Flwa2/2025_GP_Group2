@@ -14,6 +14,7 @@ import Login from "./components/Login";
 import EditScript from "./components/EditScript";
 import Create from "./components/CreatePro";
 import Preview from "./components/Preview";
+import Episodes from "./components/Episodes";
 
 
 function isAuthenticated() {
@@ -39,6 +40,7 @@ export default function App() {
   const isCreate = hash.startsWith("#/create") && (hash.includes("guest=true") || isAuthenticated());
   const isEdit = hash.startsWith('#/edit');
   const isPreview = hash.startsWith("#/preview");
+  const isEpisodes = hash.startsWith("#/episodes");
 
   useEffect(() => {
     const sectionLinks = ['#about', '#episodes'];
@@ -73,8 +75,10 @@ export default function App() {
 
             return <Create />;
           })()
-       ) : isEdit ? (
+        ) : isEdit ? (
           <EditScript />
+        ) : isEpisodes ? (
+          <Episodes />
         ) : isPreview ? (
           <Preview />
         ) : (

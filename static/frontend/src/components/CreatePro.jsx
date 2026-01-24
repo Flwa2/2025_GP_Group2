@@ -167,7 +167,7 @@ export default function CreatePro() {
 
     const MIN = 500;
     const MAX = 2500;
-    
+
     useEffect(() => {
         const handleNavigation = () => {
             const urlParams = new URLSearchParams(window.location.search);
@@ -175,7 +175,7 @@ export default function CreatePro() {
             const forceStep = sessionStorage.getItem("forceStep");
             const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
             const saved = sessionStorage.getItem("currentStep");
-          
+
             if (editData.fromEdit && (editData.generatedScript || editData.scriptTemplate)) {
                 const template =
                     editData.scriptTemplate || editData.generatedScript || "";
@@ -185,7 +185,7 @@ export default function CreatePro() {
                     (editData.episodeTitle || "").trim() ||
                     "Podcast Show";
 
-                
+
                 const rendered = template.includes("{{SHOW_TITLE}}")
                     ? template.replaceAll("{{SHOW_TITLE}}", titleFromStorage)
                     : template;
@@ -481,7 +481,7 @@ export default function CreatePro() {
             );
 
             const next = prev.map((s) => {
-                if (s.voiceId) return s; 
+                if (s.voiceId) return s;
 
                 const voiceId = defaultVoiceForGender(s.gender, usedIds);
                 if (voiceId) usedIds.add(voiceId);
@@ -491,7 +491,7 @@ export default function CreatePro() {
 
             return next;
         });
-    }, [loadingVoices, voices.length, speakers.length]); 
+    }, [loadingVoices, voices.length, speakers.length]);
 
 
     useEffect(() => {
@@ -616,7 +616,7 @@ export default function CreatePro() {
         setErrors({});
 
         try {
-          
+
             const res = await fetch(`${API_BASE}/api/generate`, {
                 method: "POST",
                 credentials: "include",
@@ -648,7 +648,7 @@ export default function CreatePro() {
             const rendered = template.replaceAll("{{SHOW_TITLE}}", backendTitle);
             setGeneratedScript(rendered);
 
-          
+
             const editData = {
                 scriptStyle,
                 speakersCount,
@@ -687,7 +687,7 @@ export default function CreatePro() {
         setGeneratedAudio(null);
 
         try {
-           
+
             const response = await fetch(`${API_BASE}/api/audio`, {
                 method: "POST",
                 credentials: "include",
@@ -716,9 +716,6 @@ export default function CreatePro() {
             sessionStorage.setItem("wecast_preview", JSON.stringify(previewPayload));
 
             setGeneratedAudio(baseAudioUrl + "?t=" + Date.now());
-
-            // Go to Preview automatically
-            window.location.hash = "#/preview";
 
             setToast({
                 type: "success",
@@ -921,7 +918,7 @@ export default function CreatePro() {
                             {speakers.length > 0 && (
                                 <div className={`mt-5 grid gap-5 ${speakers.length === 1 ? "grid-cols-1 max-w-md" : speakers.length === 2 ? "grid-cols-1 md:grid-cols-2 max-w-4xl" : "grid-cols-1 md:grid-cols-3 max-w-5xl"} mx-auto`}>
                                     {speakers.map((sp, i) => {
-                                       
+
                                         let rawRole = sp.role || "guest";
 
                                         const totalHosts = roleCounts["Host"] || roleCounts["host"] || 0;
@@ -1452,7 +1449,7 @@ export default function CreatePro() {
                                     <button
                                         onClick={async () => {
                                             try {
-                                             
+
                                                 await fetch(`${API_BASE}/api/save-music`, {
                                                     method: "POST",
                                                     credentials: "include",
@@ -1483,7 +1480,7 @@ export default function CreatePro() {
 
                                     {/* Continue Button */}
                                     <button
-                                     
+
                                         disabled={!introMusic || !bodyMusic || !outroMusic}
                                         onClick={async () => {
                                             await fetch(`${API_BASE}/api/save-music`, {
@@ -1586,7 +1583,7 @@ export default function CreatePro() {
                                                 onClick={() => window.location.hash = "#/preview"}
                                                 className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
                                             >
-                                                Open Preview
+                                                Open Episode
                                             </button>
 
                                             <button

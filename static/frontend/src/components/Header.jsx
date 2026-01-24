@@ -5,19 +5,19 @@ import { useTranslation } from "react-i18next";
 import { Globe } from "lucide-react";
 
 export default function Header() {
-const [loggedIn, setLoggedIn] = useState(false);
-const { i18n , t } = useTranslation();
+  const [loggedIn, setLoggedIn] = useState(false);
+  const { i18n, t } = useTranslation();
 
-const toggleLanguage = () => {
-  const newLang = i18n.language === "ar" ? "en" : "ar";
-  i18n.changeLanguage(newLang);
+  const toggleLanguage = () => {
+    const newLang = i18n.language === "ar" ? "en" : "ar";
+    i18n.changeLanguage(newLang);
 
-  // Store preference
-  localStorage.setItem("wecast-lang", newLang);
+    // Store preference
+    localStorage.setItem("wecast-lang", newLang);
 
-  // Updates direction dynamically
-  document.documentElement.dir = newLang === "ar" ? "rtl" : "ltr";
-};
+    // Updates direction dynamically
+    document.documentElement.dir = newLang === "ar" ? "rtl" : "ltr";
+  };
 
   const goEpisodes = (e) => {
     e.preventDefault();
@@ -75,10 +75,22 @@ const toggleLanguage = () => {
               onClick={scrollToTop}
               className="transition-colors duration-300 hover:text-purple-600"
             >
-            {t("Home")}
+              {t("Home")}
             </button>
 
           </li>
+
+          {/* Episodes only when logged in */}
+          {loggedIn && (
+            <li>
+              <a
+                href="#/episodes"
+                className="transition-colors duration-300 hover:text-purple-600"
+              >
+                {t("Episodes")}
+              </a>
+            </li>
+          )}
 
           {/* Profile only when logged in */}
           {loggedIn && (
@@ -95,19 +107,19 @@ const toggleLanguage = () => {
 
         {/* RIGHT: auth buttons */}
         <div className="flex items-center gap-3">
-            {/* Language Icon button */}
-              <button
-                onClick={toggleLanguage}
-                className="w-10 h-10 flex items-center justify-center rounded-full border border-gray-300
+          {/* Language Icon button */}
+          <button
+            onClick={toggleLanguage}
+            className="w-10 h-10 flex items-center justify-center rounded-full border border-gray-300
                           dark:border-gray-600 bg-white dark:bg-gray-900 hover:bg-gray-100 
                           dark:hover:bg-gray-800 transition"
-                aria-label="Change language"
-              >
-                <Globe
-                  className="w-5 h-5 text-gray-700 dark:text-gray-300"
-                  style={{ transform: i18n.language === "ar" ? "scaleX(-1)" : "none" }}
-                />
-              </button>
+            aria-label="Change language"
+          >
+            <Globe
+              className="w-5 h-5 text-gray-700 dark:text-gray-300"
+              style={{ transform: i18n.language === "ar" ? "scaleX(-1)" : "none" }}
+            />
+          </button>
 
           {!loggedIn && (
             <>
@@ -123,7 +135,7 @@ const toggleLanguage = () => {
                 href="#/signup"
                 className="px-3 py-1.5 rounded-lg bg-black text-white font-bold border-2 border-black transition-all duration-300 hover:bg-pink-200 hover:text-black"
               >
-               {t("Signup")}
+                {t("Signup")}
               </a>
             </>
           )}

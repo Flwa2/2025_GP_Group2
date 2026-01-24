@@ -1,8 +1,15 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Play, Pause, RotateCcw, RotateCw, Download } from "lucide-react";
 
-export default function WeCastAudioPlayer({ src, title = "Generated Audio", onTimeUpdate }) {
-  const audioRef = React.useRef(null);
+export default function WeCastAudioPlayer({
+  src,
+  title = "Generated Audio",
+  onTimeUpdate,
+  externalSeek, // NEW
+}) {
+  const audioRef = useRef(null);
+  const lastSeekRef = useRef(null); // NEW
+
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -12,6 +19,7 @@ export default function WeCastAudioPlayer({ src, title = "Generated Audio", onTi
   const SPEED_OPTIONS = [1, 1.25, 1.5, 2];
 
   const formatTime = (sec) => {
+    if (sec === 0) return "0:00";
     if (!sec || Number.isNaN(sec)) return "0:00";
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
@@ -34,26 +42,66 @@ export default function WeCastAudioPlayer({ src, title = "Generated Audio", onTi
     }
   };
 
+  const syncUi = (nextTime, nextDuration) => { // NEW helper
+    const d = nextDuration || duration || 1;
+    setCurrentTime(nextTime);
+    setProgress((nextTime / d) * 100);
+    onTimeUpdate?.(nextTime);
+  };
+
+  const seekTo = async (sec, { resumeIfPlaying = true } = {}) => { // NEW helper
+    const el = audioRef.current;
+    if (!el) return;
+
+    const d = el.duration || duration || 0;
+    const clamped = Math.min(Math.max(sec ?? 0, 0), d || sec || 0);
+
+    const wasPlaying = !el.paused && !el.ended;
+
+    el.currentTime = clamped;
+    syncUi(clamped, el.duration || d || 1);
+
+    if (resumeIfPlaying && wasPlaying) {
+      el.playbackRate = speed;
+      await el.play().catch(() => {});
+    }
+  };
+
+  // NEW: react to externalSeek changes (clicking transcript word)
+  useEffect(() => {
+    if (externalSeek == null) return;
+
+    // prevent repeated seeking to same value
+    if (lastSeekRef.current === externalSeek) return;
+    lastSeekRef.current = externalSeek;
+
+    // Seek, and keep playing if it was already playing
+    seekTo(externalSeek, { resumeIfPlaying: true });
+  }, [externalSeek]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const skipSeconds = (delta) => {
     const el = audioRef.current;
-    if (!el || !duration) return;
-    const nextTime = Math.min(Math.max(el.currentTime + delta, 0), duration);
+    if (!el) return;
+
+    const d = el.duration || duration;
+    if (!d) return;
+
+    const nextTime = Math.min(Math.max(el.currentTime + delta, 0), d);
     el.currentTime = nextTime;
-    setCurrentTime(nextTime);
-    setProgress((nextTime / duration) * 100);
-    onTimeUpdate?.(nextTime);
+    syncUi(nextTime, d);
   };
 
   const handleBarClick = (e) => {
     const el = audioRef.current;
-    if (!el || !duration) return;
+    const d = el?.duration || duration;
+    if (!el || !d) return;
+
     const rect = e.currentTarget.getBoundingClientRect();
     const ratio = (e.clientX - rect.left) / rect.width;
-    const nextTime = Math.min(Math.max(ratio * duration, 0), duration);
+    const nextTime = Math.min(Math.max(ratio * d, 0), d);
+
     el.currentTime = nextTime;
-    setCurrentTime(nextTime);
-    setProgress((nextTime / duration) * 100);
-    onTimeUpdate?.(nextTime);
+    syncUi(nextTime, d);
   };
 
   const handleDownload = async () => {
@@ -73,6 +121,15 @@ export default function WeCastAudioPlayer({ src, title = "Generated Audio", onTi
     } catch {}
   };
 
+  // NEW: reset when src changes
+  useEffect(() => {
+    setIsPlaying(false);
+    setProgress(0);
+    setDuration(0);
+    setCurrentTime(0);
+    lastSeekRef.current = null;
+  }, [src]);
+
   return (
     <div className="w-full rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 px-5 py-4 shadow-md flex flex-col gap-3">
       <audio
@@ -81,12 +138,16 @@ export default function WeCastAudioPlayer({ src, title = "Generated Audio", onTi
         className="hidden"
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
-        onLoadedMetadata={(e) => setDuration(e.target.duration || 0)}
+        onLoadedMetadata={(e) => {
+          const d = e.target.duration || 0;
+          setDuration(d);
+          // keep speed applied after metadata is ready
+          e.target.playbackRate = speed;
+        }}
         onEnded={() => {
           setIsPlaying(false);
-          setCurrentTime(duration);
-          setProgress(100);
-          onTimeUpdate?.(duration);
+          const d = audioRef.current?.duration || duration;
+          syncUi(d || 0, d || 1);
         }}
         onTimeUpdate={(e) => {
           const el = e.target;
