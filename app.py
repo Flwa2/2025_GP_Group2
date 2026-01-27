@@ -193,18 +193,24 @@ def generate_podcast_script(description: str, speakers_info: list, script_style:
             INTRO
             --------------------
             - يجب أن تكون أول جملة منطوقة في المقدمة من المقدم الرئيسي (أول متحدث في القائمة).
-            - يجب أن تحتوي هذه الجملة على {{SHOW_TITLE}} حرفيًا داخل علامات اقتباس، مثال:
-            <اسم_المقدم>: مرحبًا بكم في حلقة جديدة من "{{SHOW_TITLE}}".
-            - بعد هذه الجملة، أكمل المقدمة بتقديم الموضوع والمتحدثين بشكل طبيعي.
-            """
+    - يجب أن تحتوي هذه الجملة على {{SHOW_TITLE}} حرفيًا داخل علامات اقتباس، مثال:
+    <اسم_المقدم>: مرحبًا بكم في حلقة جديدة من "{{SHOW_TITLE}}".
+    - بعد هذه الجملة، أكمل المقدمة بتقديم الموضوع والمتحدثين بشكل طبيعي.
+    """
     else:
             intro_block = """
             --------------------
             INTRO
             --------------------
-            - Start with: Host greets listeners and says:
-            "<HostName>: Welcome to another episode of '{{SHOW_TITLE}}'."
-            - Then introduce the topic + speakers naturally.
+           - Start with: Host greets listeners and says something NATURAL like:
+    "<HostName>: Welcome to our podcast '{{SHOW_TITLE}}'."
+    OR
+    "<HostName>: Hello and welcome to '{{SHOW_TITLE}}'."
+    OR
+    "<HostName>: Thanks for joining us on '{{SHOW_TITLE}}'."
+    - DO NOT use the phrase "Welcome to another episode of" or "Welcome to another episode".
+    - Use more natural, varied opening greetings.
+    - Then introduce the topic + speakers naturally.
             """
 
     # Format speakers list for GPT
@@ -962,7 +968,65 @@ def api_transcript_last():
     words = session.get("last_word_timeline") or None
     return jsonify(words=words)
 
-
+@app.post('/api/summarize')
+def summarize_transcript():
+    """
+    Generate an AI summary of the transcript using OpenAI.
+    Expects JSON: { "text": "transcript text here" }
+    Returns: { "summary": "generated summary text" }
+    """
+    try:
+        data = request.get_json()
+        text = data.get('text', '')
+        
+        if not text:
+            return jsonify({"error": "No text provided"}), 400
+        
+        # Limit text length to avoid token limits (keep it reasonable)
+        text = text[:12000]  # Slightly higher than frontend's 8000
+        
+        # Detect language for better prompting
+        is_ar = is_arabic(text)
+        
+        if is_ar:
+            system_prompt = "أنت مساعد مفيد يقوم بإنشاء ملخصات بودكاست موجزة. يجب أن تكون جميع الردود بحد أقصى 250 كلمة."
+            user_prompt = f"يرجى تلخيص نص البودكاست التالي بحد أقصى 250 كلمة. ركز على النقاط الرئيسية والأفكار المهمة:\n\n{text}"
+        else:
+            system_prompt = "You are a helpful assistant that creates concise podcast summaries. Always respond with 250 words or less."
+            user_prompt = f"Please summarize this podcast transcript in 250 words or less. Focus on the main points, key insights, and important discussions:\n\n{text}"
+        
+        # Call OpenAI API
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",  # Using gpt-3.5-turbo for cost efficiency
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt
+                }
+            ],
+            max_tokens=350,  # Allow a bit more for safety
+            temperature=0.7
+        )
+        
+        summary = response.choices[0].message.content.strip()
+        
+        # Count words to ensure limit
+        word_count = len(summary.split())
+        if word_count > 250:
+            # If over limit, truncate intelligently
+            words = summary.split()[:250]
+            summary = " ".join(words) + "..."
+        
+        return jsonify({"summary": summary})
+        
+    except Exception as e:
+        print(f"Summary generation error: {str(e)}")
+        return jsonify({"error": "Failed to generate summary"}), 500
+    
 @app.post("/api/save-music")
 def save_music():
     data = request.get_json() or {}
