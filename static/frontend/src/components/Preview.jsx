@@ -5,11 +5,86 @@ const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
   : "http://localhost:5000";
 
+// OpenAI API configuration
+const OPENAI_API_KEY = import.meta.env.VITE_OPENAI_API_KEY;
+const OPENAI_MODEL = import.meta.env.VITE_OPENAI_MODEL || "gpt-3.5-turbo";
+
+// Helper function to generate summary using OpenAI API
+const generateSummary = async (words) => {
+  if (!words || words.length === 0) return "";
+
+  // Extract the full transcript text
+  const transcript = words.map(w => w.w).join(" ");
+
+  // If transcript is too short, use simple summary
+  if (transcript.split(/\s+/).length < 50) {
+    return transcript.substring(0, 500) + "...";
+  }
+
+  try {
+    const response = await fetch(`${API_BASE}/api/summarize`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ text: transcript }),
+      credentials: "include"
+    });
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.summary || "";
+
+  } catch (error) {
+    console.error("Failed to generate AI summary:", error);
+
+    // Fallback to simple summary if API fails
+    return generateSimpleSummary(words);
+  }
+};
+
+// Fallback simple summary function
+const generateSimpleSummary = (words) => {
+  if (!words || words.length === 0) return "";
+
+  const transcript = words.map(w => w.w).join(" ");
+  const sentences = transcript.split(/[.!?]+/);
+  let summarySentences = [];
+  let wordCount = 0;
+
+  for (const sentence of sentences) {
+    const sentenceWords = sentence.trim().split(/\s+/).length;
+    if (wordCount + sentenceWords <= 250) {
+      summarySentences.push(sentence.trim() + ".");
+      wordCount += sentenceWords;
+    } else {
+      break;
+    }
+  }
+
+  if (summarySentences.length === 0 && sentences.length > 0) {
+    summarySentences = [sentences[0].substring(0, 250) + "..."];
+  }
+
+  let summary = summarySentences.join(" ");
+  const summaryWords = summary.split(/\s+/);
+  if (summaryWords.length > 250) {
+    summary = summaryWords.slice(0, 250).join(" ") + "...";
+  }
+
+  return summary;
+};
+
 export default function Preview() {
   const [audioUrl, setAudioUrl] = useState("");
   const [words, setWords] = useState([]);
   const [title, setTitle] = useState("Podcast Episode");
   const [t, setT] = useState(0);
+  const [summary, setSummary] = useState("");
+  const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
 
   const transcriptRef = useRef(null);
   const activeWordRef = useRef(null);
@@ -21,7 +96,27 @@ export default function Preview() {
   const params = new URLSearchParams(window.location.hash.split("?")[1] || "");
   const episodeId = params.get("id");
 
-  const [externalSeek, setExternalSeek] = useState(null); // NEW
+  const [externalSeek, setExternalSeek] = useState(null);
+
+  // Function to generate and set summary whenever words change
+  const updateSummary = useMemo(() => {
+    return async (words) => {
+      if (words && words.length > 0) {
+        setIsGeneratingSummary(true);
+        try {
+          const generatedSummary = await generateSummary(words);
+          setSummary(generatedSummary);
+        } catch (error) {
+          console.error("Error generating summary:", error);
+          setSummary(generateSimpleSummary(words));
+        } finally {
+          setIsGeneratingSummary(false);
+        }
+      } else {
+        setSummary("");
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const saved = sessionStorage.getItem("wecast_preview");
@@ -29,22 +124,63 @@ export default function Preview() {
       try {
         const p = JSON.parse(saved);
         if (p?.url) setAudioUrl(p.url);
-        if (Array.isArray(p?.words)) setWords(p.words);
+        if (Array.isArray(p?.words)) {
+          setWords(p.words);
+          updateSummary(p.words);
+        }
         if (p?.title) setTitle(p.title);
-      } catch {}
+        if (p?.summary) setSummary(p.summary);
+      } catch { }
     }
 
     if (!saved) {
       fetch(`${API_BASE}/api/audio/last`, { credentials: "include" })
         .then((r) => r.json())
         .then((d) => d?.url && setAudioUrl(d.url))
-        .catch(() => {});
+        .catch(() => { });
+
       fetch(`${API_BASE}/api/transcript/last`, { credentials: "include" })
         .then((r) => r.json())
-        .then((d) => Array.isArray(d?.words) && setWords(d.words))
-        .catch(() => {});
+        .then((d) => {
+          if (Array.isArray(d?.words)) {
+            setWords(d.words);
+            updateSummary(d.words);
+          }
+        })
+        .catch(() => { });
     }
-  }, []);
+  }, [updateSummary]);
+
+  // Effect to regenerate summary when words change
+  useEffect(() => {
+    if (words.length > 0) {
+      const generateAndSaveSummary = async () => {
+        setIsGeneratingSummary(true);
+        try {
+          const newSummary = await generateSummary(words);
+          setSummary(newSummary);
+
+          // Update session storage
+          try {
+            const saved = sessionStorage.getItem("wecast_preview");
+            if (saved) {
+              const p = JSON.parse(saved);
+              p.summary = newSummary;
+              sessionStorage.setItem("wecast_preview", JSON.stringify(p));
+            }
+          } catch { }
+        } catch (error) {
+          console.error("Error regenerating summary:", error);
+          const simpleSummary = generateSimpleSummary(words);
+          setSummary(simpleSummary);
+        } finally {
+          setIsGeneratingSummary(false);
+        }
+      };
+
+      generateAndSaveSummary();
+    }
+  }, [words]);
 
   const activeIndex = useMemo(() => {
     if (!words.length) return -1;
@@ -77,9 +213,9 @@ export default function Preview() {
     }, 5000);
   };
 
-  const handleWordClick = (sec) => { // NEW
-    setUserInteracting(false);       // resume auto-follow
-    setExternalSeek(sec);            // tell player to jump
+  const handleWordClick = (sec) => {
+    setUserInteracting(false);
+    setExternalSeek(sec);
   };
 
   return (
@@ -112,13 +248,37 @@ export default function Preview() {
                 src={audioUrl}
                 title={title}
                 onTimeUpdate={(sec) => setT(sec)}
-                externalSeek={externalSeek} 
+                externalSeek={externalSeek}
               />
             </div>
 
             <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 p-4 shadow-md min-h-[180px]">
-              <div className="text-sm font-bold mb-2">Summary</div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-sm font-bold">Summary</div>
+                {isGeneratingSummary && (
+                  <div className="text-xs text-blue-500 animate-pulse">
+                    Generating AI summary...
+                  </div>
+                )}
+              </div>
               <div className="text-sm text-black/60 dark:text-white/60 leading-relaxed">
+                {isGeneratingSummary ? (
+                  <div className="flex items-center space-x-2">
+                    <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                    <span className="text-gray-500">Creating AI-powered summary...</span>
+                  </div>
+                ) : summary ? (
+                  <>
+                    <p>{summary}</p>
+                    <p className="text-xs mt-2 text-gray-500 dark:text-gray-400">
+                      {summary.split(/\s+/).length} words
+                    </p>
+                  </>
+                ) : (
+                  <p className="italic text-gray-500">
+                    Summary will be generated once the transcript is available...
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -147,8 +307,8 @@ export default function Preview() {
                       <span
                         key={`${i}-${w.start}`}
                         ref={active ? activeWordRef : null}
-                        onClick={() => handleWordClick(w.start)} 
-                        title={`Jump to ${w.start.toFixed(2)}s`}  
+                        onClick={() => handleWordClick(w.start)}
+                        title={`Jump to ${w.start.toFixed(2)}s`}
                         className={[
                           "cursor-pointer rounded px-1.5 py-0.5 transition-all duration-150",
                           active
@@ -165,7 +325,6 @@ export default function Preview() {
             </div>
           </div>
         </div>
-
       </div>
     </div>
   );
