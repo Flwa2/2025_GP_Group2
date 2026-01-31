@@ -18,11 +18,14 @@ from io import BytesIO
 from elevenlabs.client import ElevenLabs
 import os
 import re
+import requests
+import base64
 from firebase_admin import firestore
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 import jwt
 from firebase_init import db  
+
 print("🔍 DEBUG in app.py:", db)
 
 SHOW_TITLE_PLACEHOLDER = "{{SHOW_TITLE}}"
@@ -31,37 +34,43 @@ SHOW_TITLE_PLACEHOLDER = "{{SHOW_TITLE}}"
 # ------------------------------------------------------------
 
 app = Flask(__name__)
+FRONTEND_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://wecast-frontend.onrender.com",  
+]
 
 CORS(
     app,
-    resources={r"/*": {"origins": ["http://localhost:5173", "http://127.0.0.1:5173"]}},
+    resources={r"/*": {"origins": FRONTEND_ORIGINS}},
     supports_credentials=True,
     allow_headers=["Content-Type", "Authorization"],
-    methods=["GET", "POST", "OPTIONS"]
+    methods=["GET", "POST", "OPTIONS"],
 )
 
 @app.after_request
 def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "http://localhost:5173"
+    origin = request.headers.get("Origin")
+    if origin in FRONTEND_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin
     response.headers["Access-Control-Allow-Credentials"] = "true"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     return response
 
 
-# Server-side sessions (for create_draft, etc.)
+# Server-side sessions 
 app.config.update(
-    SECRET_KEY= "WeCast2025",
-    SESSION_TYPE="filesystem",  # store sessions on disk
+    SECRET_KEY= "WeCast2025", 
+    SESSION_TYPE="filesystem", 
     SESSION_FILE_DIR="./.flask_session",
     SESSION_PERMANENT=False,
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=False,  # HTTP, not HTTPS
+    SESSION_COOKIE_SECURE=False,  
 )
 Session(app)
 
-# Load .env
-# Load .env variables
+# Load .env variables configuring ffmpeg for pydub
 load_dotenv()
 
 # Get ffmpeg & ffprobe paths from .env
@@ -90,6 +99,7 @@ else:
 print("DEBUG AudioSegment.converter:", getattr(AudioSegment, "converter", None))
 print("DEBUG AudioSegment.ffprobe:", getattr(AudioSegment, "ffprobe", None))
 print("DEBUG PATH starts with:", os.environ["PATH"].split(os.pathsep)[0])
+
 
 app.secret_key = "supersecretkey"
 
@@ -121,10 +131,10 @@ def get_current_user_email():
 # ------------------------------------------------------------
 # API Clients (OpenAI + ElevenLabs)
 # ------------------------------------------------------------
-
+# OpenAI client for script + title generation
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
-
+# ElevenLabs client for multi speaker TTS
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 print("ELEVENLABS_API_KEY present?", bool(ELEVENLABS_API_KEY))
 
@@ -344,17 +354,12 @@ Transform the following text into a structured podcast script:
     )
 
     raw_script = response.choices[0].message.content.strip()
-    # ---- Ensure the SHOW_TITLE placeholder is present in the intro ----
-    PLACEHOLDER = SHOW_TITLE_PLACEHOLDER  # "{{SHOW_TITLE}}"
+    PLACEHOLDER = SHOW_TITLE_PLACEHOLDER  
 
-    # 1) Normalize common wrong variants the model might output
     if PLACEHOLDER not in raw_script:
-        # {SHOW_TITLE}  →  {{SHOW_TITLE}}
         raw_script = re.sub(r"\{SHOW_TITLE\}", PLACEHOLDER, raw_script)
-        # Bare SHOW_TITLE → {{SHOW_TITLE}}
         raw_script = re.sub(r"\bSHOW_TITLE\b", PLACEHOLDER, raw_script)
 
-    # 2) English-style fallback: "episode of 'Some Name'"
     if PLACEHOLDER not in raw_script:
         m = re.search(
             r"(episode of\s+[\"“'«])(.+?)([\"”'»])",
@@ -365,7 +370,6 @@ Transform the following text into a structured podcast script:
             bad_title = m.group(2)
             raw_script = raw_script.replace(bad_title, PLACEHOLDER, 1)
 
-    # 3) Arabic-style fallback: … حلقة جديدة من "اسم البودكاست"
     if PLACEHOLDER not in raw_script and is_arabic(raw_script):
         m = re.search(
             r"(?:حلقة جديدة من|حلقة من|من)\s*[\"“«](.+?)[\"”»]",
@@ -395,9 +399,7 @@ Transform the following text into a structured podcast script:
 
     cleaned_raw = "\n".join(cleaned_lines)
 
-    # ============================================================
-    # 🔄 FINAL STEP: REBALANCE SPEAKERS
-    # ============================================================
+
     final_script = cleaned_raw
 
     return final_script
@@ -434,7 +436,6 @@ def generate_title_from_script(script: str, script_style: str = "") -> str:
 \"\"\"{text[:4000]}\"\"\"        
 """
     else:
-        # Original English behavior
         prompt = f"""
 You are an assistant helping to name a podcast episode.
 
@@ -466,7 +467,6 @@ Script:
     )
 
     title = (resp.choices[0].message.content or "").strip()
-    # Strip stray quotes if the model adds them
     title = title.strip('"“”«»').strip()
 
     if not title:
@@ -504,14 +504,80 @@ def validate_roles(style: str, speakers_info: list):
 
     return (True, "")
 
-# ------------------------------------------------------------
-# API endpoints for React (CreatePro, EditScript, Account)
-# ------------------------------------------------------------
+def chars_to_words(text: str, ch_starts: list, ch_ends: list):
+    """
+    Convert character-level timestamps to word-level.
+    Returns list of dicts: {w, start, end}
+    """
+    words = []
+    if not text:
+        return words
+
+    n = min(len(text), len(ch_starts), len(ch_ends))
+    i = 0
+
+    while i < n:
+        if text[i].isspace():
+            i += 1
+            continue
+
+        start_i = i
+        start_t = ch_starts[i]
+
+        while i < n and not text[i].isspace():
+            i += 1
+
+        end_i = i - 1
+        end_t = ch_ends[end_i]
+
+        token = text[start_i:i].strip()
+        if token:
+            words.append({"w": token, "start": float(start_t), "end": float(end_t)})
+
+    return words
+
+def eleven_tts_with_timestamps(text: str, voice_id: str, model_id: str = "eleven_multilingual_v2"):
+    """
+    Returns: (audio_bytes, word_timings_for_this_segment)
+    word timings are relative to segment start (0.0)
+    """
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/with-timestamps"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    body = {
+        "text": text,
+        "model_id": model_id,
+        "output_format": "mp3_44100_128",
+    }
+
+    r = requests.post(url, headers=headers, json=body, timeout=120)
+    if not r.ok:
+        raise RuntimeError(f"ElevenLabs error {r.status_code}: {r.text[:300]}")
+
+    data = r.json()
+    audio_b64 = data.get("audio_base64")
+    if not audio_b64:
+        raise RuntimeError("Missing audio_base64 in ElevenLabs response.")
+
+    audio_bytes = base64.b64decode(audio_b64)
+
+    alignment = data.get("alignment") or {}
+    ch_starts = alignment.get("character_start_times_seconds") or []
+    ch_ends = alignment.get("character_end_times_seconds") or []
+
+    # Convert char timings to words using the exact same text we sent
+    words = chars_to_words(text, ch_starts, ch_ends)
+
+    return audio_bytes, words
 
 @app.get("/api/health")
 def health():
     return jsonify(status="ok")
 
+# get list of available ElevenLabs voices
 @app.get("/api/voices")
 def api_voices():
     """
@@ -522,7 +588,6 @@ def api_voices():
         res = voice_client.voices.get_all()
         voices = []
         for v in getattr(res, "voices", []):
-            # Try preview_url or first sample
             preview = getattr(v, "preview_url", None)
             if not preview and getattr(v, "samples", None):
                 if v.samples:
@@ -562,6 +627,8 @@ def api_me():
 
     return jsonify(
         email=data.get("email", user_id),
+        displayName=data.get("name", "WeCast User"), 
+        handle=data.get("handle", "@wecast"),         
         displayName=data.get("name", "WeCast User"),  # optional, can stay default
         handle=data.get("handle", "@wecast"),         # your “username”# 
     )
@@ -584,18 +651,14 @@ def api_generate():
     if len(description.split()) < 500:
         return jsonify(ok=False, error="Your text must be at least 500 words."), 400
 
-    # 1) Generate the script
     script = generate_podcast_script(description, speakers_info, script_style)
 
-    # 2) Generate a short AI title for this episode
     title = generate_title_from_script(script, script_style)
 
-    # 3) NEW: extract show title + turn script into a template
-    script_template = script  # script already contains {{SHOW_TITLE}}
+    script_template = script  
     show_title = title or "Podcast Show"
 
 
-    # 4) Store everything in the session draft
     session["create_draft"] = {
         "script_style": script_style,
         "speakers_count": speakers,
@@ -606,7 +669,6 @@ def api_generate():
         "title": title,
     }
 
-    # 4) Return both script + title to the frontend
     return jsonify(ok=True, script=script_template, title=title, show_title=show_title)
 
 @app.get("/api/draft")
@@ -676,40 +738,29 @@ def clean_script_for_tts(script: str) -> str:
         if not line:
             continue
 
-        # Remove markdown headings (# Title)
         if line.startswith("#"):
             continue
 
-        # Remove INTRO / BODY / OUTRO labels
         if re.fullmatch(r"(intro|body|outro)[:：]?\s*$", line, re.IGNORECASE):
             continue
 
-        # Remove "Speaker: INTRO"
         if re.match(r"^([^:：]+)[:：]\s*(intro|body|outro)\s*$", line, re.IGNORECASE):
             continue
 
-        # Remove standalone sound cue lines except [music]
         if re.fullmatch(r"\[[^\]]+\]", line):
             if line.lower() != "[music]":
                 continue
 
-        # Remove ANY inline tag like [laugh], [pause], [music], etc.
         line = re.sub(r"\[[^\]]*]", "", line)
 
-        # Remove leftover unicode formatting characters
         line = re.sub(r"[\u200B-\u200D\uFEFF]", "", line)
 
-        # Remove long separators like ---- or ••••
         if re.fullmatch(r"[-_=*~•·\u2022]{2,}", line):
             continue
 
-        # Remove speaker labels ("ga: Hello" → "Hello")
         line = re.sub(r"^[A-Za-z0-9]{1,10}\s*[:：]\s*", "", line)
 
-        # Remove accidental leftover beginning symbols
         line = re.sub(r"^[^\w]+", "", line)
-
-        # Cleanup extra spaces
         line = re.sub(r"\s{2,}", " ", line).strip()
 
         if line:
@@ -744,7 +795,6 @@ def build_speaker_voice_map():
     default_voice = host_voice or any_voice or "21m00Tcm4TlvDq8ikWAM"
     return mapping, default_voice
 
-
 def parse_script_into_segments(script: str):
     """
     Turn the script into segments: [(speaker_name, text), ...]
@@ -757,18 +807,15 @@ def parse_script_into_segments(script: str):
     """
     segments = []
     last_speaker = None
-
     for raw in script.splitlines():
         stripped = raw.strip()
         if not stripped:
             continue
 
-        # Detect music cues
         if stripped.lower() == "[music]":
             segments.append(("__music__", None))
             continue
 
-        # Detect "Speaker: text"
         if ":" in stripped:
             speaker, text = stripped.split(":", 1)
             speaker = speaker.strip()
@@ -779,19 +826,12 @@ def parse_script_into_segments(script: str):
                 last_speaker = speaker
             continue
 
-        # Otherwise treat it as continuation of last speaker
         if last_speaker:
             segments.append((last_speaker, stripped))
 
     return segments
 
 def synthesize_audio_from_script(script: str):
-    """
-    Core TTS logic.
-    - If we have multiple distinct voices → multi-speaker generation.
-    - Otherwise → single-voice fallback.
-    Returns (ok: bool, result: url_or_error_message)
-    """
     music_index = 0
     script = (script or "").strip()
     if not script:
@@ -803,20 +843,23 @@ def synthesize_audio_from_script(script: str):
 
     speaker_to_voice, default_voice = build_speaker_voice_map()
 
-    audio_parts = []   # <-- store pieces here
+    audio_parts = []
+    word_timeline = []
+    timeline_offset = 0.0  # seconds
 
     for speaker, text in segments:
 
+        # ----------------------
+        # MUSIC SEGMENT
+        # ----------------------
         if speaker.strip().lower() == "__music__":
-            # Read user selections from session
             intro = session.get("introMusic", "")
             body = session.get("bodyMusic", "")
             outro = session.get("outroMusic", "")
 
-            # Assign based on position of [music]
             if music_index == 0:
                 selected_music = intro
-            elif music_index in (1, 2):  # body tags
+            elif music_index in (1, 2):
                 selected_music = body
             else:
                 selected_music = outro
@@ -829,81 +872,101 @@ def synthesize_audio_from_script(script: str):
                     music_clip = AudioSegment.from_mp3(music_path)
                     audio_parts.append(music_clip)
 
+                    # advance offset
+                    timeline_offset += (len(music_clip) / 1000.0)
+
             continue
 
-
-
+        # ----------------------
         # SPEECH SEGMENT
-
+        # ----------------------
         if is_arabic(text):
             tts_text = text.strip()
         else:
             tts_text = clean_script_for_tts(text)
 
-        if tts_text.strip():
-            voice_id = speaker_to_voice.get(speaker, default_voice)
-            tts_audio = b""
+        if not tts_text.strip():
+            continue
 
-            # High-quality multilingual model for Arabic
-            for chunk in voice_client.text_to_speech.convert(
+        voice_id = speaker_to_voice.get(speaker, default_voice)
+
+        try:
+            audio_bytes, segment_words = eleven_tts_with_timestamps(
+                text=tts_text,
                 voice_id=voice_id,
                 model_id="eleven_multilingual_v2",
-                output_format="mp3_44100_128",
-                text=tts_text,
-            ):
-                if chunk:
-                    tts_audio += chunk
+            )
+        except Exception as e:
+            return False, str(e)
 
-            speech_segment = AudioSegment.from_file(BytesIO(tts_audio), format="mp3")
-            audio_parts.append(speech_segment)
+        speech_segment = AudioSegment.from_file(BytesIO(audio_bytes), format="mp3")
+        audio_parts.append(speech_segment)
 
+        # shift segment words to global timeline
+        for w in segment_words:
+            word_timeline.append({
+                "w": w["w"],
+                "start": w["start"] + timeline_offset,
+                "end": w["end"] + timeline_offset,
+                "speaker": speaker,
+            })
 
-    # -----------------------------
-    # COMBINE EVERYTHING CLEANLY
-    # -----------------------------
+        # advance offset by this speech duration
+        timeline_offset += (len(speech_segment) / 1000.0)
+
     if not audio_parts:
         return False, "No audio data generated."
 
     final_audio = AudioSegment.silent(duration=500)
+    timeline_offset_final = 0.5  # because we added 500ms silence
+
+    # shift EVERYTHING by 0.5 sec to match the initial silence
+    for w in word_timeline:
+        w["start"] += timeline_offset_final
+        w["end"] += timeline_offset_final
 
     for item in audio_parts:
         final_audio += item
 
-
     output_path = os.path.join("static", "output.mp3")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
     final_audio.export(output_path, format="mp3")
 
     file_url = url_for("static", filename="output.mp3", _external=True)
-    return True, file_url
-     
+
+    # store last transcript in session too (optional but useful)
+    session["last_word_timeline"] = word_timeline
+    session.modified = True
+
+    return True, {"url": file_url, "words": word_timeline}
+
 @app.post("/api/audio")
 def api_audio():
-    """
-    React endpoint – generate audio for the current script
-    using per-speaker ElevenLabs voices.
-    """
     payload = request.get_json(silent=True) or {}
     script = (payload.get("scriptText") or request.form.get("scriptText") or "").strip()
 
+    print("DEBUG /api/audio script length:", len(script))
+    print("DEBUG /api/audio first 200 chars:", script[:200])
+
     ok, result = synthesize_audio_from_script(script)
     if not ok:
-        # result is an error message
+        print("ERROR /api/audio:", result)
         return jsonify(error=result), 400
 
-    # ✅ remember the last audio URL in session
-    session["last_audio_url"] = result
+    session["last_audio_url"] = result["url"]
     session.modified = True
+    return jsonify(url=result["url"], words=result["words"])
 
-    # result is the URL to output.mp3
-    return jsonify(url=result)
+
+@app.get("/api/transcript/last")
+def api_transcript_last():
+    words = session.get("last_word_timeline") or None
+    return jsonify(words=words)
 
 
 @app.post("/api/save-music")
 def save_music():
     data = request.get_json() or {}
-
     session["introMusic"] = data.get("introMusic", "")
     session["bodyMusic"] = data.get("bodyMusic", "")
     session["outroMusic"] = data.get("outroMusic", "")
@@ -915,7 +978,6 @@ def save_music():
 
 @app.route("/", methods=["GET"])
 def index():
-    # For React SPA
     return redirect("http://localhost:5173/", code=302)
 
 @app.get("/api/audio/last")
@@ -938,7 +1000,6 @@ def signup():
     if not email or not password:
         return jsonify({"error": "Email and password are required"}), 400
 
-    # strong password rule from AC
     if len(password) < 8:
         return jsonify(
             {"error": "Password must be at least 8 characters long."}
@@ -1048,7 +1109,6 @@ def reset_password_direct():
     if len(new_password) < 8:
         return jsonify(error="Password must be at least 8 characters long."), 400
 
-    # same strong rule as signup
     if (
         not re.search(r"[A-Z]", new_password)
         or not re.search(r"\d", new_password)
@@ -1115,9 +1175,8 @@ def social_login():
                 "password_hash": None,
             })
         else:
-            # Update existing login timestamp + provider
             user_ref.update({
-                "name": name,  # update name in case Google/Github provides fresh one
+                "name": name,  
                 "authProvider": auth_provider,
                 "last_login": datetime.utcnow().isoformat(),
             })

@@ -4,8 +4,10 @@ import { Eye, EyeOff, Mail, Lock, ArrowLeft } from "lucide-react";
 import { signInWithPopup } from "firebase/auth";
 import { auth, googleProvider, githubProvider } from "../firebaseClient";
 
-const API_BASE = "http://127.0.0.1:5000";
-
+const API_BASE = import.meta.env.PROD
+  ? "https://wecast.onrender.com"
+  : "http://localhost:5000";
+  
 function getRedirectTarget() {
   const hash = window.location.hash || "";
   const match = hash.match(/redirect=([^&]+)/);

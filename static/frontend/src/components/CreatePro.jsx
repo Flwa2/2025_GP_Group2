@@ -18,212 +18,12 @@ import {
     Headphones,
     Music2,
 } from "lucide-react";
+import WeCastAudioPlayer from "./WeCastAudioPlayer";
 
+const API_BASE = import.meta.env.PROD
+    ? "https://wecast.onrender.com"
+    : "http://localhost:5000";
 
-/* -------------------- Audio Player Component -------------------- */
-function WeCastAudioPlayer({ src, title = "Generated Audio" }) {
-    const audioRef = React.useRef(null);
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [progress, setProgress] = useState(0);
-    const [duration, setDuration] = useState(0);
-    const [currentTime, setCurrentTime] = useState(0);
-    const [speed, setSpeed] = useState(1);
-
-    const SPEED_OPTIONS = [1, 1.25, 1.5, 2];
-
-    const formatTime = (sec) => {
-        if (!sec || Number.isNaN(sec)) return "0:00";
-        const m = Math.floor(sec / 60);
-        const s = Math.floor(sec % 60);
-        return `${m}:${s.toString().padStart(2, "0")}`;
-    };
-
-    const applySpeed = (rate) => {
-        setSpeed(rate);
-        const el = audioRef.current;
-        if (el) el.playbackRate = rate;
-    };
-
-    const togglePlay = () => {
-        const el = audioRef.current;
-        if (!el) return;
-        if (isPlaying) {
-            el.pause();
-        } else {
-            el.playbackRate = speed;
-            el.play().catch((err) => console.error("Play error:", err));
-        }
-    };
-
-    const skipSeconds = (delta) => {
-        const el = audioRef.current;
-        if (!el || !duration) return;
-        const nextTime = Math.min(Math.max(el.currentTime + delta, 0), duration);
-        el.currentTime = nextTime;
-        setCurrentTime(nextTime);
-        setProgress((nextTime / duration) * 100);
-    };
-
-    const handleBarClick = (e) => {
-        const el = audioRef.current;
-        if (!el || !duration) return;
-        const rect = e.currentTarget.getBoundingClientRect();
-        const ratio = (e.clientX - rect.left) / rect.width;
-        const nextTime = Math.min(Math.max(ratio * duration, 0), duration);
-        el.currentTime = nextTime;
-        setCurrentTime(nextTime);
-        setProgress((nextTime / duration) * 100);
-    };
-
-    const handleDownload = async () => {
-        if (!src) return;
-
-        try {
-            // Get the audio file data without leaving the page
-            const res = await fetch(src, { credentials: "include" });
-            if (!res.ok) {
-                console.error("Download failed with status", res.status);
-                return;
-            }
-
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = (title || "Podcast Episode") + ".mp3";
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-
-            // Clean up in memory
-            URL.revokeObjectURL(url);
-        } catch (err) {
-            console.error("Download error:", err);
-        }
-    };
-
-
-    return (
-        <div className="w-full rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 px-5 py-4 shadow-md flex flex-col gap-3">
-            {/* hidden audio element */}
-            <audio
-                ref={audioRef}
-                src={src}
-                className="hidden"
-                onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
-                onLoadedMetadata={(e) => {
-                    const d = e.target.duration || 0;
-                    setDuration(d);
-                }}
-                onEnded={() => {
-                    setIsPlaying(false);
-                    setCurrentTime(duration);
-                    setProgress(100);
-                }}
-                onTimeUpdate={(e) => {
-                    const el = e.target;
-                    const t = el.currentTime;
-                    const d = el.duration || 1;
-                    setCurrentTime(t);
-                    setProgress((t / d) * 100);
-                }}
-            />
-
-            {/* TOP ROW: play + title + time + speed + download */}
-            <div className="flex items-center gap-4">
-                {/* Play / Pause button */}
-                <button
-                    onClick={togglePlay}
-                    className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 text-white shadow-lg hover:shadow-xl hover:brightness-110 active:scale-95 transition"
-                >
-                    {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
-                </button>
-
-                <div className="flex-1 flex items-center justify-between gap-3">
-                    {/* Title + time (left side) */}
-                    <div className="flex flex-col">
-                        <span className="text-sm font-semibold text-black/80 dark:text-white">
-                            {title}
-                        </span>
-                        <span className="text-xs text-black/60 dark:text-white/60">
-                            {formatTime(currentTime)} / {formatTime(duration)}
-                        </span>
-                    </div>
-
-                    {/* Time + speed options + download (right side) */}
-                    <div className="flex items-center gap-3">
-                        <span className="text-xs font-medium text-black/60 dark:text-white/60">
-                            {formatTime(currentTime)} / {formatTime(duration)}
-                        </span>
-
-                        {/* Speed pill */}
-                        <div className="flex items-center gap-1 rounded-full bg-black/5 dark:bg-white/5 px-2 py-1">
-                            <span className="text-[0.7rem] uppercase tracking-wide text-black/50 dark:text-white/50 mr-1">
-                                Speed
-                            </span>
-                            {SPEED_OPTIONS.map((opt) => (
-                                <button
-                                    key={opt}
-                                    type="button"
-                                    onClick={() => applySpeed(opt)}
-                                    className={`px-2 py-0.5 rounded-full text-[0.7rem] font-semibold border transition ${speed === opt
-                                        ? "bg-purple-600 text-white border-purple-600"
-                                        : "bg-transparent text-black/70 dark:text-white/70 border-transparent hover:bg-black/10 dark:hover:bg-white/10"
-                                        }`}
-                                >
-                                    {opt}×
-                                </button>
-                            ))}
-                        </div>
-
-                        {/* Download button */}
-                        <button
-                            type="button"
-                            onClick={handleDownload}
-                            className="inline-flex items-center justify-center w-9 h-9 rounded-full border border-neutral-300 dark:border-neutral-700 text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 transition"
-                            title="Download audio"
-                        >
-                            <Download className="w-4 h-4" />
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            {/* PROGRESS BAR */}
-            <div
-                className="mt-1 h-2 w-full rounded-full bg-black/5 dark:bg-white/10 overflow-hidden cursor-pointer"
-                onClick={handleBarClick}
-            >
-                <div
-                    className="h-full rounded-full bg-gradient-to-r from-purple-500 via-pink-500 to-orange-400 transition-[width]"
-                    style={{ width: `${progress}%` }}
-                />
-            </div>
-
-            {/* BOTTOM ROW: skip controls centered */}
-            <div className="flex items-center justify-center gap-4 mt-1">
-                <button
-                    type="button"
-                    onClick={() => skipSeconds(-10)}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full border border-neutral-300 dark:border-neutral-700 text-xs font-medium text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 transition"
-                >
-                    <RotateCcw className="w-4 h-4" />
-                    <span>-10s</span>
-                </button>
-                <button
-                    type="button"
-                    onClick={() => skipSeconds(10)}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full border border-neutral-300 dark:border-neutral-700 text-xs font-medium text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 transition"
-                >
-                    <RotateCw className="w-4 h-4" />
-                    <span>+10s</span>
-                </button>
-            </div>
-        </div>
-    );
-}
 
 /* -------------------- overlay: rotating logo -------------------- */
 function LoadingOverlay({ show, logoSrc = "/logo.png", type = "audio" }) {
@@ -291,7 +91,7 @@ function Toast({ toast, onClose }) {
 
 export default function CreatePro() {
     const [step, setStep] = useState(1);
-    
+
     useEffect(() => {
         sessionStorage.setItem("currentStep", step);
     }, [step]);
@@ -385,8 +185,7 @@ export default function CreatePro() {
                     (editData.episodeTitle || "").trim() ||
                     "Podcast Show";
 
-                // Always re-render the visible script from the template + title,
-                // so CreatePro and EditScript stay in sync
+
                 const rendered = template.includes("{{SHOW_TITLE}}")
                     ? template.replaceAll("{{SHOW_TITLE}}", titleFromStorage)
                     : template;
@@ -431,7 +230,6 @@ export default function CreatePro() {
     }, []);
 
 
-
     useEffect(() => {
         const handleHashChange = () => {
             const hash = window.location.hash;
@@ -452,7 +250,6 @@ export default function CreatePro() {
                         (editData.episodeTitle || "").trim();
 
                     if (!titleFromStorage) {
-                        // instead of parsing from script, just fall back to a neutral default
                         titleFromStorage = "Podcast Show";
                     }
 
@@ -494,6 +291,7 @@ export default function CreatePro() {
     }, [voices]);
 
     /* ---------- rules ---------- */
+    // limits the number of speakers per style
     const styleLimits = {
         Interview: [2, 3],
         Storytelling: [1, 2, 3],
@@ -574,11 +372,11 @@ export default function CreatePro() {
     const defaultCount = (style) =>
         style === "Interview" ? 2 : style === "Conversational" ? 2 : 1;
 
-    /* ---------- load voices from backend ---------- */
+
     useEffect(() => {
         async function loadVoices() {
             try {
-                const res = await fetch("/api/voices");
+                const res = await fetch(`${API_BASE}/api/voices`);
                 const data = await res.json();
                 if (Array.isArray(data.voices)) {
                     setVoices(data.voices);
@@ -596,7 +394,6 @@ export default function CreatePro() {
         }
         loadVoices();
     }, []);
-
     const defaultVoiceForGender = (gender = "Male", usedIds = new Set()) => {
         const isFemale = (gender || "").toLowerCase() === "female";
         const key = isFemale ? "female" : "male";
@@ -604,98 +401,87 @@ export default function CreatePro() {
         const pool = voiceGroups[key].length ? voiceGroups[key] : voices;
         if (!pool.length) return "";
 
-        // Try to find an unused voice in the gender pool
         const unusedInPool = pool.find((v) => !usedIds.has(v.id));
         if (unusedInPool) return unusedInPool.id;
 
-        // If all gender voices are used, try any unused voice
         const unusedAny = voices.find((v) => !usedIds.has(v.id));
         if (unusedAny) return unusedAny.id;
 
-        // Fallback to first available
         return pool[0]?.id || voices[0]?.id || "";
     };
 
 
 
-/* ---------- when style changes: keep existing speaker names ---------- */
-useEffect(() => {
-    if (!scriptStyle) return;
+    useEffect(() => {
+        if (!scriptStyle) return;
 
-    setSpeakers((prev) => {
-        const limits = styleLimits[scriptStyle] || [];
+        setSpeakers((prev) => {
+            const limits = styleLimits[scriptStyle] || [];
 
-        // prefer existing count (from storage or user choice)
-        let count = prev.length || Number(speakersCount) || 0;
+            let count = prev.length || Number(speakersCount) || 0;
 
-        // if nothing valid, fall back to default for this style
-        if (!count || !limits.includes(count)) {
-            count = defaultCount(scriptStyle);
-            // update speakersCount ONLY in this case
-            setSpeakersCount(count);
-        }
+            if (!count || !limits.includes(count)) {
+                count = defaultCount(scriptStyle);
+                setSpeakersCount(count);
+            }
 
-        const next = Array.from({ length: count }).map((_, i) => {
-            const old = prev[i] || {};
-            const gender = old.gender || (i === 0 ? "Male" : "Female");
+            const next = Array.from({ length: count }).map((_, i) => {
+                const old = prev[i] || {};
+                const gender = old.gender || (i === 0 ? "Male" : "Female");
 
-            return {
-                name: old.name || "",
-                gender,
-                // role will be rewritten below
-                role: old.role || "host",
-                voiceId: old.voiceId || "",
-            };
+                return {
+                    name: old.name || "",
+                    gender,
+                    role: old.role || "host",
+                    voiceId: old.voiceId || "",
+                };
+            });
+
+            if (scriptStyle === "Interview") {
+                if (count === 2) {
+                    next[0].role = "host";
+                    next[1].role = "guest";
+                } else {
+                    next[0].role = "host";
+                    next[1].role = "host";
+                    next[2].role = "guest";
+                }
+            } else if (scriptStyle === "Conversational") {
+                next.forEach((s) => {
+                    s.role = "host";
+                });
+            } else if (scriptStyle === "Educational" || scriptStyle === "Storytelling") {
+                if (count === 1) {
+                    next[0].role = "host";
+                } else if (count === 2) {
+                    next[0].role = "host";
+                    next[1].role = "guest";
+                } else if (count === 3) {
+                    next[0].role = "host";
+                    next[1].role = "guest";
+                    next[2].role = "guest";
+                }
+            }
+            // other styles: keep roles as they are
+
+            return next;
         });
 
-        // apply roles according to the style (same logic as before)
-        if (scriptStyle === "Interview") {
-            if (count === 2) {
-                next[0].role = "host";
-                next[1].role = "guest";
-            } else {
-                next[0].role = "host";
-                next[1].role = "host";
-                next[2].role = "guest";
-            }
-        } else if (scriptStyle === "Conversational") {
-            next.forEach((s) => {
-                s.role = "host";
-            });
-        } else if (scriptStyle === "Educational" || scriptStyle === "Storytelling") {
-            if (count === 1) {
-                next[0].role = "host";
-            } else if (count === 2) {
-                next[0].role = "host";
-                next[1].role = "guest";
-            } else if (count === 3) {
-                next[0].role = "host";
-                next[1].role = "guest";
-                next[2].role = "guest";
-            }
-        }
-        // other styles: keep roles as they are
-
-        return next;
-    });
-
-    setErrors({});
-}, [scriptStyle, speakersCount]);
+        setErrors({});
+    }, [scriptStyle, speakersCount]);
 
 
 
-    /* ---------- when voices finish loading, fill missing voiceIds ---------- */
     useEffect(() => {
         if (loadingVoices || !voices.length || !speakers.length) return;
 
         setSpeakers((prev) => {
-            // Start with any voices already assigned
             const usedIds = new Set(
                 prev.map((s) => s.voiceId).filter(Boolean)
             );
 
             const next = prev.map((s) => {
-                if (s.voiceId) return s; // keep existing
+                if (s.voiceId) return s;
 
                 const voiceId = defaultVoiceForGender(s.gender, usedIds);
                 if (voiceId) usedIds.add(voiceId);
@@ -705,10 +491,9 @@ useEffect(() => {
 
             return next;
         });
-    }, [loadingVoices, voices.length, speakers.length]); // note: includes speakers.length
+    }, [loadingVoices, voices.length, speakers.length]);
 
 
-    /* ---------- when count changes: rebuild array & roles ---------- */
     useEffect(() => {
         if (!scriptStyle || !speakersCount) return;
         const count = Number(speakersCount);
@@ -772,6 +557,7 @@ useEffect(() => {
     const normalizeName = (s = "") =>
         s.trim().toLowerCase().replace(/\s+/g, " ");
 
+    // Duplicate names:
     const hasDuplicateNames = useMemo(() => {
         const names = speakers
             .map((s) => normalizeName(s.name))
@@ -815,7 +601,6 @@ useEffect(() => {
         }
     };
 
-
     const handleGenerate = async () => {
         const words = description.trim().split(/\s+/).filter(Boolean).length;
         if (words < MIN) {
@@ -831,7 +616,8 @@ useEffect(() => {
         setErrors({});
 
         try {
-            const res = await fetch("/api/generate", {
+
+            const res = await fetch(`${API_BASE}/api/generate`, {
                 method: "POST",
                 credentials: "include",
                 headers: { "Content-Type": "application/json" },
@@ -850,22 +636,19 @@ useEffect(() => {
                 return;
             }
 
-            // template from backend
             const template = data.script;
 
             const backendTitle =
                 data.show_title || data.title || "Podcast Episode";
 
-            // store template + title
             setScriptTemplate(template);
             setShowTitle(backendTitle);
             setEpisodeTitle(backendTitle);
 
-            // rendered script that the user will SEE
             const rendered = template.replaceAll("{{SHOW_TITLE}}", backendTitle);
             setGeneratedScript(rendered);
 
-            // overwrite editData every generation
+
             const editData = {
                 scriptStyle,
                 speakersCount,
@@ -893,7 +676,6 @@ useEffect(() => {
         }
     };
 
-
     const handleGenerateAudio = async () => {
         if (!generatedScript) {
             setToast({ type: "error", message: "Please generate a script first." });
@@ -905,7 +687,8 @@ useEffect(() => {
         setGeneratedAudio(null);
 
         try {
-            const response = await fetch("/api/audio", {
+
+            const response = await fetch(`${API_BASE}/api/audio`, {
                 method: "POST",
                 credentials: "include",
                 headers: { "Content-Type": "application/json" },
@@ -921,8 +704,19 @@ useEffect(() => {
             if (!response.ok || !data.url) {
                 throw new Error(data.error || "Audio generation failed");
             }
+            const baseAudioUrl = data.url.startsWith("http")
+                ? data.url
+                : `${API_BASE}${data.url}`;
 
-            setGeneratedAudio(data.url + "?t=" + Date.now());
+            const previewPayload = {
+                url: baseAudioUrl,
+                words: data.words || [],
+                title: audioTitle,
+            };
+            sessionStorage.setItem("wecast_preview", JSON.stringify(previewPayload));
+
+            setGeneratedAudio(baseAudioUrl + "?t=" + Date.now());
+
             setToast({
                 type: "success",
                 message: "Audio generated successfully!",
@@ -990,7 +784,6 @@ useEffect(() => {
         <div className={`h-[3px] flex-1 rounded-full ${on ? "bg-gradient-to-r from-purple-600 to-pink-500" : "bg-black/10 dark:bg-white/10"}`} />
     );
 
-    // Count how many of each role we have (host, guest, etc.)
     const roleCounts = useMemo(() => {
         const counts = {};
         speakers.forEach((s) => {
@@ -1125,17 +918,13 @@ useEffect(() => {
                             {speakers.length > 0 && (
                                 <div className={`mt-5 grid gap-5 ${speakers.length === 1 ? "grid-cols-1 max-w-md" : speakers.length === 2 ? "grid-cols-1 md:grid-cols-2 max-w-4xl" : "grid-cols-1 md:grid-cols-3 max-w-5xl"} mx-auto`}>
                                     {speakers.map((sp, i) => {
-                                        // 1) Normalize the role coming from your style
-                                        // Normalize the role name coming from the style
+
                                         let rawRole = sp.role || "guest";
 
-                                        // Count how many hosts exist
                                         const totalHosts = roleCounts["Host"] || roleCounts["host"] || 0;
 
-                                        // Convert roles into UI roles
                                         let role;
 
-                                        // If multiple hosts → turn all of them into Co-hosts
                                         if (rawRole === "host" && totalHosts > 1) {
                                             role = "Co-host";
                                         } else if (rawRole === "host") {
@@ -1148,11 +937,9 @@ useEffect(() => {
                                             role = "Guest";
                                         }
 
-                                        // Track usage for numbering (Guest 1, Co-host 1, etc.)
                                         roleUsage[role] = (roleUsage[role] || 0) + 1;
                                         const occurrence = roleUsage[role];
 
-                                        // Build label
                                         const label =
                                             roleCounts[rawRole] > 1 && role !== "Host"
                                                 ? `${role} ${occurrence}`
@@ -1263,34 +1050,34 @@ useEffect(() => {
 
                                                                             // Prevent duplicate assignment
                                                                             const alreadyUsed = speakers.some(
-                                                                            (s, idx) => s.voiceId === newVoice && idx !== i
+                                                                                (s, idx) => s.voiceId === newVoice && idx !== i
                                                                             );
 
                                                                             if (alreadyUsed) {
-                                                                            alert("This voice is already used by another speaker. Please choose a different one.");
-                                                                            return;
+                                                                                alert("This voice is already used by another speaker. Please choose a different one.");
+                                                                                return;
                                                                             }
 
                                                                             setSpeakers((arr) => {
-                                                                            const n = [...arr];
-                                                                            n[i] = { ...n[i], voiceId: newVoice };
-                                                                            return n;
+                                                                                const n = [...arr];
+                                                                                n[i] = { ...n[i], voiceId: newVoice };
+                                                                                return n;
                                                                             });
                                                                         }}
-                                                                        >
+                                                                    >
                                                                         <option value="">Select Voice</option>
                                                                         {pool.map((v) => {
                                                                             const isTaken = speakers.some(
-                                                                            (s, idx) => s.voiceId === v.id && idx !== i
+                                                                                (s, idx) => s.voiceId === v.id && idx !== i
                                                                             );
 
                                                                             return (
-                                                                            <option key={v.id} value={v.id} disabled={isTaken}>
-                                                                                {v.name} {isTaken ? "(Already Used)" : ""}
-                                                                            </option>
+                                                                                <option key={v.id} value={v.id} disabled={isTaken}>
+                                                                                    {v.name} {isTaken ? "(Already Used)" : ""}
+                                                                                </option>
                                                                             );
                                                                         })}
-                                                                        </select>
+                                                                    </select>
 
                                                                     <button
                                                                         type="button"
@@ -1344,70 +1131,70 @@ useEffect(() => {
 
                     {/* STEP 3: ENTER TEXT */}
                     {step === 3 && (
-                    <section className="ui-card">
-                        <h2 className="ui-card-title flex items-center gap-2">
-                        <NotebookPen className="w-4 h-4" />
-                        Enter your text
-                        </h2>
+                        <section className="ui-card">
+                            <h2 className="ui-card-title flex items-center gap-2">
+                                <NotebookPen className="w-4 h-4" />
+                                Enter your text
+                            </h2>
 
-                        <textarea
-                        id="wecast_textarea"
-                        value={description}
-                        onChange={(e) => setDescription(e.target.value)}
-                        placeholder="Paste your text here (min 500, max 2500 words)…"
-                        className="form-textarea mt-3"
-                        rows={8}
-                        />
+                            <textarea
+                                id="wecast_textarea"
+                                value={description}
+                                onChange={(e) => setDescription(e.target.value)}
+                                placeholder="Paste your text here (min 500, max 2500 words)…"
+                                className="form-textarea mt-3"
+                                rows={8}
+                            />
 
-                        {(() => {
-                        const wordCount = description.trim().split(/\s+/).filter(Boolean).length;
+                            {(() => {
+                                const wordCount = description.trim().split(/\s+/).filter(Boolean).length;
 
-                        return (
-                            <div className="mt-2 text-sm flex justify-between">
-                            <span
-                                className={
-                                wordCount < MIN || wordCount > MAX
-                                    ? "text-rose-500"      // red if too short OR too long
-                                    : "text-purple-500"    // normal color inside range
-                                }
-                            >
-                                {wordCount} / {MAX} words
-                            </span>
-                            {errors.description && (
-                                <span className="text-rose-500">{errors.description}</span>
+                                return (
+                                    <div className="mt-2 text-sm flex justify-between">
+                                        <span
+                                            className={
+                                                wordCount < MIN || wordCount > MAX
+                                                    ? "text-rose-500"      // red if too short OR too long
+                                                    : "text-purple-500"    // normal color inside range
+                                            }
+                                        >
+                                            {wordCount} / {MAX} words
+                                        </span>
+                                        {errors.description && (
+                                            <span className="text-rose-500">{errors.description}</span>
+                                        )}
+                                    </div>
+                                );
+                            })()}
+
+                            {errors.server && (
+                                <p className="text-rose-600 mt-3 flex items-center gap-2">
+                                    <AlertCircle className="w-4 h-4" /> {errors.server}
+                                </p>
                             )}
+
+                            <div className="mt-6 flex justify-between">
+                                <button
+                                    onClick={() => setStep(2)}
+                                    className="px-4 py-2 border rounded-xl"
+                                >
+                                    Back
+                                </button>
+                                <button
+                                    onClick={handleGenerate}
+                                    disabled={submitting}
+                                    className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
+                                >
+                                    {submitting ? (
+                                        "Generating Script..."
+                                    ) : (
+                                        <>
+                                            Generate Script <Wand2 className="w-4 h-4" />
+                                        </>
+                                    )}
+                                </button>
                             </div>
-                        );
-                        })()}
-
-                        {errors.server && (
-                        <p className="text-rose-600 mt-3 flex items-center gap-2">
-                            <AlertCircle className="w-4 h-4" /> {errors.server}
-                        </p>
-                        )}
-
-                        <div className="mt-6 flex justify-between">
-                        <button
-                            onClick={() => setStep(2)}
-                            className="px-4 py-2 border rounded-xl"
-                        >
-                            Back
-                        </button>
-                        <button
-                            onClick={handleGenerate}
-                            disabled={submitting}
-                            className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
-                        >
-                            {submitting ? (
-                            "Generating Script..."
-                            ) : (
-                            <>
-                                Generate Script <Wand2 className="w-4 h-4" />
-                            </>
-                            )}
-                        </button>
-                        </div>
-                    </section>
+                        </section>
                     )}
 
 
@@ -1629,8 +1416,9 @@ useEffect(() => {
                                                             index === 0 ? introMusic : index === 1 ? bodyMusic : outroMusic;
                                                         if (selected) {
                                                             setMusicPreview(
-                                                                `http://localhost:5000/static/music/${selected}`
+                                                                `${API_BASE}/static/music/${selected}`
                                                             );
+
                                                         }
                                                     }}
                                                 >
@@ -1661,8 +1449,8 @@ useEffect(() => {
                                     <button
                                         onClick={async () => {
                                             try {
-                                                // Clear saved music on backend
-                                                await fetch("/api/save-music", {
+
+                                                await fetch(`${API_BASE}/api/save-music`, {
                                                     method: "POST",
                                                     credentials: "include",
                                                     headers: { "Content-Type": "application/json" },
@@ -1692,9 +1480,10 @@ useEffect(() => {
 
                                     {/* Continue Button */}
                                     <button
+
                                         disabled={!introMusic || !bodyMusic || !outroMusic}
                                         onClick={async () => {
-                                            await fetch("/api/save-music", {
+                                            await fetch(`${API_BASE}/api/save-music`, {
                                                 method: "POST",
                                                 credentials: "include",
                                                 headers: { "Content-Type": "application/json" },
@@ -1791,11 +1580,19 @@ useEffect(() => {
                                                 Regenerate Audio
                                             </button>
                                             <button
+                                                onClick={() => window.location.hash = "#/preview"}
+                                                className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                            >
+                                                Open Episode
+                                            </button>
+
+                                            <button
                                                 onClick={navigateToEdit}
                                                 className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
                                             >
                                                 Edit Script
                                             </button>
+
                                         </div>
                                     </div>
                                 </div>

@@ -6,6 +6,10 @@ venv/
 __pycache__/
 *.pyc
 
+# Flask runtime
+.flask_session/
+static/output.mp3
+
 # Environment files
 .env
 *.env

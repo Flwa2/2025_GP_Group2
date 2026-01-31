@@ -1,6 +1,6 @@
 // src/App.jsx
 import React, { useEffect, useState } from "react";
-import { useTranslation } from "react-i18next";  
+import { useTranslation } from "react-i18next";
 import Header from "./components/Header";
 import HeroSection from "./components/HeroSection";
 import AbstractArt from "./components/AbstractArt";
@@ -13,6 +13,9 @@ import Signup from "./components/Signup";
 import Login from "./components/Login";
 import EditScript from "./components/EditScript";
 import Create from "./components/CreatePro";
+import Preview from "./components/Preview";
+import Episodes from "./components/Episodes";
+
 
 function isAuthenticated() {
   return !!localStorage.getItem("token");
@@ -29,13 +32,15 @@ function useHashRoute() {
 }
 
 export default function App() {
-  const { i18n } = useTranslation();  
+  const { i18n } = useTranslation();
   const hash = useHashRoute();
   const isAccount = hash.startsWith('#/account');
   const isSignup = hash.startsWith('#/signup');
   const isLogin = hash.startsWith('#/login');
   const isCreate = hash.startsWith("#/create") && (hash.includes("guest=true") || isAuthenticated());
   const isEdit = hash.startsWith('#/edit');
+  const isPreview = hash.startsWith("#/preview");
+  const isEpisodes = hash.startsWith("#/episodes");
 
   useEffect(() => {
     const sectionLinks = ['#about', '#episodes'];
@@ -72,6 +77,10 @@ export default function App() {
           })()
         ) : isEdit ? (
           <EditScript />
+        ) : isEpisodes ? (
+          <Episodes />
+        ) : isPreview ? (
+          <Preview />
         ) : (
           <>
             <HeroSection />
