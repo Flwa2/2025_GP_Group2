@@ -101,7 +101,8 @@ print("DEBUG AudioSegment.ffprobe:", getattr(AudioSegment, "ffprobe", None))
 print("DEBUG PATH starts with:", os.environ["PATH"].split(os.pathsep)[0])
 
 
-app.secret_key = "supersecretkey"
+app.secret_key = app.config["SECRET_KEY"]
+
 
 
 def create_token(user_id, email):
@@ -175,6 +176,53 @@ def is_arabic(text: str) -> bool:
     return (arabic_letters / total_letters) >= 0.30
 
 
+def detect_language(description: str) -> str:
+    return "ar" if is_arabic(description) else "en"
+
+
+def save_generated_podcast_to_firestore(user_id: str, title: str, script_style: str,
+                                       description: str, script: str, speakers_info: list):
+    # 1) Create the podcast doc with an auto-ID
+    podcast_ref = db.collection("podcasts").document()
+    podcast_id = podcast_ref.id
+
+    now = firestore.SERVER_TIMESTAMP
+    language = detect_language(description)
+
+    # Podcast doc
+    podcast_ref.set({
+        "userId": user_id,
+        "title": title or "Untitled Episode",
+        "language": language,
+        "style": script_style,
+        "speakersCount": len(speakers_info or []),
+        "status": "draft",
+        "createdAt": now,
+        "lastEditedAt": now,
+    })
+
+    # 2) Speakers subcollection
+    speakers_col = podcast_ref.collection("speakers")
+    for s in speakers_info or []:
+        speakers_col.document().set({
+            "name": (s.get("name") or "").strip(),
+            "gender": (s.get("gender") or "").strip(),
+            "role": (s.get("role") or "").strip(),
+            "providerVoiceId": (s.get("voiceId") or "").strip(),  # your frontend uses voiceId
+            "createdAt": now,
+        })
+
+    # 3) Script doc (single doc, id = "main")
+    script_ref = podcast_ref.collection("scripts").document("main")
+    script_ref.set({
+        "sourceText": description,
+        "finalScriptText": script,
+        "wordCount": len((script or "").split()),
+        "createdAt": now,
+        "lastEditedAt": now,
+    })
+
+    return podcast_id
 
 def generate_podcast_script(description: str, speakers_info: list, script_style: str):
     """Generate a structured podcast script where ALL speakers talk,
@@ -193,18 +241,24 @@ def generate_podcast_script(description: str, speakers_info: list, script_style:
             INTRO
             --------------------
             - يجب أن تكون أول جملة منطوقة في المقدمة من المقدم الرئيسي (أول متحدث في القائمة).
-            - يجب أن تحتوي هذه الجملة على {{SHOW_TITLE}} حرفيًا داخل علامات اقتباس، مثال:
-            <اسم_المقدم>: مرحبًا بكم في حلقة جديدة من "{{SHOW_TITLE}}".
-            - بعد هذه الجملة، أكمل المقدمة بتقديم الموضوع والمتحدثين بشكل طبيعي.
-            """
+    - يجب أن تحتوي هذه الجملة على {{SHOW_TITLE}} حرفيًا داخل علامات اقتباس، مثال:
+    <اسم_المقدم>: مرحبًا بكم في حلقة جديدة من "{{SHOW_TITLE}}".
+    - بعد هذه الجملة، أكمل المقدمة بتقديم الموضوع والمتحدثين بشكل طبيعي.
+    """
     else:
             intro_block = """
             --------------------
             INTRO
             --------------------
-            - Start with: Host greets listeners and says:
-            "<HostName>: Welcome to another episode of '{{SHOW_TITLE}}'."
-            - Then introduce the topic + speakers naturally.
+           - Start with: Host greets listeners and says something NATURAL like:
+    "<HostName>: Welcome to our podcast '{{SHOW_TITLE}}'."
+    OR
+    "<HostName>: Hello and welcome to '{{SHOW_TITLE}}'."
+    OR
+    "<HostName>: Thanks for joining us on '{{SHOW_TITLE}}'."
+    - DO NOT use the phrase "Welcome to another episode of" or "Welcome to another episode".
+    - Use more natural, varied opening greetings.
+    - Then introduce the topic + speakers naturally.
             """
 
     # Format speakers list for GPT
@@ -627,11 +681,10 @@ def api_me():
 
     return jsonify(
         email=data.get("email", user_id),
-        displayName=data.get("name", "WeCast User"), 
-        handle=data.get("handle", "@wecast"),         
-        displayName=data.get("name", "WeCast User"),  # optional, can stay default
-        handle=data.get("handle", "@wecast"),         # your “username”# 
+        displayName=data.get("name", "WeCast User"),
+        handle=data.get("handle", "@wecast"),
     )
+
 
 @app.post("/api/generate")
 def api_generate():
@@ -657,9 +710,28 @@ def api_generate():
 
     script_template = script  
     show_title = title or "Podcast Show"
+    # ✅ figure out user (prefer session)
+    user_id = session.get("user_id")
+    if not user_id:
+        # fallback to JWT header if you want
+        user_id = get_current_user_email()
+
+    # If you require login to save, enforce it
+    if not user_id:
+        return jsonify(ok=False, error="Not logged in."), 401
+
+    podcast_id = save_generated_podcast_to_firestore(
+        user_id=user_id,
+        title=title,
+        script_style=script_style,
+        description=description,
+        script=script_template,
+        speakers_info=speakers_info,
+    )
 
 
     session["create_draft"] = {
+        "podcastId": podcast_id,
         "script_style": script_style,
         "speakers_count": speakers,
         "speakers_info": speakers_info,
@@ -669,7 +741,8 @@ def api_generate():
         "title": title,
     }
 
-    return jsonify(ok=True, script=script_template, title=title, show_title=show_title)
+
+    return jsonify(ok=True, script=script_template, title=title, show_title=show_title, podcastId=podcast_id)
 
 @app.get("/api/draft")
 def api_draft():
@@ -713,6 +786,20 @@ def api_edit_save():
             },
             merge=True,
         )
+
+    podcast_id = (session.get("create_draft") or {}).get("podcastId")
+    if user_id and podcast_id:
+        script_ref = db.collection("podcasts").document(podcast_id).collection("scripts").document("main")
+        script_ref.set({
+            "finalScriptText": edited_script,
+            "wordCount": len(edited_script.split()),
+            "lastEditedAt": firestore.SERVER_TIMESTAMP,
+        }, merge=True)
+
+        db.collection("podcasts").document(podcast_id).set({
+            "title": show_title or draft.get("title") or "Untitled Episode",
+            "lastEditedAt": firestore.SERVER_TIMESTAMP,
+        }, merge=True)
 
     return jsonify({
         "ok": True,
@@ -943,25 +1030,158 @@ def synthesize_audio_from_script(script: str):
 @app.post("/api/audio")
 def api_audio():
     payload = request.get_json(silent=True) or {}
+
     script = (payload.get("scriptText") or request.form.get("scriptText") or "").strip()
+    podcast_id = (payload.get("podcastId") or "").strip()   # ✅ NEW
 
     print("DEBUG /api/audio script length:", len(script))
     print("DEBUG /api/audio first 200 chars:", script[:200])
+    print("DEBUG /api/audio podcastId:", podcast_id)
 
     ok, result = synthesize_audio_from_script(script)
     if not ok:
         print("ERROR /api/audio:", result)
         return jsonify(error=result), 400
 
+    # keep audio in session (as you want)
     session["last_audio_url"] = result["url"]
     session.modified = True
-    return jsonify(url=result["url"], words=result["words"])
 
+    # ✅ NEW: save live transcript (word timeline) to Firestore
+    user_id = session.get("user_id") or get_current_user_email()
+    if user_id and podcast_id:
+        podcast_ref = db.collection("podcasts").document(podcast_id)
+        doc = podcast_ref.get()
+
+        if doc.exists:
+            pdata = doc.to_dict() or {}
+            if pdata.get("userId") == user_id:
+                words = result.get("words") or []
+                transcript_text = " ".join([(w.get("w") or "") for w in words]).strip()
+
+                # Save transcript text in main podcast doc (small)
+                podcast_ref.set({
+                    "transcriptText": transcript_text,
+                    "transcriptUpdatedAt": firestore.SERVER_TIMESTAMP,
+                }, merge=True)
+
+                # Save full word timeline in a subcollection doc
+                podcast_ref.collection("transcripts").document("main").set({
+                    "words": words,
+                    "updatedAt": firestore.SERVER_TIMESTAMP,
+                }, merge=True)
+            else:
+                print("WARN: user does not own this podcast. Not saving transcript.")
+        else:
+            print("WARN: podcastId not found. Not saving transcript.")
+
+    return jsonify(url=result["url"], words=result["words"])
 
 @app.get("/api/transcript/last")
 def api_transcript_last():
     words = session.get("last_word_timeline") or None
     return jsonify(words=words)
+
+@app.post('/api/summarize')
+def summarize_transcript():
+    """
+        Generate an AI summary of the podcast transcript using OpenAI.
+
+        Expects JSON:
+        {
+        "podcastId": "podcast document ID",
+        "text": "full transcript text"
+        }
+
+        Returns:
+        {
+        "summary": "generated summary text"
+        }
+
+        Side effect:
+        - Saves the summary to Firestore under podcasts/{podcastId}.summary
+    """
+
+    try:
+        data = request.get_json(silent=True) or {}
+        text = data.get('text', '')
+        podcast_id = (data.get('podcastId') or "").strip()
+
+        if not text:
+            return jsonify({"error": "No text provided"}), 400
+        if not podcast_id:
+            return jsonify({"error": "Missing podcastId"}), 400
+
+        # (optional) ensure logged in
+        user_id = session.get("user_id") or get_current_user_email()
+        if not user_id:
+            return jsonify({"error": "Not logged in"}), 401
+
+        text = text[:12000]
+        is_ar = is_arabic(text)
+
+        if is_ar:
+            system_prompt = "أنت مساعد مفيد يقوم بإنشاء ملخصات بودكاست موجزة. يجب أن تكون جميع الردود بحد أقصى 250 كلمة."
+            user_prompt = f"يرجى تلخيص نص البودكاست التالي بحد أقصى 250 كلمة. ركز على النقاط الرئيسية والأفكار المهمة:\n\n{text}"
+        else:
+            system_prompt = "You are a helpful assistant that creates concise podcast summaries. Always respond with 250 words or less."
+            user_prompt = f"Please summarize this podcast transcript in 250 words or less. Focus on the main points, key insights, and important discussions:\n\n{text}"
+
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            max_tokens=350,
+            temperature=0.7
+        )
+
+        summary = (response.choices[0].message.content or "").strip()
+
+        # enforce <= 250 words
+        words = summary.split()
+        if len(words) > 250:
+            summary = " ".join(words[:250]) + "..."
+
+        # ✅ Save into Firestore (and ensure ownership)
+        podcast_ref = db.collection("podcasts").document(podcast_id)
+        doc = podcast_ref.get()
+        if not doc.exists:
+            return jsonify({"error": "Podcast not found"}), 404
+
+        pdata = doc.to_dict() or {}
+        if pdata.get("userId") != user_id:
+            return jsonify({"error": "Forbidden"}), 403
+
+        podcast_ref.set({
+            "summary": summary,
+            "summaryUpdatedAt": firestore.SERVER_TIMESTAMP,
+        }, merge=True)
+
+        return jsonify({"summary": summary})
+
+    except Exception as e:
+        print(f"Summary generation error: {str(e)}")
+        return jsonify({"error": "Failed to generate summary"}), 500
+
+
+@app.get("/api/podcasts/<podcast_id>")
+def get_podcast(podcast_id):
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    ref = db.collection("podcasts").document(podcast_id)
+    doc = ref.get()
+    if not doc.exists:
+        return jsonify(error="Podcast not found"), 404
+
+    data = doc.to_dict() or {}
+    if data.get("userId") != user_id:
+        return jsonify(error="Forbidden"), 403
+
+    return jsonify(ok=True, podcast={**data, "id": podcast_id})
 
 
 @app.post("/api/save-music")
