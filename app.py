@@ -631,34 +631,54 @@ def eleven_tts_with_timestamps(text: str, voice_id: str, model_id: str = "eleven
 def health():
     return jsonify(status="ok")
 
-# get list of available ElevenLabs voices
 @app.get("/api/voices")
 def api_voices():
-    """
-    Return all available ElevenLabs voices.
-    Shape: { "voices": [ { "id", "name", "labels", "preview_url" }, ... ] }
-    """
     try:
-        res = voice_client.voices.get_all()
-        voices = []
-        for v in getattr(res, "voices", []):
-            preview = getattr(v, "preview_url", None)
-            if not preview and getattr(v, "samples", None):
-                if v.samples:
-                    preview = getattr(v.samples[0], "preview_url", None)
+        docs = db.collection("voices").stream()
 
-            voices.append(
-                {
-                    "id": v.voice_id,
-                    "name": v.name,
-                    "labels": getattr(v, "labels", {}),
-                    "preview_url": preview,
-                }
+        items = []
+        for d in docs:
+            v = d.to_dict() or {}
+
+            # normalize fields (support both Firestore styles)
+            name = v.get("name") or v.get("Name") or ""
+            gender = v.get("gender") or v.get("Gender") or ""
+            description = v.get("description") or v.get("Description") or ""
+            provider = v.get("provider") or v.get("Provider") or "ElevenLabs"
+            pitch = v.get("pitch") or v.get("Pitch") or ""
+            languages = v.get("languages") or v.get("Languages") or []
+            tone = v.get("tone") or v.get("Tone") or []
+
+            provider_voice_id = (
+                v.get("providerVoiceId")
+                or v.get("provider_voice_id")
+                or v.get("voiceId")
+                or v.get("VoiceId")
+                or v.get("id")
+                or d.id
             )
-        return jsonify(voices=voices)
+
+            out = {
+                "docId": d.id,
+                "id": provider_voice_id,           
+                "providerVoiceId": provider_voice_id,    
+                "provider": provider,
+                "name": name,
+                "gender": gender,
+                "description": description,
+                "pitch": pitch,
+                "languages": languages if isinstance(languages, list) else [],
+                "tone": tone if isinstance(tone, list) else [],
+                "labels": {"gender": gender},       
+            }
+
+            items.append(out)
+
+        return jsonify(count=len(items), items=items)
+
     except Exception as e:
-        print("ELEVENLABS /api/voices ERROR:", e)
-        return jsonify(error=str(e), voices=[]), 500
+        print("Firestore /api/voices ERROR:", e)
+        return jsonify(error=str(e), count=0, items=[]), 500
 
 
 @app.get("/api/me")
@@ -1037,10 +1057,15 @@ def api_audio():
     print("DEBUG /api/audio script length:", len(script))
     print("DEBUG /api/audio first 200 chars:", script[:200])
     print("DEBUG /api/audio podcastId:", podcast_id)
+    incoming_speakers_info = payload.get("speakers_info")
+    if isinstance(incoming_speakers_info, list) and incoming_speakers_info:
+        draft = session.get("create_draft") or {}
+        draft["speakers_info"] = incoming_speakers_info
+        session["create_draft"] = draft
+        session.modified = True
 
     ok, result = synthesize_audio_from_script(script)
     if not ok:
-        print("ERROR /api/audio:", result)
         return jsonify(error=result), 400
 
     # keep audio in session (as you want)
@@ -1422,4 +1447,4 @@ def social_login():
 # ------------------------------------------------------------
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)

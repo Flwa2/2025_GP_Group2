@@ -64,28 +64,33 @@ function LoadingOverlay({ show, logoSrc = "/logo.png", type = "audio" }) {
 
 /* -------------------- tiny toast -------------------- */
 function Toast({ toast, onClose }) {
-    if (!toast) return null;
-    return (
-        <div className="fixed top-4 right-4 z-[9998]">
-            <div
-                className={`rounded-xl px-4 py-3 shadow-lg border ${toast.type === "error"
-                    ? "bg-rose-50 text-rose-900 border-rose-200 dark:bg-rose-900/20 dark:text-rose-100 dark:border-rose-800/40"
-                    : "bg-emerald-50 text-emerald-900 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-100 dark:border-emerald-800/40"
-                    }`}
-            >
-                <div className="flex items-start gap-2">
-                    <Info className="w-4 h-4 mt-0.5" />
-                    <div className="text-sm font-medium">{toast.message}</div>
-                    <button
-                        onClick={onClose}
-                        className="ml-3 opacity-60 hover:opacity-90"
-                    >
-                        ✕
-                    </button>
-                </div>
-            </div>
+  if (!toast) return null;
+
+  return (
+    <div className="fixed top-4 right-4 z-[9998]">
+      <div
+        className={`rounded-xl px-4 py-3 shadow-lg border ${
+          toast.type === "error"
+            ? "bg-rose-50 text-rose-900 border-rose-200 dark:bg-rose-900/20 dark:text-rose-100 dark:border-rose-800/40"
+            : "bg-emerald-50 text-emerald-900 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-100 dark:border-emerald-800/40"
+        }`}
+      >
+        <div className="flex items-start gap-2">
+          <Info className="w-4 h-4 mt-0.5" />
+          <div className="text-sm font-medium">{toast.message}</div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="ml-3 opacity-60 hover:opacity-90"
+            aria-label="Close"
+          >
+            ✕
+          </button>
         </div>
-    );
+      </div>
+    </div>
+  );
 }
 
 
@@ -104,6 +109,142 @@ export default function CreatePro() {
     const [scriptStyle, setScriptStyle] = useState("");
     const [speakersCount, setSpeakersCount] = useState(0);
     const [speakers, setSpeakers] = useState([]);
+
+// ElevenLabs voices (load once)
+const [voices, setVoices] = useState([]);
+const [loadingVoices, setLoadingVoices] = useState(true);
+
+// filters per speaker
+const [speakerVoiceFilters, setSpeakerVoiceFilters] = useState({});
+// { [index]: { open:false, q:"", gender:"", language:"", tone:"", pitch:"" } }
+
+const getVoiceId = (v) => v?.providerVoiceId || v?.id || v?.docId || "";
+
+// Load ALL voices once
+useEffect(() => {
+  async function loadVoices() {
+    try {
+      setLoadingVoices(true);
+
+      const params = new URLSearchParams();
+      params.set("provider", "ElevenLabs");
+      params.set("limit", "200");
+
+      const url = `${API_BASE}/api/voices?${params.toString()}`;
+      const res = await fetch(url, { credentials: "include" });
+
+      console.log("GET /api/voices status:", res.status);
+
+      const data = await res.json();
+      console.log("GET /api/voices response:", data);
+
+      if (!res.ok) {
+        throw new Error(data?.error || `Failed to load voices (${res.status})`);
+      }
+
+      const raw =
+        Array.isArray(data?.items) ? data.items :
+        Array.isArray(data?.voices) ? data.voices :
+        Array.isArray(data?.data?.items) ? data.data.items :
+        Array.isArray(data?.data?.voices) ? data.data.voices :
+        Array.isArray(data) ? data :
+        [];
+
+      setVoices(raw);
+    } catch (e) {
+      console.error("Failed to load voices", e);
+      setVoices([]);
+    } finally {
+      setLoadingVoices(false);
+    }
+  }
+
+  loadVoices();
+}, []);
+
+// Ensure each speaker has filters (NOW speakers is defined)
+useEffect(() => {
+  setSpeakerVoiceFilters((prev) => {
+    const next = { ...prev };
+
+    speakers.forEach((_, i) => {
+      if (!next[i]) next[i] = { open: false, q: "", gender: "", language: "", tone: "", pitch: "" };
+    });
+
+    Object.keys(next).forEach((k) => {
+      const idx = Number(k);
+      if (idx >= speakers.length) delete next[k];
+    });
+
+    return next;
+  });
+}, [speakers.length]);
+
+// Group voices by gender (supports backend labels too)
+const voiceGroups = useMemo(() => {
+  const groups = { male: [], female: [], other: [] };
+
+  voices.forEach((v) => {
+    const g = String(v.gender || v.labels?.gender || v.labels?.Gender || "").toLowerCase();
+    if (g === "male") groups.male.push(v);
+    else if (g === "female") groups.female.push(v);
+    else groups.other.push(v);
+  });
+
+  return groups;
+}, [voices]);
+
+// default voice assignment (returns providerVoiceId)
+const defaultVoiceForGender = (gender = "Male", usedIds = new Set()) => {
+  const isFemale = String(gender || "").toLowerCase() === "female";
+  const key = isFemale ? "female" : "male";
+
+  const pool = voiceGroups[key].length ? voiceGroups[key] : voices;
+  if (!pool.length) return "";
+
+  const unusedInPool = pool.find((v) => {
+    const id = getVoiceId(v);
+    return id && !usedIds.has(id);
+  });
+  if (unusedInPool) return getVoiceId(unusedInPool);
+
+  const unusedAny = voices.find((v) => {
+    const id = getVoiceId(v);
+    return id && !usedIds.has(id);
+  });
+  if (unusedAny) return getVoiceId(unusedAny);
+
+  return getVoiceId(pool[0]) || getVoiceId(voices[0]) || "";
+};
+
+// Filter voices for a specific speaker (frontend)
+const getFilteredVoicesForSpeaker = (speakerIndex) => {
+  const f = speakerVoiceFilters[speakerIndex] || { q: "", gender: "", language: "", tone: "", pitch: "" };
+
+  return voices.filter((v) => {
+    const name = String(v.name || "").toLowerCase();
+    const desc = String(v.description || "").toLowerCase();
+    const q = String(f.q || "").trim().toLowerCase();
+
+    const vGender = String(v.gender || v.labels?.gender || "").toLowerCase();
+    const vPitch = String(v.pitch || v.labels?.pitch || "").toLowerCase();
+    const vTones = Array.isArray(v.tone) ? v.tone.map((x) => String(x).toLowerCase())
+      : Array.isArray(v.labels?.tone) ? v.labels.tone.map((x) => String(x).toLowerCase())
+      : [];
+    const vLangs = Array.isArray(v.languages) ? v.languages.map((x) => String(x).toLowerCase())
+      : Array.isArray(v.labels?.languages) ? v.labels.languages.map((x) => String(x).toLowerCase())
+      : [];
+
+    if (q && !(name.includes(q) || desc.includes(q))) return false;
+    if (f.gender && vGender !== String(f.gender).toLowerCase()) return false;
+    if (f.pitch && vPitch !== String(f.pitch).toLowerCase()) return false;
+    if (f.tone && !vTones.includes(String(f.tone).toLowerCase())) return false;
+    if (f.language && !vLangs.includes(String(f.language).toLowerCase())) return false;
+
+    return true;
+  });
+};
+
     const [description, setDescription] = useState("");
     const [errors, setErrors] = useState({});
     const [submitting, setSubmitting] = useState(false);
@@ -162,8 +303,6 @@ export default function CreatePro() {
 
 
     //  ElevenLabs voices
-    const [voices, setVoices] = useState([]);
-    const [loadingVoices, setLoadingVoices] = useState(true);
 
     const MIN = 500;
     const MAX = 2500;
@@ -278,17 +417,7 @@ export default function CreatePro() {
         return () => window.removeEventListener('hashchange', handleHashChange);
     }, [generatedScript]);
 
-    // Group voices by gender label
-    const voiceGroups = useMemo(() => {
-        const groups = { male: [], female: [], other: [] };
-        voices.forEach((v) => {
-            const g = (v.labels?.gender || v.labels?.Gender || "").toLowerCase();
-            if (g === "male") groups.male.push(v);
-            else if (g === "female") groups.female.push(v);
-            else groups.other.push(v);
-        });
-        return groups;
-    }, [voices]);
+
 
     /* ---------- rules ---------- */
     // limits the number of speakers per style
@@ -373,43 +502,6 @@ export default function CreatePro() {
         style === "Interview" ? 2 : style === "Conversational" ? 2 : 1;
 
 
-    useEffect(() => {
-        async function loadVoices() {
-            try {
-                const res = await fetch(`${API_BASE}/api/voices`);
-                const data = await res.json();
-                if (Array.isArray(data.voices)) {
-                    setVoices(data.voices);
-                } else if (Array.isArray(data)) {
-                    setVoices(data);
-                } else {
-                    setVoices([]);
-                }
-            } catch (e) {
-                console.error("Failed to load voices", e);
-                setVoices([]);
-            } finally {
-                setLoadingVoices(false);
-            }
-        }
-        loadVoices();
-    }, []);
-    const defaultVoiceForGender = (gender = "Male", usedIds = new Set()) => {
-        const isFemale = (gender || "").toLowerCase() === "female";
-        const key = isFemale ? "female" : "male";
-
-        const pool = voiceGroups[key].length ? voiceGroups[key] : voices;
-        if (!pool.length) return "";
-
-        const unusedInPool = pool.find((v) => !usedIds.has(v.id));
-        if (unusedInPool) return unusedInPool.id;
-
-        const unusedAny = voices.find((v) => !usedIds.has(v.id));
-        if (unusedAny) return unusedAny.id;
-
-        return pool[0]?.id || voices[0]?.id || "";
-    };
-
 
 
     useEffect(() => {
@@ -434,6 +526,7 @@ export default function CreatePro() {
                     gender,
                     role: old.role || "host",
                     voiceId: old.voiceId || "",
+                    filterPreset: old.filterPreset || "all",
                 };
             });
 
@@ -509,6 +602,7 @@ export default function CreatePro() {
                     gender,
                     role: old.role || "host",
                     voiceId: old.voiceId || "",
+                    filterPreset: old.filterPreset || "all",
                 };
             });
 
@@ -1036,15 +1130,159 @@ export default function CreatePro() {
                                                                 (sp.gender || "").toLowerCase() === "female"
                                                                     ? "female"
                                                                     : "male";
-                                                            const pool = voiceGroups[genderKey].length
-                                                                ? voiceGroups[genderKey]
-                                                                : voices;
+                                                            const pool = getFilteredVoicesForSpeaker(i);
+                                                            const poolIds = new Set(pool.map(getVoiceId));
                                                             const currentId = sp.voiceId || "";
+                                                            const safeValue = poolIds.has(currentId) ? currentId : "";
                                                             return (
                                                                 <div className="flex items-center gap-3">
+                                                                    {/* Filters dropdown (per speaker) */}
+                                                                        {(() => {
+                                                                        const f = speakerVoiceFilters[i] || {
+                                                                            open: false,
+                                                                            q: "",
+                                                                            language: "",
+                                                                            tone: "",
+                                                                            pitch: "",
+                                                                        };
+
+                                                                        // Collect options dynamically from voices list
+                                                                        const languageOptions = Array.from(
+                                                                            new Set(
+                                                                            voices
+                                                                                .flatMap((v) => (Array.isArray(v.languages) ? v.languages : []))
+                                                                                .map((x) => String(x).trim())
+                                                                                .filter(Boolean)
+                                                                            )
+                                                                        ).sort();
+
+                                                                        const toneOptions = Array.from(
+                                                                            new Set(
+                                                                            voices
+                                                                                .flatMap((v) => (Array.isArray(v.tone) ? v.tone : []))
+                                                                                .map((x) => String(x).trim())
+                                                                                .filter(Boolean)
+                                                                            )
+                                                                        ).sort();
+
+                                                                        const pitchOptions = Array.from(
+                                                                            new Set(
+                                                                            voices
+                                                                                .map((v) => String(v.pitch || "").trim())
+                                                                                .filter(Boolean)
+                                                                            )
+                                                                        ).sort();
+
+                                                                        const setF = (patch) =>
+                                                                            setSpeakerVoiceFilters((prev) => ({
+                                                                            ...prev,
+                                                                            [i]: { ...prev[i], ...patch },
+                                                                            }));
+
+                                                                        return (
+                                                                            <div className="mb-3">
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => setF({ open: !f.open })}
+                                                                                className="inline-flex items-center gap-2 px-4 h-[40px] rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                                                            >
+                                                                                Filters
+                                                                                <span className="text-xs opacity-70">
+                                                                                {f.q || f.language || f.tone || f.pitch ? "(Active)" : ""}
+                                                                                </span>
+                                                                            </button>
+
+                                                                            {f.open && (
+                                                                                <div className="mt-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 p-3 shadow-sm">
+                                                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                                                    {/* Search */}
+                                                                                    <div>
+                                                                                    <label className="form-label">Search</label>
+                                                                                    <input
+                                                                                        value={f.q}
+                                                                                        onChange={(e) => setF({ q: e.target.value })}
+                                                                                        placeholder="Search voice name..."
+                                                                                        className="form-input"
+                                                                                    />
+                                                                                    </div>
+
+                                                                                    {/* Language */}
+                                                                                    <div>
+                                                                                    <label className="form-label">Language</label>
+                                                                                    <select
+                                                                                        value={f.language}
+                                                                                        onChange={(e) => setF({ language: e.target.value })}
+                                                                                        className="form-input"
+                                                                                    >
+                                                                                        <option value="">All languages</option>
+                                                                                        {languageOptions.map((lang) => (
+                                                                                        <option key={lang} value={lang}>
+                                                                                            {lang}
+                                                                                        </option>
+                                                                                        ))}
+                                                                                    </select>
+                                                                                    </div>
+
+                                                                                    {/* Tone */}
+                                                                                    <div>
+                                                                                    <label className="form-label">Tone</label>
+                                                                                    <select
+                                                                                        value={f.tone}
+                                                                                        onChange={(e) => setF({ tone: e.target.value })}
+                                                                                        className="form-input"
+                                                                                    >
+                                                                                        <option value="">All tones</option>
+                                                                                        {toneOptions.map((t) => (
+                                                                                        <option key={t} value={t}>
+                                                                                            {t}
+                                                                                        </option>
+                                                                                        ))}
+                                                                                    </select>
+                                                                                    </div>
+
+                                                                                    {/* Pitch */}
+                                                                                    <div>
+                                                                                    <label className="form-label">Pitch</label>
+                                                                                    <select
+                                                                                        value={f.pitch}
+                                                                                        onChange={(e) => setF({ pitch: e.target.value })}
+                                                                                        className="form-input"
+                                                                                    >
+                                                                                        <option value="">All pitch</option>
+                                                                                        {pitchOptions.map((p) => (
+                                                                                        <option key={p} value={p}>
+                                                                                            {p}
+                                                                                        </option>
+                                                                                        ))}
+                                                                                    </select>
+                                                                                    </div>
+                                                                                </div>
+
+                                                                                <div className="mt-3 flex items-center justify-between">
+                                                                                    <button
+                                                                                    type="button"
+                                                                                    onClick={() => setF({ q: "", language: "", tone: "", pitch: "" })}
+                                                                                    className="px-4 h-[38px] rounded-xl border border-neutral-300 dark:border-neutral-700 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                                                                    >
+                                                                                    Clear filters
+                                                                                    </button>
+
+                                                                                    <button
+                                                                                    type="button"
+                                                                                    onClick={() => setF({ open: false })}
+                                                                                    className="px-4 h-[38px] rounded-xl border border-purple-500 text-purple-600 text-sm font-semibold hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                                                                    >
+                                                                                    Done
+                                                                                    </button>
+                                                                                </div>
+                                                                                </div>
+                                                                            )}
+                                                                            </div>
+                                                                        );
+                                                                        })()}
                                                                     <select
                                                                         className="form-input flex-1"
-                                                                        value={currentId}
+                                                                        value={safeValue}
                                                                         onChange={(e) => {
                                                                             const newVoice = e.target.value;
 
@@ -1067,15 +1305,14 @@ export default function CreatePro() {
                                                                     >
                                                                         <option value="">Select Voice</option>
                                                                         {pool.map((v) => {
-                                                                            const isTaken = speakers.some(
-                                                                                (s, idx) => s.voiceId === v.id && idx !== i
-                                                                            );
+                                                                        const vid = v.providerVoiceId || v.id || v.docId;
+                                                                        const isTaken = speakers.some((s, idx) => s.voiceId === vid && idx !== i);
 
-                                                                            return (
-                                                                                <option key={v.id} value={v.id} disabled={isTaken}>
-                                                                                    {v.name} {isTaken ? "(Already Used)" : ""}
-                                                                                </option>
-                                                                            );
+                                                                        return (
+                                                                            <option key={vid} value={vid} disabled={isTaken}>
+                                                                            {v.name} {isTaken ? "(Already Used)" : ""}
+                                                                            </option>
+                                                                        );
                                                                         })}
                                                                     </select>
 
