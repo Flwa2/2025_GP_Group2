@@ -729,7 +729,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                 setSubmitting(false);
                 return;
             }
-
+            const podcastId = data.podcastId;
             const template = data.script;
 
             const backendTitle =
@@ -744,6 +744,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
 
             const editData = {
+                podcastId,
                 scriptStyle,
                 speakersCount,
                 speakers,
@@ -777,57 +778,73 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
             return;
         }
 
+        // 🔽 ADD THIS BLOCK HERE
+        const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
+        const podcastId = editData.podcastId;
+
+        if (!podcastId) {
+            setToast({
+            type: "error",
+            message: "Missing podcastId. Please regenerate the script.",
+            });
+            setTimeout(() => setToast(null), 2800);
+            return; // ❗ stop BEFORE audio generation
+        }
+        // 🔼 END ADDITION
+
         setGeneratingAudio(true);
         setGeneratedAudio(null);
 
         try {
-
             const response = await fetch(`${API_BASE}/api/audio`, {
-                method: "POST",
-                credentials: "include",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    scriptText: generatedScript,
-                    script_style: scriptStyle,
-                    speakers_info: speakers,
-                }),
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                scriptText: generatedScript,
+                podcastId,          // ✅ IMPORTANT
+                script_style: scriptStyle,
+                speakers_info: speakers,
+            }),
             });
 
             const data = await response.json();
 
             if (!response.ok || !data.url) {
-                throw new Error(data.error || "Audio generation failed");
+            throw new Error(data.error || "Audio generation failed");
             }
+
             const baseAudioUrl = data.url.startsWith("http")
-                ? data.url
-                : `${API_BASE}${data.url}`;
+            ? data.url
+            : `${API_BASE}${data.url}`;
 
             const previewPayload = {
-                url: baseAudioUrl,
-                words: data.words || [],
-                title: audioTitle,
+            url: baseAudioUrl,
+            words: data.words || [],
+            title: audioTitle,
             };
             sessionStorage.setItem("wecast_preview", JSON.stringify(previewPayload));
 
             setGeneratedAudio(baseAudioUrl + "?t=" + Date.now());
 
             setToast({
-                type: "success",
-                message: "Audio generated successfully!",
+            type: "success",
+            message: "Audio generated successfully!",
             });
             setTimeout(() => setToast(null), 2400);
 
         } catch (error) {
             console.error("Audio generation error:", error);
             setToast({
-                type: "error",
-                message: "Audio generation failed. Please try again.",
+            type: "error",
+            message: "Audio generation failed. Please try again.",
             });
             setTimeout(() => setToast(null), 2800);
         } finally {
             setGeneratingAudio(false);
         }
-    };
+        };
+
 
     const navigateToEdit = () => {
         if (!generatedScript) {
@@ -1817,7 +1834,12 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                 Regenerate Audio
                                             </button>
                                             <button
-                                                onClick={() => window.location.hash = "#/preview"}
+                                                onClick={() => {
+                                                const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
+                                                const podcastId = editData.podcastId;
+                                                window.location.hash = podcastId ? `#/preview?id=${podcastId}` : "#/preview";
+                                                }}
+
                                                 className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
                                             >
                                                 Open Episode

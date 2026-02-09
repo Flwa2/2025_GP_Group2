@@ -83,6 +83,7 @@ export default function Preview() {
   const [t, setT] = useState(0);
   const [summary, setSummary] = useState("");
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
+  const [chapters, setChapters] = useState([]);
 
   const transcriptRef = useRef(null);
   const activeWordRef = useRef(null);
@@ -143,6 +144,10 @@ export default function Preview() {
       if (res.ok) {
         const data = await res.json();
         const savedSummary = data?.podcast?.summary;
+        const savedChapters = data?.podcast?.chapters;
+        if (Array.isArray(savedChapters)) {
+          setChapters(savedChapters);
+        }
         if (savedSummary) {
           setSummary(savedSummary);
           setIsGeneratingSummary(false);
@@ -245,6 +250,35 @@ export default function Preview() {
                 externalSeek={externalSeek}
               />
             </div>
+            
+            {/* ✅ Chapters */}
+              <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 p-4 shadow-md">
+                <div className="text-sm font-bold mb-3">Chapters</div>
+
+                {(!chapters || chapters.length === 0) ? (
+                  <p className="text-sm text-black/60 dark:text-white/60 italic">
+                    No chapters yet.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {chapters.map((c, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => setExternalSeek(c.startSec)}
+                        className="w-full text-left px-3 py-2 rounded-xl
+                                  hover:bg-black/5 dark:hover:bg-white/10 transition"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium">{c.title}</span>
+                          <span className="text-xs text-black/50 dark:text-white/50">
+                            {new Date(c.startSec * 1000).toISOString().substring(14, 19)}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
 
             <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 p-4 shadow-md min-h-[180px]">
               <div className="flex items-center justify-between mb-2">

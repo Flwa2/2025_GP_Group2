@@ -179,6 +179,27 @@ def is_arabic(text: str) -> bool:
 def detect_language(description: str) -> str:
     return "ar" if is_arabic(description) else "en"
 
+def norm_token(s: str) -> str:
+    s = (s or "").lower().strip()
+    s = re.sub(r"[^\w\u0600-\u06FF]+", "", s)  # keep arabic letters too
+    return s
+
+def timeline_tokens(word_timeline):
+    return [norm_token(w.get("w", "")) for w in word_timeline]
+
+def find_anchor_start_sec(word_timeline, anchor: str):
+    tokens = timeline_tokens(word_timeline)
+    anchor_tokens = [norm_token(t) for t in anchor.split() if norm_token(t)]
+    if len(anchor_tokens) < 2:
+        return None
+
+    n = len(tokens)
+    m = len(anchor_tokens)
+
+    for i in range(0, n - m + 1):
+        if tokens[i:i+m] == anchor_tokens:
+            return float(word_timeline[i]["start"])
+    return None
 
 def save_generated_podcast_to_firestore(user_id: str, title: str, script_style: str,
                                        description: str, script: str, speakers_info: list):
@@ -527,6 +548,99 @@ Script:
         return "حلقة بدون عنوان" if is_ar else "Untitled Episode"
 
     return title
+
+def fallback_time_split_chapters(word_timeline):
+    if not word_timeline:
+        return []
+
+    duration = float(word_timeline[-1]["end"])
+    # 5 chapters baseline
+    cuts = [0.0, duration * 0.22, duration * 0.45, duration * 0.7, duration * 0.88]
+
+    titles = ["Opening", "Background", "Key Discussion", "Turning Points", "Wrap-Up"]
+    out = [{"title": t, "startSec": float(c)} for t, c in zip(titles, cuts)]
+    return out
+
+def generate_chapters_from_transcript(transcript_text: str, language: str = "en"):
+    # Keep prompt simple & strict JSON
+    if language == "ar":
+        user_prompt = f"""
+قسّم هذا الحوار إلى فصول (Chapters) لمشغل بودكاست.
+أعد من 5 إلى 7 فصول.
+لكل فصل:
+- title: عنوان قصير (2–6 كلمات)
+- anchor: جملة قصيرة (4–12 كلمة) من النص تبدأ بها الفقرة/الجزء (يجب أن تكون موجودة حرفيًا تقريبًا في النص)
+
+أعد JSON فقط بهذا الشكل:
+{{"chapters":[{{"title":"...","anchor":"..."}}, ...]}}
+
+النص:
+\"\"\"{transcript_text[:12000]}\"\"\"
+"""
+    else:
+        user_prompt = f"""
+Split this podcast transcript into podcast chapters for a player.
+Return 5 to 7 chapters.
+For each chapter:
+- title: short (2–6 words)
+- anchor: a short phrase (4–12 words) that appears in the transcript and starts that section (must be nearly exact text)
+
+Return JSON only:
+{{"chapters":[{{"title":"...","anchor":"..."}}, ...]}}
+
+Transcript:
+\"\"\"{transcript_text[:12000]}\"\"\"
+"""
+
+    resp = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "Return strict JSON only. No markdown."},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.3,
+    )
+
+    raw = (resp.choices[0].message.content or "").strip()
+    # naive JSON parse
+    try:
+        data = __import__("json").loads(raw)
+        return data.get("chapters") or []
+    except Exception:
+        return []
+
+def build_chapters(word_timeline, transcript_text, language="en"):
+    proposed = generate_chapters_from_transcript(transcript_text, language=language)
+
+    chapters = []
+    used = set()
+
+    for ch in proposed:
+        title = (ch.get("title") or "").strip()
+        anchor = (ch.get("anchor") or "").strip()
+        if not title or not anchor:
+            continue
+
+        start = find_anchor_start_sec(word_timeline, anchor)
+        if start is None:
+            continue
+
+        # avoid duplicates / too-close chapters
+        key = round(start, 2)
+        if key in used:
+            continue
+        used.add(key)
+
+        chapters.append({"title": title, "startSec": start})
+
+    chapters.sort(key=lambda x: x["startSec"])
+
+    # Guardrails: must be “actual chapters”
+    # If fewer than 5 chapters, fallback to deterministic time split
+    if len(chapters) < 5:
+        chapters = fallback_time_split_chapters(word_timeline)
+
+    return chapters
 
 
 def validate_roles(style: str, speakers_info: list):
@@ -1094,6 +1208,15 @@ def api_audio():
                 podcast_ref.collection("transcripts").document("main").set({
                     "words": words,
                     "updatedAt": firestore.SERVER_TIMESTAMP,
+                }, merge=True)
+                
+                # Generate & save chapters
+                language = pdata.get("language") or "en"
+                chapters = build_chapters(words, transcript_text, language=language)
+
+                podcast_ref.set({
+                    "chapters": chapters,
+                    "chaptersUpdatedAt": firestore.SERVER_TIMESTAMP,
                 }, merge=True)
             else:
                 print("WARN: user does not own this podcast. Not saving transcript.")
