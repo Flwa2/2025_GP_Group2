@@ -8,18 +8,24 @@ const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
   : "http://localhost:5000";
   
-function getRedirectTarget() {
+function getRedirectParams() {
   const hash = window.location.hash || "";
-  const match = hash.match(/redirect=([^&]+)/);
-  return match ? decodeURIComponent(match[1]) : "";
+  const qs = hash.includes("?") ? hash.split("?")[1] : "";
+  const params = new URLSearchParams(qs);
+  return {
+    redirect: params.get("redirect") || "",
+    id: params.get("id") || "",
+  };
 }
 
 function redirectAfterAuth() {
-  const redirect = getRedirectTarget();
+  const { redirect, id } = getRedirectParams();
   if (redirect === "edit") {
     window.location.hash = "#/edit";
   } else if (redirect === "create") {
     window.location.hash = "#/create";
+  } else if (redirect === "preview") {
+    window.location.hash = id ? `#/preview?id=${id}` : "#/preview";
   } else {
     window.location.hash = "#/";
   }

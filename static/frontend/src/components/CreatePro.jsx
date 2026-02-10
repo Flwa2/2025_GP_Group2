@@ -1,5 +1,6 @@
 
 import React, { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
     Mic2,
     Users,
@@ -17,6 +18,7 @@ import {
     Download,
     Headphones,
     Music2,
+    Layers,
 } from "lucide-react";
 import WeCastAudioPlayer from "./WeCastAudioPlayer";
 
@@ -26,7 +28,7 @@ const API_BASE = import.meta.env.PROD
 
 
 /* -------------------- overlay: rotating logo -------------------- */
-function LoadingOverlay({ show, logoSrc = "/logo.png", type = "audio" }) {
+function LoadingOverlay({ show, logoSrc = "/logo.png", title, subtitle, logoAlt = "WeCast logo" }) {
     if (!show) return null;
     return (
         <div
@@ -38,18 +40,15 @@ function LoadingOverlay({ show, logoSrc = "/logo.png", type = "audio" }) {
                 <div className="flex items-center gap-4">
                     <img
                         src={logoSrc}
-                        alt="WeCast logo"
+                        alt={logoAlt}
                         className="w-12 h-12 rounded-full animate-[spin_6s_linear_infinite]"
                     />
                     <div>
                         <p className="font-extrabold text-black dark:text-white">
-                            {type === "audio" ? "Generating audio…" : "Generating your podcast…"}
+                            {title}
                         </p>
                         <p className="text-sm text-neutral-600 dark:text-neutral-400">
-                            {type === "audio"
-                                ? "Your audio is being generated. Please wait a few seconds."
-                                : "We're crafting your script and setting up the editor. This may take a few seconds."
-                            }
+                            {subtitle}
                         </p>
                     </div>
                 </div>
@@ -63,7 +62,7 @@ function LoadingOverlay({ show, logoSrc = "/logo.png", type = "audio" }) {
 }
 
 /* -------------------- tiny toast -------------------- */
-function Toast({ toast, onClose }) {
+function Toast({ toast, onClose, closeLabel = "Close" }) {
   if (!toast) return null;
 
   return (
@@ -83,7 +82,7 @@ function Toast({ toast, onClose }) {
             type="button"
             onClick={onClose}
             className="ml-3 opacity-60 hover:opacity-90"
-            aria-label="Close"
+            aria-label={closeLabel}
           >
             ✕
           </button>
@@ -95,11 +94,85 @@ function Toast({ toast, onClose }) {
 
 
 export default function CreatePro() {
-    const [step, setStep] = useState(1);
+    const { t, i18n } = useTranslation();
+    const isRTL = i18n.language === "ar";
+    const [step, setStep] = useState(0);
+    const [podcastMode, setPodcastMode] = useState("");
+    const [seriesList, setSeriesList] = useState([]);
+    const [seriesLoading, setSeriesLoading] = useState(false);
+    const [seriesId, setSeriesId] = useState("");
+    const [seriesTitle, setSeriesTitle] = useState("");
+    const [newSeriesTitle, setNewSeriesTitle] = useState("");
+    const [seriesLockedHosts, setSeriesLockedHosts] = useState(false);
+    const [seriesLockedStyle, setSeriesLockedStyle] = useState(false);
 
     useEffect(() => {
         sessionStorage.setItem("currentStep", step);
     }, [step]);
+
+    useEffect(() => {
+        window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+    }, [step]);
+
+    useEffect(() => {
+        if (podcastMode !== "series") return;
+        let isMounted = true;
+        const loadSeries = async () => {
+            try {
+                setSeriesLoading(true);
+                const res = await fetch(`${API_BASE}/api/series`, {
+                    credentials: "include",
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data?.error || "Failed to load series");
+                let items = Array.isArray(data?.items) ? data.items : [];
+
+                if (!items.length) {
+                    try {
+                        const epRes = await fetch(`${API_BASE}/api/episodes`, {
+                            credentials: "include",
+                        });
+                        const epData = await epRes.json();
+                        if (epRes.ok) {
+                            const grouped = {};
+                            (epData?.items || []).forEach((ep) => {
+                                const title = (ep.seriesTitle || "").trim();
+                                if (!title) return;
+                                if (!grouped[title]) grouped[title] = 0;
+                                grouped[title] += 1;
+                            });
+                            items = Object.entries(grouped).map(([title, count]) => ({
+                                id: "",
+                                title,
+                                episodeCount: count,
+                            }));
+                        }
+                    } catch {}
+                }
+
+                if (isMounted) {
+                    setSeriesList(items);
+                }
+            } catch (e) {
+                if (isMounted) setSeriesList([]);
+            } finally {
+                if (isMounted) setSeriesLoading(false);
+            }
+        };
+        loadSeries();
+        return () => {
+            isMounted = false;
+        };
+    }, [podcastMode]);
+
+    useEffect(() => {
+        if (podcastMode === "series") return;
+        setSeriesId("");
+        setSeriesTitle("");
+        setNewSeriesTitle("");
+        setSeriesLockedHosts(false);
+        setSeriesLockedStyle(false);
+    }, [podcastMode]);
     const [generatedAudio, setGeneratedAudio] = useState(null);
     const [generatingAudio, setGeneratingAudio] = useState(false);
     const [generatedScript, setGeneratedScript] = useState(null);
@@ -259,39 +332,50 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
     const MUSIC_CATEGORIES = {
         dramatic: [
-            { file: "Music dramatic 1.mp3", name: "Deamatic 1" },
-            { file: "Music dramatic 2.mp3", name: "Deamatic 2" },
-            { file: "Music 3 dramatic.mp3", name: "Deamatic 3" },
+            { file: "Music dramatic 1.mp3", name: t("create.music.tracks.dramatic1") },
+            { file: "Music dramatic 2.mp3", name: t("create.music.tracks.dramatic2") },
+            { file: "Music 3 dramatic.mp3", name: t("create.music.tracks.dramatic3") },
 
         ],
         chill: [
-            { file: "Music 1 chill.mp3", name: "Chill 1" },
-            { file: "Music 2 chill.mp3", name: "Chill 2" },
-            { file: "Music 3 chill.mp3", name: "Chill 3" },
+            { file: "Music 1 chill.mp3", name: t("create.music.tracks.chill1") },
+            { file: "Music 2 chill.mp3", name: t("create.music.tracks.chill2") },
+            { file: "Music 3 chill.mp3", name: t("create.music.tracks.chill3") },
 
         ],
         classics: [
-            { file: "Music classic 1.mp3", name: "Classic 1" },
-            { file: "Music classic 2.mp3", name: "Classic 2" },
-            { file: "Music classic 3.mp3", name: "Classic 3" },
+            { file: "Music classic 1.mp3", name: t("create.music.tracks.classic1") },
+            { file: "Music classic 2.mp3", name: t("create.music.tracks.classic2") },
+            { file: "Music classic 3.mp3", name: t("create.music.tracks.classic3") },
 
         ],
         arabic: [
-            { file: "Arabic music 1.mp3", name: "Arabic 1" },
-            { file: "Arabic music 2.mp3", name: "Arabic 2" },
-            { file: "Arabic music 3.mp3", name: "Arabic 3" },
+            { file: "Arabic music 1.mp3", name: t("create.music.tracks.arabic1") },
+            { file: "Arabic music 2.mp3", name: t("create.music.tracks.arabic2") },
+            { file: "Arabic music 3.mp3", name: t("create.music.tracks.arabic3") },
 
         ],
     };
 
-    const displayedScript =
+    const rawDisplayedScript =
         scriptTemplate && showTitle
             ? scriptTemplate.replaceAll("{{SHOW_TITLE}}", showTitle)
             : generatedScript || "";
 
+    const displayedScript = React.useMemo(() => {
+        if (!rawDisplayedScript) return "";
+        if (i18n.language !== "ar") return rawDisplayedScript;
+
+        return rawDisplayedScript
+            .replace(/\bINTRO\b/g, t("create.script.intro"))
+            .replace(/\bBODY\b/g, t("create.script.body"))
+            .replace(/\bOUTRO\b/g, t("create.script.outro"))
+            .replace(/\[music\]/gi, t("create.script.musicTag"));
+    }, [rawDisplayedScript, i18n.language, t]);
+
     // restore title and template when page reloads or user comes back
     useEffect(() => {
-        const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
+        let editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
 
         if (editData.showTitle) {
             setShowTitle(editData.showTitle);
@@ -322,7 +406,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                 const titleFromStorage =
                     (editData.showTitle || "").trim() ||
                     (editData.episodeTitle || "").trim() ||
-                    "Podcast Show";
+                    t("create.defaults.podcastShow");
 
 
                 const rendered = template.includes("{{SHOW_TITLE}}")
@@ -338,6 +422,8 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                 setSpeakersCount(editData.speakersCount || 0);
                 setSpeakers(editData.speakers || []);
                 setDescription(editData.description || "");
+                if (editData.seriesId) setSeriesId(editData.seriesId);
+                if (editData.seriesTitle) setSeriesTitle(editData.seriesTitle);
 
                 setStep(4);
 
@@ -383,13 +469,15 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                     setSpeakersCount(editData.speakersCount || 0);
                     setSpeakers(editData.speakers || []);
                     setDescription(editData.description || "");
+                    if (editData.seriesId) setSeriesId(editData.seriesId);
+                    if (editData.seriesTitle) setSeriesTitle(editData.seriesTitle);
 
                     let titleFromStorage =
                         (editData.showTitle || "").trim() ||
                         (editData.episodeTitle || "").trim();
 
                     if (!titleFromStorage) {
-                        titleFromStorage = "Podcast Show";
+                        titleFromStorage = t("create.defaults.podcastShow");
                     }
 
 
@@ -431,38 +519,38 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
     const STYLE_GUIDELINES = {
         Interview: (
             <>
-                <strong>Tone:</strong> Professional &amp; curious.
+                <strong>{t("create.guidelines.tone")}:</strong> {t("create.guidelines.interview.tone")}
                 <br />
-                <strong>Flow:</strong> Host asks, guest answers (Q&amp;A).
+                <strong>{t("create.guidelines.flow")}:</strong> {t("create.guidelines.interview.flow")}
                 <br />
-                <strong>Goal:</strong> Insight through dialogue.
+                <strong>{t("create.guidelines.goal")}:</strong> {t("create.guidelines.interview.goal")}
             </>
         ),
         Storytelling: (
             <>
-                <strong>Tone:</strong> Engaging &amp; narrative.
+                <strong>{t("create.guidelines.tone")}:</strong> {t("create.guidelines.storytelling.tone")}
                 <br />
-                <strong>Flow:</strong> Chronological story with transitions.
+                <strong>{t("create.guidelines.flow")}:</strong> {t("create.guidelines.storytelling.flow")}
                 <br />
-                <strong>Goal:</strong> Immerse the listener.
+                <strong>{t("create.guidelines.goal")}:</strong> {t("create.guidelines.storytelling.goal")}
             </>
         ),
         Educational: (
             <>
-                <strong>Tone:</strong> Clear &amp; structured.
+                <strong>{t("create.guidelines.tone")}:</strong> {t("create.guidelines.educational.tone")}
                 <br />
-                <strong>Flow:</strong> Explain, then clarify with examples.
+                <strong>{t("create.guidelines.flow")}:</strong> {t("create.guidelines.educational.flow")}
                 <br />
-                <strong>Goal:</strong> Teach effectively.
+                <strong>{t("create.guidelines.goal")}:</strong> {t("create.guidelines.educational.goal")}
             </>
         ),
         Conversational: (
             <>
-                <strong>Tone:</strong> Relaxed &amp; authentic.
+                <strong>{t("create.guidelines.tone")}:</strong> {t("create.guidelines.conversational.tone")}
                 <br />
-                <strong>Flow:</strong> Co-host banter and reactions.
+                <strong>{t("create.guidelines.flow")}:</strong> {t("create.guidelines.conversational.flow")}
                 <br />
-                <strong>Goal:</strong> Natural, friendly talk.
+                <strong>{t("create.guidelines.goal")}:</strong> {t("create.guidelines.conversational.goal")}
             </>
         ),
     };
@@ -470,42 +558,73 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
     const styleCards = [
         {
             key: "Interview",
-            title: "Interview",
-            caption: "Host interviews a guest. Q&A format with dialogue focus.",
-            bullets: ["Hosts: 1–2", "Guests: 1", "Pacing: Q&A"],
-            valid: "2 (1H+1G) or 3 (2H+1G)",
+            title: t("create.styles.interview.title"),
+            caption: t("create.styles.interview.caption"),
+            bullets: [
+                t("create.styles.interview.bullets.hosts"),
+                t("create.styles.interview.bullets.guests"),
+                t("create.styles.interview.bullets.pacing"),
+            ],
+            valid: t("create.styles.interview.valid"),
         },
         {
             key: "Storytelling",
-            title: "Storytelling",
-            caption: "Narrative-focused with dramatic flow and clarity.",
-            bullets: ["Hosts: 1", "Guests: 0–2", "Pacing: Narrative"],
-            valid: "1 solo or 1H+1–2G",
+            title: t("create.styles.storytelling.title"),
+            caption: t("create.styles.storytelling.caption"),
+            bullets: [
+                t("create.styles.storytelling.bullets.hosts"),
+                t("create.styles.storytelling.bullets.guests"),
+                t("create.styles.storytelling.bullets.pacing"),
+            ],
+            valid: t("create.styles.storytelling.valid"),
         },
         {
             key: "Educational",
-            title: "Educational",
-            caption: "Teach concepts in sections with clear structure.",
-            bullets: ["Hosts: 1", "Guests: 0–2", "Pacing: Organized"],
-            valid: "1 solo or 1H+1–2G",
+            title: t("create.styles.educational.title"),
+            caption: t("create.styles.educational.caption"),
+            bullets: [
+                t("create.styles.educational.bullets.hosts"),
+                t("create.styles.educational.bullets.guests"),
+                t("create.styles.educational.bullets.pacing"),
+            ],
+            valid: t("create.styles.educational.valid"),
         },
         {
             key: "Conversational",
-            title: "Conversational",
-            caption: "Co-hosts chatting naturally, relaxed tone.",
-            bullets: ["Hosts: 2–3", "Guests: 0", "Pacing: Free talk"],
-            valid: "2–3 hosts only",
+            title: t("create.styles.conversational.title"),
+            caption: t("create.styles.conversational.caption"),
+            bullets: [
+                t("create.styles.conversational.bullets.hosts"),
+                t("create.styles.conversational.bullets.guests"),
+                t("create.styles.conversational.bullets.pacing"),
+            ],
+            valid: t("create.styles.conversational.valid"),
         },
     ];
 
     const defaultCount = (style) =>
         style === "Interview" ? 2 : style === "Conversational" ? 2 : 1;
 
+    const styleLabelMap = {
+        Interview: t("create.styles.interview.title"),
+        Storytelling: t("create.styles.storytelling.title"),
+        Educational: t("create.styles.educational.title"),
+        Conversational: t("create.styles.conversational.title"),
+    };
+
+    const roleLabelFor = (role) => {
+        if (role === "host") return t("create.roles.host");
+        if (role === "guest") return t("create.roles.guest");
+        if (role === "cohost") return t("create.roles.cohost");
+        if (role === "narrator") return t("create.roles.narrator");
+        return t("create.roles.speaker");
+    };
+
 
 
 
     useEffect(() => {
-        if (!scriptStyle) return;
+        if (!scriptStyle || seriesLockedHosts) return;
 
         setSpeakers((prev) => {
             const limits = styleLimits[scriptStyle] || [];
@@ -561,7 +680,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
         });
 
         setErrors({});
-    }, [scriptStyle, speakersCount]);
+    }, [scriptStyle, speakersCount, seriesLockedHosts]);
 
 
 
@@ -588,7 +707,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
 
     useEffect(() => {
-        if (!scriptStyle || !speakersCount) return;
+        if (!scriptStyle || !speakersCount || seriesLockedHosts) return;
         const count = Number(speakersCount);
         const limits = styleLimits[scriptStyle] || [];
         if (!limits.includes(count)) return;
@@ -641,7 +760,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
             }
             return next;
         });
-    }, [speakersCount, scriptStyle, voices.length]);
+    }, [speakersCount, scriptStyle, voices.length, seriesLockedHosts]);
 
     /* ---------- helpers ---------- */
     const allowedCounts = useMemo(() => styleLimits[scriptStyle] || [], [scriptStyle]);
@@ -661,33 +780,33 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
     const continueFromStyle = () => {
         if (!scriptStyle) {
-            setErrors({ script_style: "Choose a podcast style first." });
-            setToast({ type: "error", message: "Please choose a podcast style to continue." });
+            setErrors({ script_style: t("create.errors.chooseStyle") });
+            setToast({ type: "error", message: t("create.toasts.chooseStyle") });
             setTimeout(() => setToast(null), 2600);
             return;
         }
         setErrors({});
         setStep(2);
-        setToast({ type: "success", message: "Style selected. Now configure speakers." });
+        setToast({ type: "success", message: t("create.toasts.styleSelected") });
         setTimeout(() => setToast(null), 2400);
     };
 
     const onContinueFromSpeakers = () => {
         const errs = {};
-        if (!scriptStyle) errs.script_style = "Choose a podcast style first.";
+        if (!scriptStyle) errs.script_style = t("create.errors.chooseStyle");
         if (!allowedCounts.includes(Number(speakersCount))) {
-            errs.speakers = "Invalid number of speakers for this style.";
+            errs.speakers = t("create.errors.invalidSpeakersCount");
         }
         if (anyEmptySpeakerName) {
-            errs.speaker_names = "Please enter a name for every speaker before continuing.";
+            errs.speaker_names = t("create.errors.missingSpeakerNames");
         } else if (hasDuplicateNames) {
-            errs.speaker_names = "Speaker names must be unique. Please use different names for each speaker.";
+            errs.speaker_names = t("create.errors.duplicateSpeakerNames");
         }
 
         setErrors(errs);
         if (Object.keys(errs).length === 0) {
             setStep(3);
-            setToast({ type: "success", message: "Speakers set. Paste your text to generate the script." });
+            setToast({ type: "success", message: t("create.toasts.speakersSet") });
             setTimeout(() => setToast(null), 2400);
         } else {
             setToast({ type: "error", message: Object.values(errs)[0] });
@@ -698,11 +817,11 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
     const handleGenerate = async () => {
         const words = description.trim().split(/\s+/).filter(Boolean).length;
         if (words < MIN) {
-            setErrors({ description: `At least ${MIN} words.` });
+            setErrors({ description: t("create.errors.minWords", { min: MIN }) });
             return;
         }
         if (words > MAX) {
-            setErrors({ description: `Max ${MAX} words.` });
+            setErrors({ description: t("create.errors.maxWords", { max: MAX }) });
             return;
         }
 
@@ -710,7 +829,6 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
         setErrors({});
 
         try {
-
             const res = await fetch(`${API_BASE}/api/generate`, {
                 method: "POST",
                 credentials: "include",
@@ -720,20 +838,25 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                     speakers: Number(speakersCount),
                     speakers_info: speakers,
                     description,
+                    seriesId: seriesId || undefined,
+                    seriesTitle: seriesTitle || newSeriesTitle || undefined,
+                    language: i18n.language,
                 }),
             });
 
             const data = await res.json();
             if (!res.ok || !data.script) {
-                setErrors({ server: data.error || "Generation failed." });
+        setErrors({ server: data.error || t("create.errors.generationFailed") });
                 setSubmitting(false);
                 return;
             }
             const podcastId = data.podcastId;
+            if (data.seriesId) setSeriesId(data.seriesId);
+            if (data.seriesTitle) setSeriesTitle(data.seriesTitle);
             const template = data.script;
 
             const backendTitle =
-                data.show_title || data.title || "Podcast Episode";
+                data.show_title || data.title || t("create.defaults.podcastEpisode");
 
             setScriptTemplate(template);
             setShowTitle(backendTitle);
@@ -753,6 +876,9 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                 showTitle: backendTitle,
                 episodeTitle: backendTitle,
                 generatedScript: rendered,
+                seriesId: data.seriesId || seriesId || "",
+                seriesTitle: data.seriesTitle || seriesTitle || "",
+                episodeNumber: data.episodeNumber || null,
             };
             sessionStorage.setItem("editData", JSON.stringify(editData));
             sessionStorage.removeItem("guestEditDraft");
@@ -760,12 +886,12 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
             setToast({
                 type: "success",
-                message: "Script generated successfully! Review it below.",
+                message: t("create.toasts.scriptGenerated"),
             });
             setTimeout(() => setToast(null), 2400);
             setStep(4);
         } catch (e) {
-            setErrors({ server: "Generation failed. Please check backend." });
+            setErrors({ server: t("create.errors.generationFailedBackend") });
         } finally {
             setSubmitting(false);
         }
@@ -773,19 +899,37 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
     const handleGenerateAudio = async () => {
         if (!generatedScript) {
-            setToast({ type: "error", message: "Please generate a script first." });
+            setToast({ type: "error", message: t("create.toasts.generateFirst") });
             setTimeout(() => setToast(null), 2800);
             return;
         }
 
         // 🔽 ADD THIS BLOCK HERE
-        const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
-        const podcastId = editData.podcastId;
+        let editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
+        let podcastId = editData.podcastId;
+
+        if (!podcastId) {
+            try {
+                const draftRes = await fetch(`${API_BASE}/api/draft`, {
+                    credentials: "include",
+                });
+                if (draftRes.ok) {
+                    const draft = await draftRes.json();
+                    if (draft && draft.podcastId) {
+                        podcastId = draft.podcastId;
+                        editData = { ...editData, podcastId };
+                        sessionStorage.setItem("editData", JSON.stringify(editData));
+                    }
+                }
+            } catch (error) {
+                // ignore and fall back to error toast
+            }
+        }
 
         if (!podcastId) {
             setToast({
             type: "error",
-            message: "Missing podcastId. Please regenerate the script.",
+            message: t("create.errors.missingPodcastId"),
             });
             setTimeout(() => setToast(null), 2800);
             return; // ❗ stop BEFORE audio generation
@@ -805,13 +949,14 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                 podcastId,          // ✅ IMPORTANT
                 script_style: scriptStyle,
                 speakers_info: speakers,
+                language: i18n.language,
             }),
             });
 
             const data = await response.json();
 
             if (!response.ok || !data.url) {
-            throw new Error(data.error || "Audio generation failed");
+            throw new Error(data.error || t("create.errors.audioGenerationFailed"));
             }
 
             const baseAudioUrl = data.url.startsWith("http")
@@ -829,7 +974,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
             setToast({
             type: "success",
-            message: "Audio generated successfully!",
+            message: t("create.toasts.audioGenerated"),
             });
             setTimeout(() => setToast(null), 2400);
 
@@ -837,7 +982,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
             console.error("Audio generation error:", error);
             setToast({
             type: "error",
-            message: "Audio generation failed. Please try again.",
+            message: t("create.errors.audioGenerationFailedRetry"),
             });
             setTimeout(() => setToast(null), 2800);
         } finally {
@@ -850,7 +995,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
         if (!generatedScript) {
             setToast({
                 type: "error",
-                message: "Please generate a script first before editing.",
+                message: t("create.toasts.generateFirstToEdit"),
             });
             setTimeout(() => setToast(null), 2800);
             return;
@@ -865,6 +1010,8 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
             scriptTemplate,
             showTitle,
             episodeTitle: showTitle,
+            seriesId,
+            seriesTitle,
         };
 
         sessionStorage.setItem("editData", JSON.stringify(editData));
@@ -873,6 +1020,177 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
 
     /* ---------- stepper ---------- */
+    const stepTitles = {
+        0: t("create.preStep.title"),
+        1: t("create.step1.title"),
+        2: t("create.step2.title"),
+        3: t("create.step3.title"),
+        4: t("create.step4.title"),
+        5: t("create.step5.title"),
+        6: t("create.step6.title"),
+    };
+
+    const stepDescriptions = {
+        0: t("create.preStep.desc"),
+        1: t("create.step1.desc"),
+        2: t("create.step2.desc"),
+        3: t("create.step3.desc"),
+        4: t("create.step4.desc"),
+        5: t("create.step5.desc"),
+        6: t("create.step6.desc"),
+    };
+
+    const preStepOptions = [
+        {
+            key: "episode",
+            title: t("create.preStep.episodeTitle"),
+            desc: t("create.preStep.episodeDesc"),
+            icon: Play,
+        },
+        {
+            key: "series",
+            title: t("create.preStep.seriesTitle"),
+            desc: t("create.preStep.seriesDesc"),
+            icon: Layers,
+        },
+    ];
+
+    const normalizeSeriesSpeaker = (s = {}) => ({
+        name: (s.name || "").trim(),
+        gender: (s.gender || "Male").trim(),
+        role: (s.role || "host").trim(),
+        voiceId: (s.voiceId || s.providerVoiceId || "").trim(),
+        filterPreset: s.filterPreset || "all",
+    });
+
+    const applySeriesSettings = (seriesData = {}) => {
+        const style = (seriesData.style || "").trim();
+        const hostSpeakers = Array.isArray(seriesData.hostSpeakers)
+            ? seriesData.hostSpeakers.map(normalizeSeriesSpeaker)
+            : [];
+
+        if (style) {
+            setScriptStyle(style);
+            setSeriesLockedStyle(true);
+        } else {
+            setSeriesLockedStyle(false);
+        }
+
+        if (hostSpeakers.length) {
+            setSeriesLockedHosts(true);
+
+            const limits = styleLimits[style] || [];
+            const minAllowed = limits[0] || hostSpeakers.length;
+            const maxAllowed = limits[limits.length - 1] || hostSpeakers.length;
+
+            let targetCount = hostSpeakers.length;
+            if (style !== "Conversational") {
+                targetCount = hostSpeakers.length + 1;
+            }
+            targetCount = Math.min(Math.max(targetCount, minAllowed), maxAllowed);
+
+            const next = [...hostSpeakers];
+            while (next.length < targetCount) {
+                next.push({
+                    name: "",
+                    gender: "Female",
+                    role: "guest",
+                    voiceId: "",
+                    filterPreset: "all",
+                });
+            }
+
+            setSpeakersCount(targetCount);
+            setSpeakers(next);
+        } else {
+            setSeriesLockedHosts(false);
+        }
+    };
+
+    const handlePreStepContinue = async () => {
+        if (!podcastMode) {
+            setToast({
+                type: "error",
+                message: t("create.preStep.error"),
+            });
+            setTimeout(() => setToast(null), 2400);
+            return;
+        }
+
+        if (podcastMode === "episode") {
+            setSeriesId("");
+            setSeriesTitle("");
+            setSeriesLockedHosts(false);
+            setSeriesLockedStyle(false);
+            setStep(1);
+            return;
+        }
+
+        const trimmedTitle = newSeriesTitle.trim();
+
+        try {
+            if (trimmedTitle) {
+                const res = await fetch(`${API_BASE}/api/series`, {
+                    method: "POST",
+                    credentials: "include",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ title: trimmedTitle }),
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    throw new Error(data?.error || "Failed to create series");
+                }
+                setSeriesId(data.id);
+                setSeriesTitle(data.title || trimmedTitle);
+                setNewSeriesTitle("");
+                setSeriesLockedHosts(false);
+                setSeriesLockedStyle(false);
+                setStep(1);
+                return;
+            }
+
+            if (!seriesId) {
+                setToast({
+                    type: "error",
+                    message: t("create.preStep.seriesPickError"),
+                });
+                setTimeout(() => setToast(null), 2400);
+                return;
+            }
+
+            const res = await fetch(`${API_BASE}/api/series/${seriesId}`, {
+                credentials: "include",
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data?.error || "Failed to load series");
+            }
+
+            setSeriesTitle(data.title || "");
+            applySeriesSettings(data);
+
+            if (data.style) {
+                setStep(2);
+            } else {
+                setStep(1);
+            }
+        } catch (e) {
+            setToast({
+                type: "error",
+                message: t("create.preStep.seriesLoadError"),
+            });
+            setTimeout(() => setToast(null), 2400);
+        }
+    };
+
+    const stepperLabels = [
+        t("create.stepper.chooseStyle"),
+        t("create.stepper.addSpeakers"),
+        t("create.stepper.writeContent"),
+        t("create.stepper.reviewEdit"),
+        t("create.stepper.selectMusic"),
+        t("create.stepper.generateAudio"),
+    ];
     const StepDot = ({ n, label }) => {
         const state = step === n ? "active" : step > n ? "done" : "pending";
         const dot = state === "active" ? "bg-purple-600 text-white shadow" :
@@ -911,9 +1229,12 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
             (showTitle && showTitle.trim()) ||
             (episodeTitle && episodeTitle.trim()) ||
             (scriptStyle
-                ? `${scriptStyle} Podcast - ${speakersCount} Speakers`
-                : "Podcast Episode"),
-        [showTitle, episodeTitle, scriptStyle, speakersCount]
+                ? t("create.audioTitleWithStyle", {
+                      style: styleLabelMap[scriptStyle] || scriptStyle,
+                      count: speakersCount,
+                  })
+                : t("create.defaults.podcastEpisode")),
+        [showTitle, episodeTitle, scriptStyle, speakersCount, styleLabelMap, t]
     );
 
 
@@ -925,79 +1246,227 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                 {/* Title */}
                 <header className="mb-6 text-center">
                     <h1 className="text-3xl md:text-4xl font-extrabold text-black dark:text-white">
-                        {step === 1 && "Choose Style"}
-                        {step === 2 && "Add Speakers"}
-                        {step === 3 && "Write Your Content"}
-                        {step === 4 && "Review & Edit Script"}
-                        {step === 5 && "Select Transition Music"}
-                        {step === 6 && "Generate Your Podcast Audio"}
+                        {stepTitles[step]}
                     </h1>
 
                     <p className="mt-2 text-black/70 dark:text-white/70">
-                        {step === 1 && "Choose the overall tone and format for your podcast episode."}
-                        {step === 2 && "Add your speakers and choose their names and voices.ss"}
-                        {step === 3 && "Paste or write the content you want turned into a structured podcast script."}
-                        {step === 4 && "Review your script, make quick edits, and get it ready for audio."}
-                        {step === 5 && "Choose a transition track to give your podcast smoother flow."}
-                        {step === 6 && "Turn your script into polished, natural-sounding podcast audio."}
+                        {stepDescriptions[step]}
                     </p>
                 </header>
 
 
 
                 {/* Stepper */}
-                <div className="w-full max-w-[1400px] mx-auto rounded-2xl bg-white/60 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 p-4 mb-8">
-                    <div className="flex items-center gap-2">
-                        <StepDot n={1} label="Choose Style" />
-                        <StepLine on={step > 1} />
+                {step > 0 && (
+                    <div className="w-full max-w-[1400px] mx-auto rounded-2xl bg-white/60 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 p-4 mb-8">
+                        <div className="flex items-center gap-2">
+                            <StepDot n={1} label={stepperLabels[0]} />
+                            <StepLine on={step > 1} />
 
-                        <StepDot n={2} label="Add Speakers" />
-                        <StepLine on={step > 2} />
+                            <StepDot n={2} label={stepperLabels[1]} />
+                            <StepLine on={step > 2} />
 
-                        <StepDot n={3} label="Write Content" />
-                        <StepLine on={step > 3} />
+                            <StepDot n={3} label={stepperLabels[2]} />
+                            <StepLine on={step > 3} />
 
-                        <StepDot n={4} label="Review & Edit Script" />
-                        <StepLine on={step > 4} />
+                            <StepDot n={4} label={stepperLabels[3]} />
+                            <StepLine on={step > 4} />
 
-                        <StepDot n={5} label="Select Music" />
-                        <StepLine on={step > 5} />
+                            <StepDot n={5} label={stepperLabels[4]} />
+                            <StepLine on={step > 5} />
 
-                        <StepDot n={6} label="Generate Audio" />
+                            <StepDot n={6} label={stepperLabels[5]} />
+                        </div>
                     </div>
-                </div>
+                )}
 
 
 
 
                 <div className="max-w-5xl mx-auto">
+                    {/* STEP 0: PODCAST MODE */}
+                    {step === 0 && (
+                        <section className="ui-card">
+                            <h2 className="ui-card-title flex items-center gap-2 justify-center">
+                                <Mic2 className="w-4 h-4" /> {t("create.preStep.questionTitle")}
+                            </h2>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+                                {preStepOptions.map((opt) => {
+                                    const Icon = opt.icon;
+                                    const selected = podcastMode === opt.key;
+                                    return (
+                                        <button
+                                            key={opt.key}
+                                            type="button"
+                                            onClick={() => setPodcastMode(opt.key)}
+                                            className={`group w-full rounded-2xl border p-5 transition ${isRTL ? "text-right" : "text-left"} ${
+                                                selected
+                                                    ? "border-purple-400/70 bg-purple-500/10"
+                                                    : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
+                                            }`}
+                                        >
+                                            <div className="flex items-start gap-3">
+                                                <span className={`grid h-9 w-9 place-items-center rounded-xl ${selected ? "bg-purple-600 text-white" : "bg-black/5 dark:bg-white/5 text-black/70 dark:text-white/70"}`}>
+                                                    <Icon className="h-4 w-4" />
+                                                </span>
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-2 font-semibold text-black dark:text-white">
+                                                        <span>{opt.title}</span>
+                                                        {selected && (
+                                                            <span className="text-xs text-purple-500 flex items-center gap-1">
+                                                                <Check className="w-3 h-3" /> {t("create.common.selected")}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <p className="mt-1 text-sm text-black/70 dark:text-white/70">
+                                                        {opt.desc}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            {podcastMode === "series" && (
+                                <div className="mt-6 rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-900/60 p-5">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <h3 className="text-sm font-semibold text-black/80 dark:text-white/80">
+                                            {t("create.series.chooseTitle")}
+                                        </h3>
+                                        {seriesLoading && (
+                                            <span className="text-xs text-black/50 dark:text-white/50">
+                                                {t("create.series.loading")}
+                                            </span>
+                                        )}
+                                    </div>
+
+                                    <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {seriesList.map((s) => {
+                                        const selected = seriesId
+                                            ? seriesId === s.id
+                                            : !!seriesTitle && seriesTitle === s.title;
+                                        return (
+                                        <button
+                                            key={s.id}
+                                            type="button"
+                                            onClick={() => {
+                                                    setSeriesId(s.id || "");
+                                                    setSeriesTitle(s.title || "");
+                                                    setNewSeriesTitle("");
+                                                }}
+                                            className={`w-full rounded-xl border p-4 text-left transition ${
+                                                selected
+                                                    ? "border-purple-400/70 bg-purple-500/10"
+                                                    : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
+                                            } ${isRTL ? "text-right" : "text-left"}`}
+                                        >
+                                            <div className="flex items-center justify-between gap-2">
+                                                <span className="font-semibold text-black dark:text-white">
+                                                    {s.title || t("create.series.untitled")}
+                                                </span>
+                                                {selected && (
+                                                    <span className="text-xs text-purple-500 flex items-center gap-1">
+                                                        <Check className="w-3 h-3" /> {t("create.common.selected")}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <p className="mt-1 text-xs text-black/60 dark:text-white/60">
+                                                {t("create.series.episodes", { count: s.episodeCount || 0 })}
+                                            </p>
+                                        </button>
+                                    );
+                                    })}
+                                        {!seriesList.length && !seriesLoading && (
+                                            <div className="text-sm text-black/60 dark:text-white/60">
+                                                {t("create.series.empty")}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="mt-4">
+                                        <label className="form-label">{t("create.series.newLabel")}</label>
+                                        <input
+                                            value={newSeriesTitle}
+                                            onChange={(e) => {
+                                                setNewSeriesTitle(e.target.value);
+                                                if (e.target.value) {
+                                                    setSeriesId("");
+                                                    setSeriesTitle("");
+                                                }
+                                            }}
+                                            placeholder={t("create.series.newPlaceholder")}
+                                            className="form-input"
+                                        />
+                                    </div>
+
+                                    {seriesTitle && (
+                                        <div className="mt-3 text-xs text-purple-600">
+                                            {t("create.series.selected", { title: seriesTitle })}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                            <div className="mt-6 flex justify-end">
+                                <button
+                                    type="button"
+                                    onClick={handlePreStepContinue}
+                                    className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
+                                >
+                                    {t("create.common.continue")} <ChevronRight className={`w-4 h-4 ${isRTL ? "rotate-180" : ""}`} />
+                                </button>
+                            </div>
+                        </section>
+                    )}
                     {/* STEP 1: STYLE */}
                     {step === 1 && (
                         <section className="ui-card">
                             <h2 className="ui-card-title flex items-center gap-2 justify-center">
-                                <Mic2 className="w-4 h-4" /> Podcast Style
+                                <Mic2 className="w-4 h-4" /> {t("create.sections.podcastStyle")}
                             </h2>
+                            {seriesLockedStyle && (
+                                <p className="mt-2 text-sm text-purple-600 text-center">
+                                    {t("create.series.styleLocked")}
+                                </p>
+                            )}
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4 justify-items-center">
                                 {styleCards.map((s) => (
-                                    <label key={s.key} onClick={() => setScriptStyle(s.key)} onMouseEnter={() => setHoverKey(s.key)} onMouseLeave={() => setHoverKey((k) => (k === s.key ? null : k))} className={`group relative w-full max-w-xl p-4 rounded-xl border transition cursor-pointer ${scriptStyle === s.key ? "border-purple-400/60 bg-purple-500/10" : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"}`}>
+                                    <label
+                                        key={s.key}
+                                        onClick={() => {
+                                            if (seriesLockedStyle) return;
+                                            setScriptStyle(s.key);
+                                        }}
+                                        onMouseEnter={() => setHoverKey(s.key)}
+                                        onMouseLeave={() => setHoverKey((k) => (k === s.key ? null : k))}
+                                        className={`group relative w-full max-w-xl p-4 rounded-xl border transition ${seriesLockedStyle ? "cursor-not-allowed opacity-70" : "cursor-pointer"} ${scriptStyle === s.key ? "border-purple-400/60 bg-purple-500/10" : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"}`}
+                                    >
                                         <div className="flex items-start gap-3">
                                             <input type="radio" checked={scriptStyle === s.key} readOnly className="accent-purple-600 mt-1" />
                                             <div className="w-full">
                                                 <div className="flex items-center gap-2 font-bold">
                                                     <span className="truncate">{s.title}</span>
-                                                    {scriptStyle === s.key && <span className="text-xs text-purple-500 flex items-center gap-1"><Check className="w-3 h-3" /> Selected</span>}
+                                                    {scriptStyle === s.key && (
+                                                        <span className="text-xs text-purple-500 flex items-center gap-1">
+                                                            <Check className="w-3 h-3" /> {t("create.common.selected")}
+                                                        </span>
+                                                    )}
                                                 </div>
                                                 <p className="text-sm mt-1">{s.caption}</p>
                                                 <ul className="flex flex-wrap gap-2 mt-2 text-xs text-black/70 dark:text-white/70">
                                                     {s.bullets.map((b, i) => <li key={i} className="px-2 py-1 rounded bg-black/5 dark:bg-white/5">{b}</li>)}
                                                 </ul>
-                                                <p className="text-xs text-purple-500 mt-2">Valid: {s.valid}</p>
+                                                <p className="text-xs text-purple-500 mt-2">
+                                                    {t("create.common.valid")}: {s.valid}
+                                                </p>
                                             </div>
                                         </div>
                                         {hoverKey === s.key && (
                                             <div className="absolute left-5 right-5 top-[calc(100%+30px)] z-40">
                                                 <div className="relative rounded-2xl bg-gradient-to-br from-purple-400 to-violet-700 text-white shadow-2xl border border-white/10 p-4 animate-[popoverIn_120ms_ease-out]">
-                                                    <div className="flex items-center gap-2 font-semibold tracking-wide"><Info className="w-4 h-4 opacity-90" /><span>Style guidelines</span></div>
+                                                    <div className="flex items-center gap-2 font-semibold tracking-wide">
+                                                        <Info className="w-4 h-4 opacity-90" />
+                                                        <span>{t("create.guidelines.title")}</span>
+                                                    </div>
                                                     <div className="mt-2 leading-relaxed text-[0.95rem]">{STYLE_GUIDELINES[s.key]}</div>
                                                     <span className="absolute -top-2 left-8 w-3 h-3 rotate-45 bg-purple-600 shadow-[0_6px_16px_rgba(0,0,0,0.25)] border-l border-t border-white/10" />
                                                 </div>
@@ -1008,7 +1477,9 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                             </div>
                             {errors.script_style && <p className="text-rose-500 mt-3 flex items-center gap-2 justify-center"><AlertCircle className="w-4 h-4" /> {errors.script_style}</p>}
                             <div className="mt-6 flex justify-end">
-                                <button onClick={continueFromStyle} className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold">Continue <ChevronRight className="w-4 h-4" /></button>
+                                <button onClick={continueFromStyle} className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold">
+                                    {t("create.common.continue")} <ChevronRight className={`w-4 h-4 ${isRTL ? "rotate-180" : ""}`} />
+                                </button>
                             </div>
                         </section>
                     )}
@@ -1016,12 +1487,26 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                     {/* STEP 2: SPEAKERS */}
                     {step === 2 && (
                         <section className="ui-card">
-                            <h2 className="ui-card-title flex items-center gap-2 justify-center"><Users className="w-4 h-4" /> Speakers</h2>
+                            <h2 className="ui-card-title flex items-center gap-2 justify-center"><Users className="w-4 h-4" /> {t("create.sections.speakers")}</h2>
+                            {seriesLockedHosts && (
+                                <p className="mt-2 text-sm text-purple-600 text-center">
+                                    {t("create.series.hostLocked")}
+                                </p>
+                            )}
                             {scriptStyle && (
                                 <div className="flex items-center gap-2 flex-wrap mt-3 justify-center">
                                     {allowedCounts.map((n) => (
-                                        <button key={n} onClick={() => setSpeakersCount(n)} className={`px-4 py-2 text-sm font-semibold rounded-xl transition border ${speakersCount === n ? "bg-purple-600 text-white border-purple-600" : "bg-black/5 dark:bg-white/5 border-neutral-300 dark:border-neutral-800 text-black/70 dark:text-white/70 hover:bg-black/10"}`}>
-                                            {n} {n === 1 ? "Speaker" : "Speakers"}
+                                        <button
+                                            key={n}
+                                            onClick={() => setSpeakersCount(n)}
+                                            disabled={seriesLockedHosts}
+                                            className={`px-4 py-2 text-sm font-semibold rounded-xl transition border ${
+                                                speakersCount === n
+                                                    ? "bg-purple-600 text-white border-purple-600"
+                                                    : "bg-black/5 dark:bg-white/5 border-neutral-300 dark:border-neutral-800 text-black/70 dark:text-white/70 hover:bg-black/10"
+                                            } ${seriesLockedHosts ? "opacity-60 cursor-not-allowed" : ""}`}
+                                        >
+                                            {n} {n === 1 ? t("create.common.speaker") : t("create.common.speakers")}
                                         </button>
                                     ))}
                                 </div>
@@ -1034,27 +1519,29 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
                                         const totalHosts = roleCounts["Host"] || roleCounts["host"] || 0;
 
-                                        let role;
+                                        let roleKey;
 
                                         if (rawRole === "host" && totalHosts > 1) {
-                                            role = "Co-host";
+                                            roleKey = "cohost";
                                         } else if (rawRole === "host") {
-                                            role = "Host";
+                                            roleKey = "host";
                                         } else if (rawRole === "cohost") {
-                                            role = "Co-host";
+                                            roleKey = "cohost";
                                         } else if (rawRole === "narrator") {
-                                            role = "Narrator";
+                                            roleKey = "narrator";
                                         } else {
-                                            role = "Guest";
+                                            roleKey = "guest";
                                         }
 
-                                        roleUsage[role] = (roleUsage[role] || 0) + 1;
-                                        const occurrence = roleUsage[role];
+                                        roleUsage[roleKey] = (roleUsage[roleKey] || 0) + 1;
+                                        const occurrence = roleUsage[roleKey];
 
+                                        const roleLabel = t(`create.roles.${roleKey}`);
                                         const label =
-                                            roleCounts[rawRole] > 1 && role !== "Host"
-                                                ? `${role} ${occurrence}`
-                                                : role;
+                                            roleCounts[rawRole] > 1 && roleKey !== "host"
+                                                ? `${roleLabel} ${occurrence}`
+                                                : roleLabel;
+                                        const isHostLocked = seriesLockedHosts && ["host", "cohost", "narrator"].includes(roleKey);
 
                                         return (
                                             <div
@@ -1066,15 +1553,16 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                     {label}
                                                 </h3>
                                                 <p className="mt-1 text-xs text-neutral-500">
-                                                    You can edit the name, gender, and voice.
+                                                    {t("create.speakers.help")}
                                                 </p>
 
                                                 <div className="mt-3 space-y-3">
                                                     {/* Name */}
                                                     <div>
-                                                        <label className="form-label">Name</label>
+                                                        <label className="form-label">{t("create.speakers.name")}</label>
                                                         <input
                                                             value={sp.name}
+                                                            disabled={isHostLocked}
                                                             onChange={(e) => {
                                                                 const cleaned = e.target.value
                                                                     .replace(/[^\p{L}\s]/gu, "")
@@ -1085,20 +1573,21 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                                     return next;
                                                                 });
                                                             }}
-                                                            placeholder={`${label} name`}
+                                                            placeholder={t("create.speakers.namePlaceholder", { label })}
                                                             className={`form-input ${errors.speaker_names && !sp.name.trim()
                                                                 ? "border-rose-400"
                                                                 : ""
-                                                                }`}
+                                                                } ${isHostLocked ? "opacity-70 cursor-not-allowed" : ""}`}
                                                         />
                                                     </div>
 
                                                     {/* Gender */}
                                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                                         <div>
-                                                            <label className="form-label">Gender</label>
+                                                            <label className="form-label">{t("create.speakers.gender")}</label>
                                                             <select
                                                                 value={sp.gender}
+                                                                disabled={isHostLocked}
                                                                 onChange={(e) =>
                                                                     setSpeakers((arr) => {
                                                                         const gender = e.target.value;
@@ -1123,24 +1612,30 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                                         return next;
                                                                     })
                                                                 }
-                                                                className="form-input"
+                                                                dir={isRTL ? "rtl" : "ltr"}
+                                                                className={`form-input select-input ${isRTL ? "text-right" : "text-left"} ${isHostLocked ? "opacity-70 cursor-not-allowed" : ""}`}
+                                                                style={{
+                                                                    backgroundPosition: isRTL ? "left 0.75rem center" : "right 1rem center",
+                                                                    paddingLeft: isRTL ? "2.25rem" : undefined,
+                                                                    paddingRight: isRTL ? "1rem" : "2.5rem",
+                                                                }}
                                                             >
-                                                                <option>Male</option>
-                                                                <option>Female</option>
+                                                                <option value="Male">{t("create.speakers.genderMale")}</option>
+                                                                <option value="Female">{t("create.speakers.genderFemale")}</option>
                                                             </select>
                                                         </div>
                                                     </div>
 
                                                     {/* Voice picker */}
                                                     <div>
-                                                        <label className="form-label">Voice</label>
+                                                        <label className="form-label">{t("create.speakers.voice")}</label>
                                                         {loadingVoices ? (
                                                             <p className="text-sm text-black/60 dark:text-white/60">
-                                                                Loading voices…
+                                                                {t("create.speakers.loadingVoices")}
                                                             </p>
                                                         ) : voices.length === 0 ? (
                                                             <p className="text-sm text-rose-500">
-                                                                No voices found. Check ElevenLabs config.
+                                                                {t("create.speakers.noVoices")}
                                                             </p>
                                                         ) : (() => {
                                                             const genderKey =
@@ -1200,38 +1695,39 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                                             <div className="mb-3">
                                                                             <button
                                                                                 type="button"
+                                                                                disabled={isHostLocked}
                                                                                 onClick={() => setF({ open: !f.open })}
-                                                                                className="inline-flex items-center gap-2 px-4 h-[40px] rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                                                                className={`inline-flex items-center gap-2 px-4 h-[40px] rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-sm font-semibold transition ${isHostLocked ? "opacity-60 cursor-not-allowed" : "hover:bg-black/5 dark:hover:bg-white/5"}`}
                                                                             >
-                                                                                Filters
+                                                                                {t("create.speakers.filters")}
                                                                                 <span className="text-xs opacity-70">
-                                                                                {f.q || f.language || f.tone || f.pitch ? "(Active)" : ""}
+                                                                                {f.q || f.language || f.tone || f.pitch ? t("create.common.active") : ""}
                                                                                 </span>
                                                                             </button>
 
-                                                                            {f.open && (
+                                                                            {f.open && !isHostLocked && (
                                                                                 <div className="mt-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 p-3 shadow-sm">
                                                                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                                                                     {/* Search */}
                                                                                     <div>
-                                                                                    <label className="form-label">Search</label>
+                                                                                    <label className="form-label">{t("create.speakers.search")}</label>
                                                                                     <input
                                                                                         value={f.q}
                                                                                         onChange={(e) => setF({ q: e.target.value })}
-                                                                                        placeholder="Search voice name..."
+                                                                                        placeholder={t("create.speakers.searchPlaceholder")}
                                                                                         className="form-input"
                                                                                     />
                                                                                     </div>
 
                                                                                     {/* Language */}
                                                                                     <div>
-                                                                                    <label className="form-label">Language</label>
+                                                                                    <label className="form-label">{t("create.speakers.language")}</label>
                                                                                     <select
                                                                                         value={f.language}
                                                                                         onChange={(e) => setF({ language: e.target.value })}
                                                                                         className="form-input"
                                                                                     >
-                                                                                        <option value="">All languages</option>
+                                                                                        <option value="">{t("create.speakers.allLanguages")}</option>
                                                                                         {languageOptions.map((lang) => (
                                                                                         <option key={lang} value={lang}>
                                                                                             {lang}
@@ -1242,13 +1738,13 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
                                                                                     {/* Tone */}
                                                                                     <div>
-                                                                                    <label className="form-label">Tone</label>
+                                                                                    <label className="form-label">{t("create.speakers.tone")}</label>
                                                                                     <select
                                                                                         value={f.tone}
                                                                                         onChange={(e) => setF({ tone: e.target.value })}
                                                                                         className="form-input"
                                                                                     >
-                                                                                        <option value="">All tones</option>
+                                                                                        <option value="">{t("create.speakers.allTones")}</option>
                                                                                         {toneOptions.map((t) => (
                                                                                         <option key={t} value={t}>
                                                                                             {t}
@@ -1259,13 +1755,13 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
                                                                                     {/* Pitch */}
                                                                                     <div>
-                                                                                    <label className="form-label">Pitch</label>
+                                                                                    <label className="form-label">{t("create.speakers.pitch")}</label>
                                                                                     <select
                                                                                         value={f.pitch}
                                                                                         onChange={(e) => setF({ pitch: e.target.value })}
                                                                                         className="form-input"
                                                                                     >
-                                                                                        <option value="">All pitch</option>
+                                                                                        <option value="">{t("create.speakers.allPitches")}</option>
                                                                                         {pitchOptions.map((p) => (
                                                                                         <option key={p} value={p}>
                                                                                             {p}
@@ -1281,7 +1777,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                                                     onClick={() => setF({ q: "", language: "", tone: "", pitch: "" })}
                                                                                     className="px-4 h-[38px] rounded-xl border border-neutral-300 dark:border-neutral-700 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition"
                                                                                     >
-                                                                                    Clear filters
+                                                                                    {t("create.speakers.clearFilters")}
                                                                                     </button>
 
                                                                                     <button
@@ -1289,7 +1785,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                                                     onClick={() => setF({ open: false })}
                                                                                     className="px-4 h-[38px] rounded-xl border border-purple-500 text-purple-600 text-sm font-semibold hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
                                                                                     >
-                                                                                    Done
+                                                                                    {t("create.common.done")}
                                                                                     </button>
                                                                                 </div>
                                                                                 </div>
@@ -1298,7 +1794,14 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                                         );
                                                                         })()}
                                                                     <select
-                                                                        className="form-input flex-1"
+                                                                        dir={isRTL ? "rtl" : "ltr"}
+                                                                        disabled={isHostLocked}
+                                                                        className={`form-input select-input flex-1 ${isRTL ? "text-right" : "text-left"} ${isHostLocked ? "opacity-70 cursor-not-allowed" : ""}`}
+                                                                        style={{
+                                                                            backgroundPosition: isRTL ? "left 0.75rem center" : "right 1rem center",
+                                                                            paddingLeft: isRTL ? "2.25rem" : undefined,
+                                                                            paddingRight: isRTL ? "1rem" : "2.5rem",
+                                                                        }}
                                                                         value={safeValue}
                                                                         onChange={(e) => {
                                                                             const newVoice = e.target.value;
@@ -1309,7 +1812,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                                             );
 
                                                                             if (alreadyUsed) {
-                                                                                alert("This voice is already used by another speaker. Please choose a different one.");
+                                                                                alert(t("create.speakers.voiceAlreadyUsed"));
                                                                                 return;
                                                                             }
 
@@ -1320,14 +1823,14 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                                             });
                                                                         }}
                                                                     >
-                                                                        <option value="">Select Voice</option>
+                                                                        <option value="">{t("create.speakers.selectVoice")}</option>
                                                                         {pool.map((v) => {
                                                                         const vid = v.providerVoiceId || v.id || v.docId;
                                                                         const isTaken = speakers.some((s, idx) => s.voiceId === vid && idx !== i);
 
                                                                         return (
                                                                             <option key={vid} value={vid} disabled={isTaken}>
-                                                                            {v.name} {isTaken ? "(Already Used)" : ""}
+                                                                            {v.name} {isTaken ? `(${t("create.speakers.alreadyUsed")})` : ""}
                                                                             </option>
                                                                         );
                                                                         })}
@@ -1335,6 +1838,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
                                                                     <button
                                                                         type="button"
+                                                                        disabled={isHostLocked}
                                                                         onClick={() => {
                                                                             const selected =
                                                                                 pool.find(
@@ -1348,25 +1852,25 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                                                     .play()
                                                                                     .catch((err) =>
                                                                                         console.error(
-                                                                                            "Preview failed",
+                                                                                            t("create.speakers.previewFailed"),
                                                                                             err
                                                                                         )
                                                                                     );
                                                                             } else {
                                                                                 alert(
-                                                                                    "No preview available for this voice."
+                                                                                    t("create.speakers.noPreviewAvailable")
                                                                                 );
                                                                             }
                                                                         }}
-                                                                        className="inline-flex items-center justify-center gap-2 px-5 h-[44px] rounded-xl border border-purple-500 text-purple-600 font-semibold hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                                                        className={`inline-flex items-center justify-center gap-2 px-5 h-[44px] rounded-xl border border-purple-500 text-purple-600 font-semibold transition ${isHostLocked ? "opacity-60 cursor-not-allowed" : "hover:bg-purple-50 dark:hover:bg-purple-900/20"} ${isRTL ? "flex-row-reverse" : ""}`}
                                                                     >
-                                                                        <Play className="w-4 h-4" /> Preview
+                                                                        {t("create.common.preview")} <Play className="w-4 h-4" />
                                                                     </button>
                                                                 </div>
                                                             );
                                                         })()}
                                                         <p className="form-help text-xs mt-1">
-                                                            This voice will be used when generating audio for this speaker.
+                                                            {t("create.speakers.voiceHelp")}
                                                         </p>
                                                     </div>
                                                 </div>
@@ -1377,8 +1881,10 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                             )}
                             {(errors.speaker_names || errors.speakers) && <p className="text-rose-500 mt-4 text-center flex items-center gap-2 justify-center"><AlertCircle className="w-4 h-4" /> {errors.speaker_names || errors.speakers}</p>}
                             <div className="mt-6 flex justify-between">
-                                <button onClick={() => setStep(1)} className="px-4 py-2 border rounded-xl">Back</button>
-                                <button onClick={onContinueFromSpeakers} className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold">Continue <ChevronRight className="w-4 h-4" /></button>
+                                <button onClick={() => setStep(1)} className="px-4 py-2 border rounded-xl">{t("create.common.back")}</button>
+                                <button onClick={onContinueFromSpeakers} className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold">
+                                    {t("create.common.continue")} <ChevronRight className={`w-4 h-4 ${isRTL ? "rotate-180" : ""}`} />
+                                </button>
                             </div>
                         </section>
                     )}
@@ -1388,14 +1894,14 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                         <section className="ui-card">
                             <h2 className="ui-card-title flex items-center gap-2">
                                 <NotebookPen className="w-4 h-4" />
-                                Enter your text
+                                {t("create.step3.enterTextTitle")}
                             </h2>
 
                             <textarea
                                 id="wecast_textarea"
                                 value={description}
                                 onChange={(e) => setDescription(e.target.value)}
-                                placeholder="Paste your text here (min 500, max 2500 words)…"
+                                placeholder={t("create.step3.textPlaceholder", { min: MIN, max: MAX })}
                                 className="form-textarea mt-3"
                                 rows={8}
                             />
@@ -1412,7 +1918,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                     : "text-purple-500"    // normal color inside range
                                             }
                                         >
-                                            {wordCount} / {MAX} words
+                                            {wordCount} / {MAX} {t("create.common.words")}
                                         </span>
                                         {errors.description && (
                                             <span className="text-rose-500">{errors.description}</span>
@@ -1432,7 +1938,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                     onClick={() => setStep(2)}
                                     className="px-4 py-2 border rounded-xl"
                                 >
-                                    Back
+                                    {t("create.common.back")}
                                 </button>
                                 <button
                                     onClick={handleGenerate}
@@ -1440,10 +1946,10 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                     className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
                                 >
                                     {submitting ? (
-                                        "Generating Script..."
+                                            t("create.common.generatingScript")
                                     ) : (
                                         <>
-                                            Generate Script <Wand2 className="w-4 h-4" />
+                                            {t("create.common.generateScript")} <Wand2 className="w-4 h-4" />
                                         </>
                                     )}
                                 </button>
@@ -1457,39 +1963,39 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                         <section className="ui-card">
                             <h2 className="ui-card-title flex items-center gap-2">
                                 <Edit className="w-4 h-4" />
-                                Review your script
+                                {t("create.step4.reviewTitle")}
                             </h2>
 
                             <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800 mb-6">
                                 <h3 className="text-xl font-bold text-green-700 dark:text-green-300 mb-4 flex items-center gap-2">
-                                    <Check className="w-5 h-5" /> Script Generated Successfully!
+                                    <Check className="w-5 h-5" /> {t("create.step4.scriptGeneratedTitle")}
                                 </h3>
 
                                 {/* Script Information ABOVE the script */}
                                 <div className="bg-white dark:bg-neutral-800 rounded-xl p-4 mb-4">
                                     <h4 className="font-semibold mb-3 text-black dark:text-white">
-                                        Script Information:
+                                        {t("create.step4.scriptInfoTitle")}
                                     </h4>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                                         <div>
                                             <p>
-                                                <strong>Style:</strong> {scriptStyle}
+                                                <strong>{t("create.step4.style")}:</strong> {styleLabelMap[scriptStyle] || scriptStyle}
                                             </p>
                                             <p>
-                                                <strong>Speakers:</strong> {speakersCount}
+                                                <strong>{t("create.step4.speakers")}:</strong> {speakersCount}
                                             </p>
                                             <p>
-                                                <strong>Total Words:</strong>{" "}
+                                                <strong>{t("create.step4.totalWords")}:</strong>{" "}
                                                 {generatedScript.split(/\s+/).filter(Boolean).length}
                                             </p>
                                         </div>
                                         <div>
                                             <p>
-                                                <strong>Speaker Roles:</strong>{" "}
-                                                {speakers.map((s) => s.role).join(", ")}
+                                                <strong>{t("create.step4.speakerRoles")}:</strong>{" "}
+                                                {speakers.map((s) => roleLabelFor(s.role)).join(", ")}
                                             </p>
                                             <p>
-                                                <strong>Status:</strong> Ready for audio generation
+                                                <strong>{t("create.step4.status")}:</strong> {t("create.step4.readyForAudio")}
                                             </p>
                                         </div>
                                     </div>
@@ -1498,7 +2004,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                 {/* Script Preview */}
                                 <div className="bg-white dark:bg-neutral-800 rounded-xl p-4">
                                     <h4 className="font-semibold mb-3 text-black dark:text-white">
-                                        Script Preview:
+                                        {t("create.step4.scriptPreview")}
                                     </h4>
                                     <div className="whitespace-pre-wrap text-sm text-black/80 dark:text-white/80 leading-relaxed max-h-96 overflow-y-auto">
                                         {displayedScript}
@@ -1515,7 +2021,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                     }}
                                     className="px-4 py-2 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
                                 >
-                                    Back to text
+                                    {t("create.common.backToText")}
                                 </button>
 
                                 <div className="flex gap-3">
@@ -1523,13 +2029,13 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                         onClick={navigateToEdit}
                                         className="px-4 py-2 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
                                     >
-                                        Edit in Editor
+                                        {t("create.step4.editInEditor")}
                                     </button>
                                     <button
                                         onClick={() => setStep(5)}
                                         className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
                                     >
-                                        Continue to Transition Music <ChevronRight className="w-4 h-4" />
+                                        {t("create.common.continueToMusic")} <ChevronRight className={`w-4 h-4 ${isRTL ? "rotate-180" : ""}`} />
                                     </button>
                                 </div>
                             </div>
@@ -1542,11 +2048,11 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                 <span className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-purple-100 text-purple-600 dark:bg-purple-900/40">
                                     <Headphones className="w-4 h-4" />
                                 </span>
-                                <span>Select Transition Music</span>
+                                <span>{t("create.step5.title")}</span>
                             </h2>
 
                             <p className="text-center text-sm text-black/60 dark:text-white/60 mt-2">
-                                Choose a music category to preview intro, body, and outro tracks.
+                                {t("create.step5.subtitle")}
                             </p>
 
                             {/* CATEGORY SELECT */}
@@ -1556,21 +2062,21 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
                                     const labelText =
                                         cat === "dramatic"
-                                            ? "Dramatic"
+                                            ? t("create.music.categories.dramatic.title")
                                             : cat === "chill"
-                                                ? "Chill"
+                                                ? t("create.music.categories.chill.title")
                                                 : cat === "classics"
-                                                    ? "Classics"
-                                                    : "Arabic";
+                                                    ? t("create.music.categories.classics.title")
+                                                    : t("create.music.categories.arabic.title");
 
                                     const description =
                                         cat === "dramatic"
-                                            ? "Epic emotional cinematic style."
+                                            ? t("create.music.categories.dramatic.desc")
                                             : cat === "arabic"
-                                                ? "Middle eastern oud and oriental tones."
+                                                ? t("create.music.categories.arabic.desc")
                                                 : cat === "chill"
-                                                    ? "Relaxed lofi and smooth vibes."
-                                                    : "Soft piano and orchestral melodies.";
+                                                    ? t("create.music.categories.chill.desc")
+                                                    : t("create.music.categories.classics.desc");
 
                                     return (
                                         <label
@@ -1624,7 +2130,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                             {isActive && (
                                                 <span className="absolute top-3 right-4 inline-flex items-center gap-1 rounded-full bg-purple-100 text-purple-600 dark:bg-purple-900/60 px-2.5 py-1 text-[11px] font-semibold">
                                                     <Check className="w-3 h-3" />
-                                                    Selected
+                                                    {t("create.common.selected")}
                                                 </span>
                                             )}
                                         </label>
@@ -1635,7 +2141,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                             {/* TRACK LIST */}
                             {category && availableTracks.length > 0 && (
                                 <div className="mt-8 space-y-4">
-                                    {["Intro", "Body", "Outro"].map((label, index) => (
+                                    {[t("create.music.intro"), t("create.music.body"), t("create.music.outro")].map((label, index) => (
                                         <div key={label} className="flex items-center justify-between border p-3 rounded-xl dark:border-neutral-700">
                                             <span className="font-medium">{label}</span>
 
@@ -1651,7 +2157,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                         if (index === 2) setOutroMusic(e.target.value);
                                                     }}
                                                 >
-                                                    <option value="">-- Select --</option>
+                                                    <option value="">{t("create.common.select")}</option>
                                                     {availableTracks.map((track) => (
                                                         <option key={track.file} value={track.file}>{track.name}</option>
                                                     ))}
@@ -1677,7 +2183,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                     }}
                                                 >
                                                     <Play className="w-4 h-4" />
-                                                    <span>Preview</span>
+                                                    <span>{t("create.common.preview")}</span>
                                                 </button>
 
                                             </div>
@@ -1695,7 +2201,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                     onClick={() => setStep(4)}
                                     className="px-4 py-2 border rounded-xl"
                                 >
-                                    Back
+                                    {t("create.common.back")}
                                 </button>
 
                                 <div className="flex items-center gap-3">
@@ -1728,7 +2234,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                         }}
                                         className="px-5 py-2 rounded-xl border border-neutral-400 text-neutral-700 dark:text-neutral-200 hover:bg-black/5 dark:hover:bg-white/10 transition"
                                     >
-                                        Skip
+                                    {t("create.common.skip")}
                                     </button>
 
 
@@ -1747,7 +2253,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                         }}
                                         className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
                                     >
-                                        Continue to Audio
+                                        {t("create.common.continueToAudio")}
                                     </button>
                                 </div>
                             </div>
@@ -1759,23 +2265,23 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                     {/* STEP 6: AUDIO */}
                     {step === 6 && (
                         <section className="ui-card">
-                            <h2 className="ui-card-title flex items-center gap-2 justify-center"><Mic2 className="w-4 h-4" /> Generate Audio</h2>
+                            <h2 className="ui-card-title flex items-center gap-2 justify-center"><Mic2 className="w-4 h-4" /> {t("create.step6.generateAudioTitle")}</h2>
 
                             {!generatedAudio ? (
                                 // Audio generation section
                                 <div className="text-center space-y-6">
                                     <div className="bg-purple-50 dark:bg-purple-900/20 rounded-2xl p-6 border border-purple-200 dark:border-purple-800">
-                                        <h3 className="text-xl font-bold text-purple-700 dark:text-purple-300 mb-3">Ready to Generate Audio</h3>
+                                        <h3 className="text-xl font-bold text-purple-700 dark:text-purple-300 mb-3">{t("create.step6.readyTitle")}</h3>
                                         <p className="text-black/70 dark:text-white/70 mb-4">
-                                            Your script has been generated successfully! Now you can create the audio version of your podcast using the voices you selected.
+                                            {t("create.step6.readySubtitle")}
                                         </p>
 
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 text-left">
                                             <div>
-                                                <h4 className="font-semibold mb-2">Podcast Details:</h4>
-                                                <p><strong>Style:</strong> {scriptStyle}</p>
-                                                <p><strong>Speakers:</strong> {speakersCount}</p>
-                                                <p><strong>Words:</strong> {generatedScript.split(/\s+/).filter(Boolean).length}</p>
+                                                <h4 className="font-semibold mb-2">{t("create.step6.detailsTitle")}</h4>
+                                                <p><strong>{t("create.step6.detailsStyle")}:</strong> {styleLabelMap[scriptStyle] || scriptStyle}</p>
+                                                <p><strong>{t("create.step6.detailsSpeakers")}:</strong> {speakersCount}</p>
+                                                <p><strong>{t("create.step6.detailsWords")}:</strong> {generatedScript.split(/\s+/).filter(Boolean).length}</p>
                                             </div>
                                         </div>
                                     </div>
@@ -1785,20 +2291,20 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                             onClick={() => setStep(5)}
                                             className="px-6 py-3 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
                                         >
-                                            Back
+                                            {t("create.common.back")}
                                         </button>
                                         <button
                                             onClick={handleGenerateAudio}
                                             disabled={generatingAudio}
                                             className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
                                         >
-                                            {generatingAudio ? "Generating Audio..." : <>Generate Audio <Play className="w-4 h-4" /></>}
+                                            {generatingAudio ? t("create.common.generatingAudio") : <>{t("create.common.generateAudio")} <Play className="w-4 h-4" /></>}
                                         </button>
                                         <button
                                             onClick={navigateToEdit}
                                             className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
                                         >
-                                            Edit Script First
+                                            {t("create.step6.editScriptFirst")}
                                         </button>
                                     </div>
                                 </div>
@@ -1807,7 +2313,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                 <div className="space-y-6">
                                     <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800">
                                         <h3 className="text-xl font-bold text-green-700 dark:text-green-300 mb-4 flex items-center gap-2 justify-center">
-                                            <Check className="w-5 h-5" /> Audio Generated Successfully!
+                                            <Check className="w-5 h-5" /> {t("create.step6.audioGeneratedTitle")}
                                         </h3>
 
                                         {/* Audio Player */}
@@ -1824,32 +2330,32 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                 onClick={() => setStep(4)}
                                                 className="px-6 py-3 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
                                             >
-                                                Back to Script
+                                                {t("create.common.backToScript")}
                                             </button>
                                             <button
                                                 onClick={handleGenerateAudio}
                                                 disabled={generatingAudio}
                                                 className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
                                             >
-                                                Regenerate Audio
+                                                {t("create.step6.regenerateAudio")}
                                             </button>
                                             <button
                                                 onClick={() => {
-                                                const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
-                                                const podcastId = editData.podcastId;
+        let editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
+        let podcastId = editData.podcastId;
                                                 window.location.hash = podcastId ? `#/preview?id=${podcastId}` : "#/preview";
                                                 }}
 
                                                 className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
                                             >
-                                                Open Episode
+                                                {t("create.step6.openEpisode")}
                                             </button>
 
                                             <button
                                                 onClick={navigateToEdit}
                                                 className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
                                             >
-                                                Edit Script
+                                                {t("create.step6.editScript")}
                                             </button>
 
                                         </div>
@@ -1861,9 +2367,23 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                 </div>
 
                 {/* overlays */}
-                <LoadingOverlay show={submitting} type="script" />
-                <LoadingOverlay show={generatingAudio} type="audio" />
-                <Toast toast={toast} onClose={() => setToast(null)} />
+                <LoadingOverlay
+                    show={submitting}
+                    title={t("create.loading.scriptTitle")}
+                    subtitle={t("create.loading.scriptSubtitle")}
+                    logoAlt={t("create.common.logoAlt")}
+                />
+                <LoadingOverlay
+                    show={generatingAudio}
+                    title={t("create.loading.audioTitle")}
+                    subtitle={t("create.loading.audioSubtitle")}
+                    logoAlt={t("create.common.logoAlt")}
+                />
+                <Toast
+                    toast={toast}
+                    onClose={() => setToast(null)}
+                    closeLabel={t("create.common.close")}
+                />
             </main >
         </div >
     );

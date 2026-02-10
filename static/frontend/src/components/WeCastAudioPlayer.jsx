@@ -15,6 +15,7 @@ export default function WeCastAudioPlayer({
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [speed, setSpeed] = useState(1);
+  const [loadError, setLoadError] = useState(false);
 
   const SPEED_OPTIONS = [1, 1.25, 1.5, 2];
 
@@ -37,6 +38,10 @@ export default function WeCastAudioPlayer({
     if (!el) return;
     if (isPlaying) el.pause();
     else {
+      if (loadError) {
+        el.load();
+        setLoadError(false);
+      }
       el.playbackRate = speed;
       el.play().catch(() => {});
     }
@@ -127,6 +132,7 @@ export default function WeCastAudioPlayer({
     setProgress(0);
     setDuration(0);
     setCurrentTime(0);
+    setLoadError(false);
     lastSeekRef.current = null;
   }, [src]);
 
@@ -138,6 +144,7 @@ export default function WeCastAudioPlayer({
         className="hidden"
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
+        onError={() => setLoadError(true)}
         onLoadedMetadata={(e) => {
           const d = e.target.duration || 0;
           setDuration(d);
@@ -162,6 +169,7 @@ export default function WeCastAudioPlayer({
       <div className="flex items-center gap-4">
         <button
           onClick={togglePlay}
+          disabled={!src}
           className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 text-white shadow-lg hover:shadow-xl hover:brightness-110 active:scale-95 transition"
         >
           {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}

@@ -201,20 +201,101 @@ def find_anchor_start_sec(word_timeline, anchor: str):
             return float(word_timeline[i]["start"])
     return None
 
+def build_transcript_text_with_speakers(words):
+    """
+    Build a readable transcript with speaker labels in-line.
+    Example:
+      Bob: Hello there ...
+      Alice: Hi Bob ...
+    """
+    if not words:
+        return ""
+
+    parts = []
+    last_speaker = None
+
+    for w in words:
+        token = (w.get("w") or "").strip()
+        if not token:
+            continue
+
+        speaker = (w.get("speaker") or "").strip()
+        if speaker and speaker != last_speaker:
+            if parts:
+                parts.append("\n")
+            parts.append(f"{speaker}: ")
+            last_speaker = speaker
+
+        parts.append(token + " ")
+
+    return "".join(parts).strip()
+
+def extract_host_speakers(speakers_info):
+    hosts = []
+    for s in speakers_info or []:
+        role = str(s.get("role") or "").strip().lower()
+        if role in ("host", "cohost", "narrator"):
+            hosts.append({
+                "name": (s.get("name") or "").strip(),
+                "gender": (s.get("gender") or "").strip(),
+                "role": (s.get("role") or "").strip(),
+                "providerVoiceId": (s.get("voiceId") or s.get("providerVoiceId") or "").strip(),
+            })
+    return hosts
+
+
+def increment_series_episode(series_ref):
+    txn = db.transaction()
+
+    @firestore.transactional
+    def _increment(txn):
+        snap = series_ref.get(transaction=txn)
+        if not snap.exists:
+            return None, ""
+        data = snap.to_dict() or {}
+        current = int(data.get("episodeCount") or 0)
+        next_count = current + 1
+        txn.update(series_ref, {
+            "episodeCount": next_count,
+            "updatedAt": firestore.SERVER_TIMESTAMP,
+        })
+        return next_count, data.get("title") or ""
+
+    return _increment(txn)
+
+
+def create_series_for_user(user_id: str, title: str):
+    series_ref = db.collection("series").document()
+    now = firestore.SERVER_TIMESTAMP
+    series_ref.set({
+        "userId": user_id,
+        "title": title,
+        "style": "",
+        "hostSpeakers": [],
+        "episodeCount": 0,
+        "createdAt": now,
+        "updatedAt": now,
+    })
+    return series_ref.id
+
+
 def save_generated_podcast_to_firestore(user_id: str, title: str, script_style: str,
-                                       description: str, script: str, speakers_info: list):
+                                       description: str, script: str, speakers_info: list,
+                                       language: str = "", series_id: str = ""):
     # 1) Create the podcast doc with an auto-ID
     podcast_ref = db.collection("podcasts").document()
     podcast_id = podcast_ref.id
 
     now = firestore.SERVER_TIMESTAMP
-    language = detect_language(description)
+    lang = (language or "").strip().lower()
+    if lang not in ("en", "ar"):
+        lang = detect_language(description)
 
     # Podcast doc
     podcast_ref.set({
         "userId": user_id,
         "title": title or "Untitled Episode",
-        "language": language,
+        "language": lang,
         "style": script_style,
         "speakersCount": len(speakers_info or []),
         "status": "draft",
@@ -243,7 +324,34 @@ def save_generated_podcast_to_firestore(user_id: str, title: str, script_style: 
         "lastEditedAt": now,
     })
 
-    return podcast_id
+    episode_number = None
+    series_title = ""
+
+    if series_id:
+        series_ref = db.collection("series").document(series_id)
+        sdoc = series_ref.get()
+        if sdoc.exists:
+            sdata = sdoc.to_dict() or {}
+            if sdata.get("userId") == user_id:
+                series_updates = {}
+                if not sdata.get("style") and script_style:
+                    series_updates["style"] = script_style
+                if not sdata.get("hostSpeakers"):
+                    hosts = extract_host_speakers(speakers_info)
+                    if hosts:
+                        series_updates["hostSpeakers"] = hosts
+                if series_updates:
+                    series_updates["updatedAt"] = now
+                    series_ref.set(series_updates, merge=True)
+
+                episode_number, series_title = increment_series_episode(series_ref)
+                podcast_ref.set({
+                    "seriesId": series_id,
+                    "seriesTitle": series_title,
+                    "episodeNumber": episode_number,
+                }, merge=True)
+
+    return podcast_id, episode_number, series_title
 
 def generate_podcast_script(description: str, speakers_info: list, script_style: str):
     """Generate a structured podcast script where ALL speakers talk,
@@ -549,7 +657,7 @@ Script:
 
     return title
 
-def fallback_time_split_chapters(word_timeline):
+def fallback_time_split_chapters(word_timeline, language: str = "en"):
     if not word_timeline:
         return []
 
@@ -557,7 +665,10 @@ def fallback_time_split_chapters(word_timeline):
     # 5 chapters baseline
     cuts = [0.0, duration * 0.22, duration * 0.45, duration * 0.7, duration * 0.88]
 
-    titles = ["Opening", "Background", "Key Discussion", "Turning Points", "Wrap-Up"]
+    if language == "ar":
+        titles = ["????????", "???????", "?????? ????????", "??????? ????", "???????"]
+    else:
+        titles = ["Opening", "Background", "Key Discussion", "Turning Points", "Wrap-Up"]
     out = [{"title": t, "startSec": float(c)} for t, c in zip(titles, cuts)]
     return out
 
@@ -565,16 +676,16 @@ def generate_chapters_from_transcript(transcript_text: str, language: str = "en"
     # Keep prompt simple & strict JSON
     if language == "ar":
         user_prompt = f"""
-قسّم هذا الحوار إلى فصول (Chapters) لمشغل بودكاست.
-أعد من 5 إلى 7 فصول.
-لكل فصل:
-- title: عنوان قصير (2–6 كلمات)
-- anchor: جملة قصيرة (4–12 كلمة) من النص تبدأ بها الفقرة/الجزء (يجب أن تكون موجودة حرفيًا تقريبًا في النص)
+Split this podcast transcript into podcast chapters for a player.
+Return 5 to 7 chapters.
+For each chapter:
+- title: short (2-6 words) in Arabic.
+- anchor: a short phrase (4-12 words) that appears in the transcript and starts that section (must be nearly exact text). Keep the anchor in the transcript's original language.
 
-أعد JSON فقط بهذا الشكل:
+Return JSON only:
 {{"chapters":[{{"title":"...","anchor":"..."}}, ...]}}
 
-النص:
+Transcript:
 \"\"\"{transcript_text[:12000]}\"\"\"
 """
     else:
@@ -638,7 +749,7 @@ def build_chapters(word_timeline, transcript_text, language="en"):
     # Guardrails: must be “actual chapters”
     # If fewer than 5 chapters, fallback to deterministic time split
     if len(chapters) < 5:
-        chapters = fallback_time_split_chapters(word_timeline)
+        chapters = fallback_time_split_chapters(word_timeline, language=language)
 
     return chapters
 
@@ -788,7 +899,51 @@ def api_voices():
 
             items.append(out)
 
-        return jsonify(count=len(items), items=items)
+        if items:
+            return jsonify(count=len(items), items=items)
+
+        # Fallback to ElevenLabs if Firestore has no voices
+        if not ELEVENLABS_API_KEY:
+            return jsonify(count=0, items=[], error="Missing ELEVENLABS_API_KEY"), 500
+
+        try:
+            r = requests.get(
+                "https://api.elevenlabs.io/v1/voices",
+                headers={"xi-api-key": ELEVENLABS_API_KEY},
+                timeout=30,
+            )
+            if not r.ok:
+                return jsonify(
+                    count=0,
+                    items=[],
+                    error=f"ElevenLabs voices error {r.status_code}: {r.text[:200]}",
+                ), 502
+
+            data = r.json() or {}
+            voices = data.get("voices") or []
+            for v in voices:
+                voice_id = v.get("voice_id") or v.get("voiceId") or v.get("id") or ""
+                labels = v.get("labels") or {}
+                gender = v.get("gender") or labels.get("gender") or ""
+                out = {
+                    "docId": voice_id,
+                    "id": voice_id,
+                    "providerVoiceId": voice_id,
+                    "provider": "ElevenLabs",
+                    "name": v.get("name") or "",
+                    "gender": gender,
+                    "description": v.get("description") or "",
+                    "pitch": labels.get("pitch") or "",
+                    "languages": labels.get("languages") or [],
+                    "tone": labels.get("tone") or [],
+                    "labels": {"gender": gender},
+                }
+                items.append(out)
+
+            return jsonify(count=len(items), items=items)
+        except Exception as e:
+            print("ElevenLabs /api/voices fallback ERROR:", e)
+            return jsonify(error=str(e), count=0, items=[]), 500
 
     except Exception as e:
         print("Firestore /api/voices ERROR:", e)
@@ -827,6 +982,9 @@ def api_generate():
     speakers = int(data.get("speakers") or 0)
     speakers_info = data.get("speakers_info") or []
     description = (data.get("description") or "").strip()
+    series_id = (data.get("seriesId") or "").strip()
+    series_title = (data.get("seriesTitle") or "").strip()
+    ui_language = (data.get("language") or "").strip().lower()
 
     ok, msg = validate_roles(script_style, speakers_info)
     if not ok:
@@ -854,13 +1012,18 @@ def api_generate():
     if not user_id:
         return jsonify(ok=False, error="Not logged in."), 401
 
-    podcast_id = save_generated_podcast_to_firestore(
+    if not series_id and series_title:
+        series_id = create_series_for_user(user_id, series_title)
+
+    podcast_id, episode_number, series_title = save_generated_podcast_to_firestore(
         user_id=user_id,
         title=title,
         script_style=script_style,
         description=description,
         script=script_template,
         speakers_info=speakers_info,
+        series_id=series_id,
+        language=ui_language,
     )
 
 
@@ -873,15 +1036,99 @@ def api_generate():
         "script": script_template,
         "show_title": show_title,
         "title": title,
+        "seriesId": series_id,
+        "seriesTitle": series_title,
+        "episodeNumber": episode_number,
     }
 
 
-    return jsonify(ok=True, script=script_template, title=title, show_title=show_title, podcastId=podcast_id)
+    return jsonify(ok=True, script=script_template, title=title, show_title=show_title, podcastId=podcast_id, seriesId=series_id, seriesTitle=series_title, episodeNumber=episode_number)
 
 @app.get("/api/draft")
 def api_draft():
     # React editor uses this to prefill the textarea
     return jsonify(session.get("create_draft", {}))
+
+
+@app.get("/api/series")
+def api_series_list():
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    query = db.collection("series").where("userId", "==", user_id)
+    items = []
+    for doc in query.stream():
+        data = doc.to_dict() or {}
+        items.append({**data, "id": doc.id})
+
+    return jsonify(items=items)
+
+
+@app.post("/api/series")
+def api_series_create():
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    data = request.get_json(silent=True) or {}
+    title = (data.get("title") or "").strip()
+    if not title:
+        return jsonify(error="Series title is required"), 400
+
+    series_ref = db.collection("series").document()
+    now = firestore.SERVER_TIMESTAMP
+    series_ref.set({
+        "userId": user_id,
+        "title": title,
+        "style": "",
+        "hostSpeakers": [],
+        "episodeCount": 0,
+        "createdAt": now,
+        "updatedAt": now,
+    })
+
+    return jsonify(id=series_ref.id, title=title)
+
+
+@app.get("/api/series/<series_id>")
+def api_series_get(series_id):
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    ref = db.collection("series").document(series_id)
+    doc = ref.get()
+    if not doc.exists:
+        return jsonify(error="Series not found"), 404
+
+    data = doc.to_dict() or {}
+    if data.get("userId") != user_id:
+        return jsonify(error="Forbidden"), 403
+
+    return jsonify({**data, "id": series_id})
+
+
+@app.get("/api/episodes")
+def api_episodes_list():
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    query = db.collection("podcasts").where("userId", "==", user_id)
+    items = []
+    for doc in query.stream():
+        data = doc.to_dict() or {}
+        items.append({
+            "id": doc.id,
+            "title": data.get("title") or "Untitled Episode",
+            "seriesId": data.get("seriesId") or "",
+            "seriesTitle": data.get("seriesTitle") or "",
+            "episodeNumber": data.get("episodeNumber"),
+            "createdAt": data.get("createdAt"),
+        })
+
+    return jsonify(items=items)
 
 @app.post("/api/edit/save")
 def api_edit_save():
@@ -1052,7 +1299,7 @@ def parse_script_into_segments(script: str):
 
     return segments
 
-def synthesize_audio_from_script(script: str):
+def synthesize_audio_from_script(script: str, podcast_id: str = ""):
     music_index = 0
     script = (script or "").strip()
     if not script:
@@ -1151,9 +1398,15 @@ def synthesize_audio_from_script(script: str):
 
     output_path = os.path.join("static", "output.mp3")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    safe_id = re.sub(r"[^A-Za-z0-9_-]", "", podcast_id or "")
+    if not safe_id:
+        safe_id = "output"
+    filename = f"output_{safe_id}.mp3"
+    output_path = os.path.join("static", filename)
+
     final_audio.export(output_path, format="mp3")
 
-    file_url = url_for("static", filename="output.mp3", _external=True)
+    file_url = url_for("static", filename=filename, _external=True)
 
     # store last transcript in session too (optional but useful)
     session["last_word_timeline"] = word_timeline
@@ -1167,6 +1420,7 @@ def api_audio():
 
     script = (payload.get("scriptText") or request.form.get("scriptText") or "").strip()
     podcast_id = (payload.get("podcastId") or "").strip()   # ✅ NEW
+    ui_language = (payload.get("language") or "").strip().lower()
 
     print("DEBUG /api/audio script length:", len(script))
     print("DEBUG /api/audio first 200 chars:", script[:200])
@@ -1178,7 +1432,10 @@ def api_audio():
         session["create_draft"] = draft
         session.modified = True
 
-    ok, result = synthesize_audio_from_script(script)
+    if not podcast_id:
+        return jsonify(error="Missing podcastId"), 400
+
+    ok, result = synthesize_audio_from_script(script, podcast_id)
     if not ok:
         return jsonify(error=result), 400
 
@@ -1196,12 +1453,19 @@ def api_audio():
             pdata = doc.to_dict() or {}
             if pdata.get("userId") == user_id:
                 words = result.get("words") or []
-                transcript_text = " ".join([(w.get("w") or "") for w in words]).strip()
+                transcript_text = build_transcript_text_with_speakers(words)
+
+                if ui_language in ("en", "ar"):
+                    podcast_ref.set({
+                        "language": ui_language,
+                    }, merge=True)
 
                 # Save transcript text in main podcast doc (small)
                 podcast_ref.set({
                     "transcriptText": transcript_text,
                     "transcriptUpdatedAt": firestore.SERVER_TIMESTAMP,
+                    "audioUrl": result["url"],
+                    "audioUpdatedAt": firestore.SERVER_TIMESTAMP,
                 }, merge=True)
 
                 # Save full word timeline in a subcollection doc
@@ -1211,7 +1475,7 @@ def api_audio():
                 }, merge=True)
                 
                 # Generate & save chapters
-                language = pdata.get("language") or "en"
+                language = ui_language or pdata.get("language") or "en"
                 chapters = build_chapters(words, transcript_text, language=language)
 
                 podcast_ref.set({
@@ -1254,6 +1518,7 @@ def summarize_transcript():
         data = request.get_json(silent=True) or {}
         text = data.get('text', '')
         podcast_id = (data.get('podcastId') or "").strip()
+        ui_language = (data.get("language") or "").strip().lower()
 
         if not text:
             return jsonify({"error": "No text provided"}), 400
@@ -1266,7 +1531,10 @@ def summarize_transcript():
             return jsonify({"error": "Not logged in"}), 401
 
         text = text[:12000]
-        is_ar = is_arabic(text)
+        if ui_language in ("ar", "en"):
+            is_ar = ui_language == "ar"
+        else:
+            is_ar = is_arabic(text)
 
         if is_ar:
             system_prompt = "أنت مساعد مفيد يقوم بإنشاء ملخصات بودكاست موجزة. يجب أن تكون جميع الردود بحد أقصى 250 كلمة."
@@ -1305,6 +1573,7 @@ def summarize_transcript():
         podcast_ref.set({
             "summary": summary,
             "summaryUpdatedAt": firestore.SERVER_TIMESTAMP,
+            "summaryLanguage": "ar" if is_ar else "en",
         }, merge=True)
 
         return jsonify({"summary": summary})
@@ -1330,6 +1599,87 @@ def get_podcast(podcast_id):
         return jsonify(error="Forbidden"), 403
 
     return jsonify(ok=True, podcast={**data, "id": podcast_id})
+
+
+@app.get("/api/podcasts/<podcast_id>/transcript")
+def get_podcast_transcript(podcast_id):
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    ref = db.collection("podcasts").document(podcast_id)
+    doc = ref.get()
+    if not doc.exists:
+        return jsonify(error="Podcast not found"), 404
+
+    data = doc.to_dict() or {}
+    if data.get("userId") != user_id:
+        return jsonify(error="Forbidden"), 403
+
+    tdoc = ref.collection("transcripts").document("main").get()
+    if not tdoc.exists:
+        return jsonify(words=[])
+
+    tdata = tdoc.to_dict() or {}
+    return jsonify(words=tdata.get("words") or [])
+
+
+@app.post("/api/podcasts/<podcast_id>/save-all")
+def save_all_podcast(podcast_id):
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    ref = db.collection("podcasts").document(podcast_id)
+    doc = ref.get()
+    if not doc.exists:
+        return jsonify(error="Podcast not found"), 404
+
+    data = doc.to_dict() or {}
+    if data.get("userId") != user_id:
+        return jsonify(error="Forbidden"), 403
+
+    payload = request.get_json(silent=True) or {}
+    title = (payload.get("title") or "").strip()
+    audio_url = (payload.get("audioUrl") or payload.get("audio_url") or "").strip()
+    summary = payload.get("summary")
+    chapters = payload.get("chapters")
+    words = payload.get("words")
+    transcript_text = payload.get("transcriptText")
+
+    updates = {}
+    if title:
+        updates["title"] = title
+    if audio_url:
+        updates["audioUrl"] = audio_url
+        updates["audioUpdatedAt"] = firestore.SERVER_TIMESTAMP
+    if summary is not None:
+        updates["summary"] = summary
+        updates["summaryUpdatedAt"] = firestore.SERVER_TIMESTAMP
+    if isinstance(chapters, list):
+        updates["chapters"] = chapters
+        updates["chaptersUpdatedAt"] = firestore.SERVER_TIMESTAMP
+
+    if words and not transcript_text:
+        try:
+            transcript_text = build_transcript_text_with_speakers(words)
+        except Exception:
+            transcript_text = None
+
+    if transcript_text:
+        updates["transcriptText"] = transcript_text
+        updates["transcriptUpdatedAt"] = firestore.SERVER_TIMESTAMP
+
+    if updates:
+        ref.set(updates, merge=True)
+
+    if isinstance(words, list) and words:
+        ref.collection("transcripts").document("main").set({
+            "words": words,
+            "updatedAt": firestore.SERVER_TIMESTAMP,
+        }, merge=True)
+
+    return jsonify(ok=True)
 
 
 @app.post("/api/save-music")
