@@ -7,6 +7,7 @@ from flask import (
     url_for,
     session,
     jsonify,
+    Response,
 )
 from flask_cors import CORS
 from flask_session import Session
@@ -894,7 +895,8 @@ def api_voices():
                 "pitch": pitch,
                 "languages": languages if isinstance(languages, list) else [],
                 "tone": tone if isinstance(tone, list) else [],
-                "labels": {"gender": gender},       
+                "labels": {"gender": gender},  
+                "preview_url": v.get("preview_url") or "",     
             }
 
             items.append(out)
@@ -949,6 +951,69 @@ def api_voices():
         print("Firestore /api/voices ERROR:", e)
         return jsonify(error=str(e), count=0, items=[]), 500
 
+@app.post("/api/voices/preview")
+def api_voice_preview():
+    data = request.get_json(force=True) or {}
+    incoming = (data.get("voiceId") or "").strip()
+    text = (data.get("text") or "Hello, this is a WeCast voice preview.").strip()
+
+    if not incoming:
+        return jsonify(error="Missing voiceId"), 400
+
+    voice_id = incoming
+    try:
+        looks_like_id = len(voice_id) >= 10 and (" " not in voice_id)
+        if not looks_like_id:
+            suggest_name = voice_id.lower()
+            vr = requests.get(
+                "https://api.elevenlabs.io/v1/voices",
+                headers={"xi-api-key": ELEVENLABS_API_KEY},
+                timeout=30,
+            )
+            if vr.ok:
+                voices = (vr.json() or {}).get("voices") or []
+                match = next(
+                    (v for v in voices if (v.get("name") or "").strip().lower() == suggest_name),
+                    None
+                )
+                if match and match.get("voice_id"):
+                    voice_id = match["voice_id"]
+                else:
+                    return jsonify(
+                        error="Voice name not found in ElevenLabs account",
+                        received=incoming,
+                    ), 404
+            else:
+                return jsonify(
+                    error=f"ElevenLabs voices list failed {vr.status_code}",
+                    details=vr.text[:400],
+                ), 502
+    except Exception as e:
+        return jsonify(error="Failed to resolve voice", details=str(e)), 500
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "output_format": "mp3_44100_128",
+    }
+
+    r = requests.post(url, headers=headers, json=payload, timeout=60)
+
+    print("PREVIEW status:", r.status_code)
+    print("PREVIEW body:", r.text[:800])
+
+    if r.status_code == 404:
+        return jsonify(error="Voice not found on ElevenLabs", voice_id=voice_id, details=r.text[:400]), 404
+    if not r.ok:
+        return jsonify(error=f"ElevenLabs error {r.status_code}", voice_id=voice_id, details=r.text[:800]), 502
+
+    return Response(r.content, mimetype="audio/mpeg")
 
 @app.get("/api/me")
 def api_me():
