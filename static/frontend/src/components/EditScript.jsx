@@ -1,7 +1,7 @@
-
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight } from "lucide-react";
-import { Mic2 } from "lucide-react";
+import { ChevronRight, Mic2, Download } from "lucide-react";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
@@ -25,10 +25,10 @@ function LoadingOverlay({ show, logoSrc = "/logo.png" }) {
           />
           <div>
             <p className="font-extrabold text-black dark:text-white">
-              Saving your script…
+              Exporting your script…
             </p>
             <p className="text-sm text-neutral-600 dark:text-neutral-400">
-              Your changes are being saved. Please wait a moment.
+              Your PDF is being generated. Please wait a moment.
             </p>
           </div>
         </div>
@@ -67,12 +67,10 @@ const StepLine = ({ on }) => (
   <div className={`h-[3px] flex-1 rounded-full ${on ? "bg-gradient-to-r from-purple-600 to-pink-500" : "bg-black/10 dark:bg-white/10"}`} />
 );
 
-// ----------------------------------------------------------------------------------------
-
 export default function EditScript() {
-
   const [script, setScript] = useState("");
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [saveMsg, setSaveMsg] = useState("Not saved yet");
   const [loadingDraft, setLoadingDraft] = useState(true);
   const [scriptTemplate, setScriptTemplate] = useState("");
@@ -82,12 +80,120 @@ export default function EditScript() {
   const [titleJustUpdated, setTitleJustUpdated] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
+  const [lastSavedScript, setLastSavedScript] = useState("");
+  const [lastSavedTitle, setLastSavedTitle] = useState(""); // Track last saved title
+  const [scriptStyle, setScriptStyle] = useState("");
+  
   const isAuthenticated = () =>
     !!(localStorage.getItem("token") || sessionStorage.getItem("token"));
 
   const lastValidRef = useRef("");
   const textareaRef = useRef(null);
 
+  useEffect(() => {
+    const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
+    if (editData.scriptStyle) {
+      setScriptStyle(editData.scriptStyle);
+    }
+  }, []);
+
+  // Update hasUnsavedChanges to include title changes
+  const hasUnsavedChanges = useMemo(() => {
+    return script.trim() !== lastSavedScript.trim() || showTitle !== lastSavedTitle;
+  }, [script, lastSavedScript, showTitle, lastSavedTitle]);
+
+  const exportScriptAsPDF = async () => {
+    try {
+      // Check for unsaved changes first
+      if (hasUnsavedChanges) {
+        setToastMsg("Please save your changes before exporting");
+        setTimeout(() => setToastMsg(""), 3000);
+        return;
+      }
+
+      setExporting(true);
+      
+      let scriptContent = script.trim();
+      let title = showTitle || "Podcast Script";
+      
+      // Only try to fetch from API if authenticated AND we don't have content
+      if (isAuthenticated() && !scriptContent) {
+        try {
+          const response = await fetch(`${API_BASE}/api/draft`, { 
+            credentials: "include" 
+          });
+          if (response.ok) {
+            const data = await response.json();
+            if (data.script) {
+              scriptContent = data.script.replaceAll("{{SHOW_TITLE}}", data.show_title || title);
+              title = data.show_title || data.title || title;
+            }
+          }
+        } catch (error) {
+          console.error("Error fetching latest script:", error);
+          // Don't fail here, continue with what we have
+        }
+      }
+      
+      if (!scriptContent) {
+        setToastMsg("No script content to export!");
+        setTimeout(() => setToastMsg(""), 3000);
+        setExporting(false);
+        return;
+      }
+
+      const doc = new jsPDF();
+      
+      doc.setFontSize(20);
+      doc.setTextColor(40, 40, 40);
+      doc.text(title, 20, 20);
+      
+      doc.setFontSize(10);
+      doc.setTextColor(100, 100, 100);
+      doc.text(`Exported on: ${new Date().toLocaleString()}`, 20, 30);
+      doc.text(`WeCast Podcast Script - ${scriptStyle || "Standard"} Style`, 20, 35);
+      
+      const lines = scriptContent.split(/\r?\n/).filter(line => line.trim());
+      
+      const tableData = [];
+      lines.forEach(line => {
+        const colonIndex = line.indexOf(":");
+        if (colonIndex > 0) {
+          const speaker = line.substring(0, colonIndex).trim();
+          const text = line.substring(colonIndex + 1).trim();
+          tableData.push([speaker, text]);
+        } else {
+          tableData.push(["", line]);
+        }
+      });
+      
+      autoTable(doc, {
+        head: [["Speaker", "Dialogue"]],
+        body: tableData,
+        startY: 45,
+        styles: { fontSize: 10, cellPadding: 3 },
+        headStyles: { fillColor: [147, 51, 234], textColor: 255 },
+        alternateRowStyles: { fillColor: [245, 245, 245] },
+        columnStyles: {
+          0: { fontStyle: 'bold', cellWidth: 40 },
+          1: { cellWidth: 'auto' }
+        }
+      });
+      
+      const fileName = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_script.pdf`;
+      doc.save(fileName);
+      
+      setToastMsg("Script exported successfully!");
+      setTimeout(() => setToastMsg(""), 3000);
+      
+    } catch (error) {
+      console.error("Error exporting script:", error);
+      setToastMsg("Failed to export script. Please try again.");
+      setTimeout(() => setToastMsg(""), 3000);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const displayedScript = scriptTemplate
     ? scriptTemplate.replaceAll("{{SHOW_TITLE}}", showTitle || "Podcast Show")
@@ -119,27 +225,22 @@ export default function EditScript() {
       return;
     }
 
-    // ✅ Update visible script
     setScript(next);
     lastValidRef.current = next;
 
-    // ✅ Keep the TEMPLATE in sync (with {{SHOW_TITLE}})
     const placeholder = "{{SHOW_TITLE}}";
 
     if (showTitle && showTitle.trim().length >= 4) {
       const escaped = showTitle
         .trim()
-        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); // escape regex chars
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const re = new RegExp(escaped, "g");
       const templated = next.replace(re, placeholder);
       setScriptTemplate(templated);
     } else {
-      // title too short like "a" or "AI" → don't try to be smart
       setScriptTemplate(next);
     }
   };
-
-
 
   const startEditTitle = () => {
     setDraftTitle(showTitle || "Podcast Show");
@@ -157,7 +258,6 @@ export default function EditScript() {
     const placeholder = "{{SHOW_TITLE}}";
     const baseTemplate = scriptTemplate || script || "";
 
-    // baseTemplate should already have {{SHOW_TITLE}} in the right spots
     const updatedVisible = baseTemplate.includes(placeholder)
       ? baseTemplate.replaceAll(placeholder, trimmed)
       : baseTemplate;
@@ -166,6 +266,9 @@ export default function EditScript() {
     setScript(updatedVisible);
     lastValidRef.current = updatedVisible;
     setIsEditingTitle(false);
+    
+    // Don't update lastSavedTitle here - this keeps it as an unsaved change
+    // The user will need to click Save Script to persist both changes
   };
 
   useEffect(() => {
@@ -176,11 +279,11 @@ export default function EditScript() {
   }, [showTitle]);
 
   useEffect(() => {
-    // 1) Always check guestEditDraft first
     const guestDraft = sessionStorage.getItem("guestEditDraft") || "";
     if (guestDraft.trim()) {
       const initial = guestDraft.trim();
       setScript(initial);
+      setLastSavedScript(initial);
       lastValidRef.current = initial;
       setLoadingDraft(false);
 
@@ -189,7 +292,6 @@ export default function EditScript() {
 
     }
 
-    // 2) If still a guest, restore from editData 
     if (!isAuthenticated()) {
       const fromCreate = JSON.parse(sessionStorage.getItem("editData") || "{}");
 
@@ -200,20 +302,22 @@ export default function EditScript() {
         (fromCreate.episodeTitle || "").trim();
 
       if (!show) {
-        // No stored title? fall back to a neutral default.
         show = "Podcast Show";
       }
-
 
       if (template) {
         const visible = template.replaceAll("{{SHOW_TITLE}}", show || "Podcast Show");
         setScriptTemplate(template);
         setShowTitle(show || "Podcast Show");
         setScript(visible);
+        setLastSavedScript(visible);
+        setLastSavedTitle(show || "Podcast Show"); // Track saved title
         lastValidRef.current = visible;
       } else {
         const initial = (fromCreate.generatedScript || "").trim() || "";
         setScript(initial);
+        setLastSavedScript(initial);
+        setLastSavedTitle(show || "Podcast Show"); // Track saved title
         lastValidRef.current = initial;
         if (show) {
           setShowTitle(show);
@@ -224,8 +328,6 @@ export default function EditScript() {
       return;
     }
 
-
-    // 3) Logged in, load from backend
     fetch(`${API_BASE}/api/draft`, { credentials: "include" })
       .then((r) => r.json())
       .then((d) => {
@@ -241,13 +343,13 @@ export default function EditScript() {
         setScriptTemplate(template);
         setShowTitle(show || "Podcast Show");
         setScript(visible);
+        setLastSavedScript(visible);
+        setLastSavedTitle(show || "Podcast Show"); // Track saved title
         lastValidRef.current = visible || "";
       })
       .finally(() => setLoadingDraft(false));
 
   }, []);
-
-
 
   useEffect(() => {
     const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
@@ -310,7 +412,6 @@ export default function EditScript() {
     }
   };
 
-
   const findEmptySpeakerLine = (text) => {
     if (!text) return -1;
 
@@ -333,7 +434,6 @@ export default function EditScript() {
     const lines = text.split(/\r?\n/);
     const badIndex = findEmptySpeakerLine(text);
     if (badIndex === -1) return;
-
 
     let offset = 0;
     for (let i = 0; i < badIndex; i++) {
@@ -381,13 +481,16 @@ export default function EditScript() {
       });
       if (!r.ok) throw new Error();
       setSaveMsg("Last saved: " + new Date().toLocaleTimeString());
+      setLastSavedScript(content);
+      setLastSavedTitle(showTitle || ""); // Save the current title
+      setToastMsg("Script saved successfully!");
+      setTimeout(() => setToastMsg(""), 3000);
     } catch {
       setSaveMsg("Failed to save.");
     } finally {
       setSaving(false);
     }
   };
-
 
   const navigateToAudio = async () => {
     const trimmed = script.trim();
@@ -419,6 +522,8 @@ export default function EditScript() {
             show_title: showTitle || "",
           }),
         });
+        setLastSavedScript(content);
+        setLastSavedTitle(showTitle || ""); // Save the current title
       } catch (error) {
         console.error("Failed to save script:", error);
       } finally {
@@ -441,23 +546,22 @@ export default function EditScript() {
     window.location.hash = "#/create";
   };
 
-
   return (
     <div className="min-h-screen bg-cream dark:bg-[#0a0a0a]">
+      <LoadingOverlay show={exporting} />
+      
       <div className="h-2 bg-purple-gradient" />
 
       <main className="w-full max-w-[1400px] mx-auto px-6 py-10">
-        {/* Title */}
-        <header className="mb-6 text-center">
-          <h1 className="text-3xl md:text-4xl font-extrabold text-black dark:text-white">
-            Review & Edit Script
-          </h1>
-          <p className="mt-2 text-black/70 dark:text-white/70">
-            Review your script, make quick edits, and get it ready for audio.
-          </p>
-        </header>
+       <header className="mb-6 text-center" >
+    <h1 className="text-3xl md:text-4xl font-extrabold text-black dark:text-white">
+      Review & Edit Script
+    </h1>
+    <p className="mt-2 text-black/70 dark:text-white/70">
+      Review your script, make quick edits, and get it ready for audio.
+    </p>
+  </header>
 
-        {/* Stepper */}
         <div className="w-full rounded-2xl bg-white/60 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 p-4 mb-8">
           <div className="flex items-center gap-2">
             <StepDot n={1} label="Choose Style" done />
@@ -479,10 +583,7 @@ export default function EditScript() {
           </div>
         </div>
 
-
-
         <div className="max-w-5xl mx-auto">
-          {/* guidelines */}
           <section className="ui-card">
             <h2 className="ui-card-title">Editing Guidelines</h2>
             <ul className="list-disc pl-6 space-y-1 text-sm text-black/80 dark:text-white/80">
@@ -502,9 +603,13 @@ export default function EditScript() {
                 </li>
               )}
             </ul>
+            {hasUnsavedChanges && (
+              <div className="mt-3 p-2 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 rounded-lg text-sm">
+                ⚠️ You have unsaved changes. Please save your script before exporting.
+              </div>
+            )}
           </section>
 
-          {/* Podcast Title */}
           <div
             className={
               `mt-8 mb-6 px-5 py-4 rounded-2xl border border-amber-200/70 ` +
@@ -571,18 +676,32 @@ export default function EditScript() {
             )}
           </div>
 
-
-
-          {/* editor */}
           <div className="ui-card mt-6">
-            <h2 className="ui-card-title">Your Script</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="ui-card-title mb-0">Your Script</h2>
+              
+              <button
+                onClick={exportScriptAsPDF}
+                disabled={exporting || !script.trim() || hasUnsavedChanges}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200 text-sm font-medium
+                         shadow-sm hover:shadow disabled:opacity-50 disabled:cursor-not-allowed
+                         ${hasUnsavedChanges 
+                           ? 'bg-gray-300 dark:bg-gray-700 text-gray-600 dark:text-gray-400 cursor-not-allowed' 
+                           : 'bg-purple-600 hover:bg-purple-700 text-white'
+                         }`}
+                title={hasUnsavedChanges ? "Please save your changes before exporting" : "Export script as PDF"}
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>{exporting ? "Exporting..." : hasUnsavedChanges ? "Save to enable export" : "Export as PDF"}</span>
+              </button>
+            </div>
 
             {loadingDraft ? (
               <div className="text-sm opacity-80">Loading draft…</div>
             ) : (
               <>
                 <label htmlFor="scriptArea" className="form-label">
-                  Edit lines below
+                  Edit lines below {hasUnsavedChanges && <span className="text-yellow-600 dark:text-yellow-400">(unsaved changes)</span>}
                 </label>
                 <textarea
                   id="scriptArea"
@@ -595,16 +714,13 @@ export default function EditScript() {
                   placeholder="Host: …"
                 />
 
-
-
-                {/* actions row */}
                 <div className="mt-4 flex items-center justify-between gap-4 flex-wrap">
                   <button
                     onClick={() => {
                       const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
                       const updatedEditData = {
                         ...editData,
-                        generatedScript: script,      // edited script
+                        generatedScript: script,
                         scriptTemplate,
                         showTitle,
                         episodeTitle: showTitle,
@@ -624,7 +740,11 @@ export default function EditScript() {
                     <button
                       onClick={save}
                       disabled={saving}
-                      className="px-5 py-2 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition disabled:opacity-50"
+                      className={`px-5 py-2 rounded-xl transition disabled:opacity-50 ${
+                        hasUnsavedChanges 
+                          ? 'bg-purple-600 text-white hover:bg-purple-700 border border-purple-500' 
+                          : 'border border-neutral-300 dark:border-neutral-700 hover:bg-black/5 dark:hover:bg-white/5'
+                      }`}
                     >
                       {saving ? "Saving…" : "Save Script"}
                     </button>
@@ -647,6 +767,9 @@ export default function EditScript() {
                   }
                 >
                   {saveMsg}
+                  {hasUnsavedChanges && !saveMsg && (
+                    <span className="ml-2 text-yellow-600 dark:text-yellow-400">(You have unsaved changes)</span>
+                  )}
                 </div>
               </>
             )}
@@ -702,9 +825,9 @@ export default function EditScript() {
           </div>
         </div>
       </main>
-      {/* Toast Notification */}
+      
       {toastMsg && (
-        <div className="fixed top-6 right-6 z-[10000] bg-red-500 text-white px-6 py-3 rounded-xl shadow-2xl border border-red-300 animate-in slide-in-from-right-8 duration-300">
+        <div className="fixed top-6 right-6 z-[10000] bg-green-500 text-white px-6 py-3 rounded-xl shadow-2xl border border-green-300 animate-in slide-in-from-right-8 duration-300">
           <div className="flex items-center gap-2 font-semibold">
             {toastMsg}
           </div>
