@@ -1,3 +1,4 @@
+
 import React, { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -18,10 +19,10 @@ import {
     Headphones,
     Music2,
     Layers,
+    SlidersHorizontal,
 } from "lucide-react";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
 import WeCastAudioPlayer from "./WeCastAudioPlayer";
+import Modal from "../components/Modal";
 
 const API_BASE = import.meta.env.PROD
     ? "https://wecast.onrender.com"
@@ -1019,62 +1020,6 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
         window.location.hash = "#/edit";
     };
 
-    // Export script as PDF function
-    const exportScriptAsPDF = () => {
-        if (!generatedScript) {
-            alert("No script to export!");
-            return;
-        }
-
-        // Create new PDF document
-        const doc = new jsPDF();
-        
-        // Add title
-        doc.setFontSize(20);
-        doc.setTextColor(40, 40, 40);
-        doc.text(showTitle || "Podcast Script", 20, 20);
-        
-        // Add metadata
-        doc.setFontSize(10);
-        doc.setTextColor(100, 100, 100);
-        doc.text(`Exported on: ${new Date().toLocaleString()}`, 20, 30);
-        doc.text(`WeCast Podcast Script - ${styleLabelMap[scriptStyle] || scriptStyle} Style`, 20, 35);
-        
-        // Parse script lines
-        const lines = generatedScript.split(/\r?\n/).filter(line => line.trim());
-        
-        // Prepare table data
-        const tableData = [];
-        lines.forEach(line => {
-            const colonIndex = line.indexOf(":");
-            if (colonIndex > 0) {
-                const speaker = line.substring(0, colonIndex).trim();
-                const text = line.substring(colonIndex + 1).trim();
-                tableData.push([speaker, text]);
-            } else {
-                tableData.push(["", line]);
-            }
-        });
-        
-        // Generate table
-        autoTable(doc, {
-            head: [["Speaker", "Dialogue"]],
-            body: tableData,
-            startY: 45,
-            styles: { fontSize: 10, cellPadding: 3 },
-            headStyles: { fillColor: [147, 51, 234], textColor: 255 },
-            alternateRowStyles: { fillColor: [245, 245, 245] },
-            columnStyles: {
-                0: { fontStyle: 'bold', cellWidth: 40 },
-                1: { cellWidth: 'auto' }
-            }
-        });
-        
-        // Save the PDF
-        const fileName = `${(showTitle || "podcast_script").replace(/[^a-z0-9]/gi, '_').toLowerCase()}.pdf`;
-        doc.save(fileName);
-    };
-
 
     /* ---------- stepper ---------- */
     const stepTitles = {
@@ -1706,150 +1651,167 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                             return (
                                                                 <div className="flex items-center gap-3">
                                                                     {/* Filters dropdown (per speaker) */}
-                                                                        {(() => {
-                                                                        const f = speakerVoiceFilters[i] || {
-                                                                            open: false,
-                                                                            q: "",
-                                                                            language: "",
-                                                                            tone: "",
-                                                                            pitch: "",
-                                                                        };
+                                                                    {(() => {
+                                                                    const f = speakerVoiceFilters[i] || {
+                                                                        open: false,
+                                                                        q: "",
+                                                                        language: "",
+                                                                        tone: "",
+                                                                        pitch: "",
+                                                                    };
 
-                                                                        // Collect options dynamically from voices list
-                                                                        const languageOptions = Array.from(
-                                                                            new Set(
-                                                                            voices
-                                                                                .flatMap((v) => (Array.isArray(v.languages) ? v.languages : []))
-                                                                                .map((x) => String(x).trim())
-                                                                                .filter(Boolean)
-                                                                            )
-                                                                        ).sort();
+                                                                    const setF = (patch) =>
+                                                                        setSpeakerVoiceFilters((prev) => ({
+                                                                        ...prev,
+                                                                        [i]: { ...prev[i], ...patch },
+                                                                        }));
 
-                                                                        const toneOptions = Array.from(
-                                                                            new Set(
-                                                                            voices
-                                                                                .flatMap((v) => (Array.isArray(v.tone) ? v.tone : []))
-                                                                                .map((x) => String(x).trim())
-                                                                                .filter(Boolean)
-                                                                            )
-                                                                        ).sort();
+                                                                    const languageOptions = Array.from(
+                                                                        new Set(
+                                                                        voices
+                                                                            .flatMap((v) => (Array.isArray(v.languages) ? v.languages : []))
+                                                                            .map((x) => String(x).trim())
+                                                                            .filter(Boolean)
+                                                                        )
+                                                                    ).sort();
 
-                                                                        const pitchOptions = Array.from(
-                                                                            new Set(
-                                                                            voices
-                                                                                .map((v) => String(v.pitch || "").trim())
-                                                                                .filter(Boolean)
-                                                                            )
-                                                                        ).sort();
+                                                                    const toneOptions = Array.from(
+                                                                        new Set(
+                                                                        voices
+                                                                            .flatMap((v) => (Array.isArray(v.tone) ? v.tone : []))
+                                                                            .map((x) => String(x).trim())
+                                                                            .filter(Boolean)
+                                                                        )
+                                                                    ).sort();
 
-                                                                        const setF = (patch) =>
-                                                                            setSpeakerVoiceFilters((prev) => ({
-                                                                            ...prev,
-                                                                            [i]: { ...prev[i], ...patch },
-                                                                            }));
+                                                                    const pitchOptions = Array.from(
+                                                                        new Set(voices.map((v) => String(v.pitch || "").trim()).filter(Boolean))
+                                                                    ).sort();
 
-                                                                        return (
-                                                                            <div className="mb-3">
-                                                                            <button
+                                                                    const hasActive =
+                                                                        !!String(f.q || "").trim() || !!f.language || !!f.tone || !!f.pitch;
+
+                                                                    return (
+                                                                        <>
+                                                                    <button
+                                                                    type="button"
+                                                                    disabled={isHostLocked}
+                                                                    onClick={() => setF({ open: true })}
+                                                                    className={`relative inline-flex items-center justify-center h-[44px] w-[44px] rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 transition
+                                                                        ${isHostLocked ? "opacity-60 cursor-not-allowed" : "hover:bg-black/5 dark:hover:bg-white/5"}`}
+                                                                    aria-label={t("create.speakers.filters")}
+                                                                    title={t("create.speakers.filters")}
+                                                                    >
+                                                                    <SlidersHorizontal className="w-5 h-5" />
+
+                                                                    {/* active dot */}
+                                                                    {hasActive ? (
+                                                                        <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-purple-600 ring-2 ring-white dark:ring-neutral-900" />
+                                                                    ) : null}
+                                                                    </button>
+
+
+                                                                        <Modal
+                                                                            open={!!f.open && !isHostLocked}
+                                                                            title={t("create.speakers.filters")}
+                                                                            onClose={() => setF({ open: false })}
+                                                                            isRTL={isRTL}
+                                                                            footer={
+                                                                            <>
+                                                                                <button
                                                                                 type="button"
-                                                                                disabled={isHostLocked}
-                                                                                onClick={() => setF({ open: !f.open })}
-                                                                                className={`inline-flex items-center gap-2 px-4 h-[40px] rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-sm font-semibold transition ${isHostLocked ? "opacity-60 cursor-not-allowed" : "hover:bg-black/5 dark:hover:bg-white/5"}`}
-                                                                            >
-                                                                                {t("create.speakers.filters")}
-                                                                                <span className="text-xs opacity-70">
-                                                                                {f.q || f.language || f.tone || f.pitch ? t("create.common.active") : ""}
-                                                                                </span>
-                                                                            </button>
+                                                                                onClick={() => setF({ q: "", language: "", tone: "", pitch: "" })}
+                                                                                className="px-4 h-[42px] rounded-xl border border-neutral-300 dark:border-neutral-700 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                                                                >
+                                                                                {t("create.speakers.clearFilters")}
+                                                                                </button>
 
-                                                                            {f.open && !isHostLocked && (
-                                                                                <div className="mt-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 p-3 shadow-sm">
-                                                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                                                                    {/* Search */}
-                                                                                    <div>
-                                                                                    <label className="form-label">{t("create.speakers.search")}</label>
-                                                                                    <input
-                                                                                        value={f.q}
-                                                                                        onChange={(e) => setF({ q: e.target.value })}
-                                                                                        placeholder={t("create.speakers.searchPlaceholder")}
-                                                                                        className="form-input"
-                                                                                    />
-                                                                                    </div>
-
-                                                                                    {/* Language */}
-                                                                                    <div>
-                                                                                    <label className="form-label">{t("create.speakers.language")}</label>
-                                                                                    <select
-                                                                                        value={f.language}
-                                                                                        onChange={(e) => setF({ language: e.target.value })}
-                                                                                        className="form-input"
-                                                                                    >
-                                                                                        <option value="">{t("create.speakers.allLanguages")}</option>
-                                                                                        {languageOptions.map((lang) => (
-                                                                                        <option key={lang} value={lang}>
-                                                                                            {lang}
-                                                                                        </option>
-                                                                                        ))}
-                                                                                    </select>
-                                                                                    </div>
-
-                                                                                    {/* Tone */}
-                                                                                    <div>
-                                                                                    <label className="form-label">{t("create.speakers.tone")}</label>
-                                                                                    <select
-                                                                                        value={f.tone}
-                                                                                        onChange={(e) => setF({ tone: e.target.value })}
-                                                                                        className="form-input"
-                                                                                    >
-                                                                                        <option value="">{t("create.speakers.allTones")}</option>
-                                                                                        {toneOptions.map((t) => (
-                                                                                        <option key={t} value={t}>
-                                                                                            {t}
-                                                                                        </option>
-                                                                                        ))}
-                                                                                    </select>
-                                                                                    </div>
-
-                                                                                    {/* Pitch */}
-                                                                                    <div>
-                                                                                    <label className="form-label">{t("create.speakers.pitch")}</label>
-                                                                                    <select
-                                                                                        value={f.pitch}
-                                                                                        onChange={(e) => setF({ pitch: e.target.value })}
-                                                                                        className="form-input"
-                                                                                    >
-                                                                                        <option value="">{t("create.speakers.allPitches")}</option>
-                                                                                        {pitchOptions.map((p) => (
-                                                                                        <option key={p} value={p}>
-                                                                                            {p}
-                                                                                        </option>
-                                                                                        ))}
-                                                                                    </select>
-                                                                                    </div>
-                                                                                </div>
-
-                                                                                <div className="mt-3 flex items-center justify-between">
-                                                                                    <button
-                                                                                    type="button"
-                                                                                    onClick={() => setF({ q: "", language: "", tone: "", pitch: "" })}
-                                                                                    className="px-4 h-[38px] rounded-xl border border-neutral-300 dark:border-neutral-700 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition"
-                                                                                    >
-                                                                                    {t("create.speakers.clearFilters")}
-                                                                                    </button>
-
-                                                                                    <button
-                                                                                    type="button"
-                                                                                    onClick={() => setF({ open: false })}
-                                                                                    className="px-4 h-[38px] rounded-xl border border-purple-500 text-purple-600 text-sm font-semibold hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
-                                                                                    >
-                                                                                    {t("create.common.done")}
-                                                                                    </button>
-                                                                                </div>
-                                                                                </div>
-                                                                            )}
+                                                                                <button
+                                                                                type="button"
+                                                                                onClick={() => setF({ open: false })}
+                                                                                className="px-4 h-[42px] rounded-xl bg-purple-600 text-white text-sm font-semibold hover:opacity-95 transition"
+                                                                                >
+                                                                                {t("create.common.done")}
+                                                                                </button>
+                                                                            </>
+                                                                            }
+                                                                        >
+                                                                            <div className="grid grid-cols-1 gap-4">
+                                                                            {/* Search */}
+                                                                            <div>
+                                                                                <label className="form-label">{t("create.speakers.search")}</label>
+                                                                                <input
+                                                                                value={f.q}
+                                                                                onChange={(e) => setF({ q: e.target.value })}
+                                                                                placeholder={t("create.speakers.searchPlaceholder")}
+                                                                                className="form-input"
+                                                                                />
                                                                             </div>
-                                                                        );
-                                                                        })()}
+
+                                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                                                {/* Language */}
+                                                                                <div>
+                                                                                <label className="form-label">{t("create.speakers.language")}</label>
+                                                                                <select
+                                                                                    value={f.language}
+                                                                                    onChange={(e) => setF({ language: e.target.value })}
+                                                                                    className="form-input"
+                                                                                >
+                                                                                    <option value="">{t("create.speakers.allLanguages")}</option>
+                                                                                    {languageOptions.map((lang) => (
+                                                                                    <option key={lang} value={lang}>
+                                                                                        {lang}
+                                                                                    </option>
+                                                                                    ))}
+                                                                                </select>
+                                                                                </div>
+
+                                                                                {/* Tone */}
+                                                                                <div>
+                                                                                <label className="form-label">{t("create.speakers.tone")}</label>
+                                                                                <select
+                                                                                    value={f.tone}
+                                                                                    onChange={(e) => setF({ tone: e.target.value })}
+                                                                                    className="form-input"
+                                                                                >
+                                                                                    <option value="">{t("create.speakers.allTones")}</option>
+                                                                                    {toneOptions.map((tone) => (
+                                                                                    <option key={tone} value={tone}>
+                                                                                        {tone}
+                                                                                    </option>
+                                                                                    ))}
+                                                                                </select>
+                                                                                </div>
+
+                                                                                {/* Pitch */}
+                                                                                <div className="md:col-span-2">
+                                                                                <label className="form-label">{t("create.speakers.pitch")}</label>
+                                                                                <select
+                                                                                    value={f.pitch}
+                                                                                    onChange={(e) => setF({ pitch: e.target.value })}
+                                                                                    className="form-input"
+                                                                                >
+                                                                                    <option value="">{t("create.speakers.allPitches")}</option>
+                                                                                    {pitchOptions.map((p) => (
+                                                                                    <option key={p} value={p}>
+                                                                                        {p}
+                                                                                    </option>
+                                                                                    ))}
+                                                                                </select>
+                                                                                </div>
+                                                                            </div>
+
+                                                                            {/* Optional: small hint */}
+                                                                            <p className="text-xs text-black/60 dark:text-white/60">
+                                                                                {pool?.length
+                                                                                ? t("create.speakers.filteredCount", { count: pool.length })
+                                                                                : ""}
+                                                                            </p>
+                                                                            </div>
+                                                                        </Modal>
+                                                                        </>
+                                                                    );
+                                                                    })()}
                                                                     <select
                                                                         dir={isRTL ? "rtl" : "ltr"}
                                                                         disabled={isHostLocked}
@@ -1894,34 +1856,46 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                                                                     </select>
 
                                                                     <button
-                                                                        type="button"
-                                                                        disabled={isHostLocked}
-                                                                        onClick={() => {
-                                                                            const selected =
-                                                                                pool.find(
-                                                                                    (v) => v.id === currentId
-                                                                                ) || pool[0];
-                                                                            if (selected?.preview_url) {
-                                                                                const audio = new Audio(
-                                                                                    selected.preview_url
-                                                                                );
-                                                                                audio
-                                                                                    .play()
-                                                                                    .catch((err) =>
-                                                                                        console.error(
-                                                                                            t("create.speakers.previewFailed"),
-                                                                                            err
-                                                                                        )
-                                                                                    );
-                                                                            } else {
-                                                                                alert(
-                                                                                    t("create.speakers.noPreviewAvailable")
-                                                                                );
-                                                                            }
-                                                                        }}
-                                                                        className={`inline-flex items-center justify-center gap-2 px-5 h-[44px] rounded-xl border border-purple-500 text-purple-600 font-semibold transition ${isHostLocked ? "opacity-60 cursor-not-allowed" : "hover:bg-purple-50 dark:hover:bg-purple-900/20"} ${isRTL ? "flex-row-reverse" : ""}`}
+                                                                    type="button"
+                                                                    disabled={isHostLocked}
+                                                                    onClick={async () => {
+                                                                    const voiceId = sp.voiceId; 
+                                                                    if (!voiceId) {
+                                                                        alert(t("create.speakers.selectVoice"));
+                                                                        return;
+                                                                    }
+
+                                                                    try {
+                                                                        const res = await fetch(`${API_BASE}/api/voices/preview`, {
+                                                                        method: "POST",
+                                                                        credentials: "include",
+                                                                        headers: { "Content-Type": "application/json" },
+                                                                        body: JSON.stringify({
+                                                                            voiceId,
+                                                                            text: "Hello, this is a WeCast voice preview.",
+                                                                        }),
+                                                                        });
+
+                                                                        if (!res.ok) {
+                                                                        const err = await res.json().catch(() => ({}));
+                                                                        alert(err?.error || "Preview failed");
+                                                                        return;
+                                                                        }
+
+                                                                        const blob = await res.blob();
+                                                                        const url = URL.createObjectURL(blob);
+                                                                        const audio = new Audio(url);
+                                                                        await audio.play();
+                                                                    } catch (e) {
+                                                                        console.error(e);
+                                                                        alert("Preview failed");
+                                                                    }
+                                                                    }}
+                                                                    className={`inline-flex items-center justify-center gap-2 px-5 h-[44px] rounded-xl border border-purple-500 text-purple-600 font-semibold transition ${
+                                                                        isHostLocked ? "opacity-60 cursor-not-allowed" : "hover:bg-purple-50 dark:hover:bg-purple-900/20"
+                                                                    } ${isRTL ? "flex-row-reverse" : ""}`}
                                                                     >
-                                                                        {t("create.common.preview")} <Play className="w-4 h-4" />
+                                                                    {t("create.common.preview")} <Play className="w-4 h-4" />
                                                                     </button>
                                                                 </div>
                                                             );
@@ -2018,23 +1992,10 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                     {/* STEP 4: REVIEW & EDIT */}
                     {step === 4 && generatedScript && (
                         <section className="ui-card">
-                            <div className="flex items-center justify-between mb-4">
-                                <h2 className="ui-card-title flex items-center gap-2 mb-0">
-                                    <Edit className="w-4 h-4" />
-                                    {t("create.step4.reviewTitle")}
-                                </h2>
-                                
-                                {/* Export Button */}
-                                <button
-                                    onClick={exportScriptAsPDF}
-                                    className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 
-                                             text-white rounded-lg transition-all duration-200 text-sm font-medium
-                                             shadow-sm hover:shadow"
-                                >
-                                    <Download className="w-4 h-4" />
-                                    <span>Export Script</span>
-                                </button>
-                            </div>
+                            <h2 className="ui-card-title flex items-center gap-2">
+                                <Edit className="w-4 h-4" />
+                                {t("create.step4.reviewTitle")}
+                            </h2>
 
                             <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800 mb-6">
                                 <h3 className="text-xl font-bold text-green-700 dark:text-green-300 mb-4 flex items-center gap-2">
