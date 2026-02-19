@@ -47,6 +47,7 @@
 # 6️⃣ Setup React (Frontend)
 #     cd static/frontend
 #     npm install
+#     npm install jspdf jspdf-autotable
 #
 # 7️⃣ Run the React development server
 #     npm run dev
