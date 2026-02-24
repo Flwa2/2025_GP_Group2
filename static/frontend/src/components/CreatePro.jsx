@@ -15,13 +15,14 @@ import {
     Pause,
     RotateCcw,
     RotateCw,
-    Download,  
+    Download,
     Headphones,
     Music2,
     Layers,
-    Trash2,
+    SlidersHorizontal,
 } from "lucide-react";
 import WeCastAudioPlayer from "./WeCastAudioPlayer";
+import Modal from "../components/Modal";
 
 const API_BASE = import.meta.env.PROD
     ? "https://wecast.onrender.com"
@@ -97,8 +98,6 @@ function Toast({ toast, onClose, closeLabel = "Close" }) {
 export default function CreatePro() {
     const { t, i18n } = useTranslation();
     const isRTL = i18n.language === "ar";
-    const token = localStorage.getItem("token") || sessionStorage.getItem("token") || "";
-    const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
     const [step, setStep] = useState(0);
     const [podcastMode, setPodcastMode] = useState("");
     const [seriesList, setSeriesList] = useState([]);
@@ -108,7 +107,6 @@ export default function CreatePro() {
     const [newSeriesTitle, setNewSeriesTitle] = useState("");
     const [seriesLockedHosts, setSeriesLockedHosts] = useState(false);
     const [seriesLockedStyle, setSeriesLockedStyle] = useState(false);
-    const [seriesDeletingId, setSeriesDeletingId] = useState("");
 
     useEffect(() => {
         sessionStorage.setItem("currentStep", step);
@@ -125,7 +123,6 @@ export default function CreatePro() {
             try {
                 setSeriesLoading(true);
                 const res = await fetch(`${API_BASE}/api/series`, {
-                    headers: authHeaders,
                     credentials: "include",
                 });
                 const data = await res.json();
@@ -135,7 +132,6 @@ export default function CreatePro() {
                 if (!items.length) {
                     try {
                         const epRes = await fetch(`${API_BASE}/api/episodes`, {
-                            headers: authHeaders,
                             credentials: "include",
                         });
                         const epData = await epRes.json();
@@ -169,7 +165,7 @@ export default function CreatePro() {
         return () => {
             isMounted = false;
         };
-    }, [podcastMode, token]);
+    }, [podcastMode]);
 
     useEffect(() => {
         if (podcastMode === "series") return;
@@ -504,6 +500,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                 }
             }
         };
+
         window.addEventListener('hashchange', handleHashChange);
         handleHashChange();
 
@@ -1023,7 +1020,74 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
         window.location.hash = "#/edit";
     };
 
+// Add this function before the return statement
+const exportScriptAsPDF = async () => {
+  try {
+    if (!generatedScript) {
+      setToast({ type: "error", message: "No script content to export!" });
+      setTimeout(() => setToast(null), 3000);
+      return;
+    }
 
+    // Dynamically import jsPDF and autoTable
+    const jsPDF = (await import("jspdf")).default;
+    const autoTable = (await import("jspdf-autotable")).default;
+    
+    const doc = new jsPDF();
+    
+    // Title
+    doc.setFontSize(20);
+    doc.setTextColor(40, 40, 40);
+    doc.text(showTitle || "Podcast Script", 20, 20);
+    
+    // Metadata
+    doc.setFontSize(10);
+    doc.setTextColor(100, 100, 100);
+    doc.text(`Exported on: ${new Date().toLocaleString()}`, 20, 30);
+    doc.text(`WeCast Podcast Script - ${scriptStyle || "Standard"} Style`, 20, 35);
+    
+    // Parse script lines
+    const lines = generatedScript.split(/\r?\n/).filter(line => line.trim());
+    
+    const tableData = [];
+    lines.forEach(line => {
+      const colonIndex = line.indexOf(":");
+      if (colonIndex > 0) {
+        const speaker = line.substring(0, colonIndex).trim();
+        const text = line.substring(colonIndex + 1).trim();
+        tableData.push([speaker, text]);
+      } else {
+        tableData.push(["", line]);
+      }
+    });
+    
+    // Create table
+    autoTable(doc, {
+      head: [["Speaker", "Dialogue"]],
+      body: tableData,
+      startY: 45,
+      styles: { fontSize: 10, cellPadding: 3 },
+      headStyles: { fillColor: [147, 51, 234], textColor: 255 },
+      alternateRowStyles: { fillColor: [245, 245, 245] },
+      columnStyles: {
+        0: { fontStyle: 'bold', cellWidth: 40 },
+        1: { cellWidth: 'auto' }
+      }
+    });
+    
+    // Save the PDF
+    const fileName = `${(showTitle || "podcast_script").replace(/[^a-z0-9]/gi, '_').toLowerCase()}_script.pdf`;
+    doc.save(fileName);
+    
+    setToast({ type: "success", message: "Script exported successfully!" });
+    setTimeout(() => setToast(null), 3000);
+    
+  } catch (error) {
+    console.error("Error exporting script:", error);
+    setToast({ type: "error", message: "Failed to export script. Please try again." });
+    setTimeout(() => setToast(null), 3000);
+  }
+};
     /* ---------- stepper ---------- */
     const stepTitles = {
         0: t("create.preStep.title"),
@@ -1138,7 +1202,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                 const res = await fetch(`${API_BASE}/api/series`, {
                     method: "POST",
                     credentials: "include",
-                    headers: { "Content-Type": "application/json", ...authHeaders },
+                    headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ title: trimmedTitle }),
                 });
                 const data = await res.json();
@@ -1164,7 +1228,6 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
             }
 
             const res = await fetch(`${API_BASE}/api/series/${seriesId}`, {
-                headers: authHeaders,
                 credentials: "include",
             });
             const data = await res.json();
@@ -1186,61 +1249,6 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                 message: t("create.preStep.seriesLoadError"),
             });
             setTimeout(() => setToast(null), 2400);
-        }
-    };
-
-    const handleDeleteSeries = async (series, deleteEpisodes = false) => {
-        const sid = (series?.id || "").trim();
-        if (!sid) {
-            setToast({
-                type: "error",
-                message: "This series cannot be deleted because it has no valid id.",
-            });
-            setTimeout(() => setToast(null), 2600);
-            return;
-        }
-
-        const sTitle = series?.title || "this series";
-        const confirmMsg = deleteEpisodes
-            ? `Delete "${sTitle}" and all episodes in it permanently?`
-            : `Delete "${sTitle}" series only and keep episodes as standalone?`;
-        if (!window.confirm(confirmMsg)) return;
-
-        try {
-            setSeriesDeletingId(sid);
-            const res = await fetch(`${API_BASE}/api/series/${encodeURIComponent(sid)}/delete`, {
-                method: "POST",
-                credentials: "include",
-                headers: { "Content-Type": "application/json", ...authHeaders },
-                body: JSON.stringify({ deleteEpisodes }),
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                throw new Error(data?.error || "Failed to delete series");
-            }
-
-            setSeriesList((prev) => prev.filter((item) => item.id !== sid));
-            if (seriesId === sid) {
-                setSeriesId("");
-                setSeriesTitle("");
-                setSeriesLockedHosts(false);
-                setSeriesLockedStyle(false);
-            }
-            setToast({
-                type: "success",
-                message: deleteEpisodes
-                    ? "Series and all episodes deleted."
-                    : "Series deleted. Episodes are kept as standalone.",
-            });
-            setTimeout(() => setToast(null), 2600);
-        } catch (e) {
-            setToast({
-                type: "error",
-                message: e?.message || "Could not delete series.",
-            });
-            setTimeout(() => setToast(null), 2600);
-        } finally {
-            setSeriesDeletingId("");
         }
     };
 
@@ -1297,77 +1305,10 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                 : t("create.defaults.podcastEpisode")),
         [showTitle, episodeTitle, scriptStyle, speakersCount, styleLabelMap, t]
     );
-    // ... all your existing state and useEffect hooks ...
 
-// Add this function here, before the return statement
-const exportScriptAsPDF = async () => {
-  try {
-    if (!generatedScript) {
-      setToast({ type: "error", message: "No script content to export!" });
-      setTimeout(() => setToast(null), 3000);
-      return;
-    }
 
-    // Dynamically import jsPDF and autoTable
-    const jsPDF = (await import("jspdf")).default;
-    const autoTable = (await import("jspdf-autotable")).default;
-    
-    const doc = new jsPDF();
-    
-    // Title
-    doc.setFontSize(20);
-    doc.setTextColor(40, 40, 40);
-    doc.text(showTitle || "Podcast Script", 20, 20);
-    
-    // Metadata
-    doc.setFontSize(10);
-    doc.setTextColor(100, 100, 100);
-    doc.text(`Exported on: ${new Date().toLocaleString()}`, 20, 30);
-    doc.text(`WeCast Podcast Script - ${scriptStyle || "Standard"} Style`, 20, 35);
-    
-    // Parse script lines
-    const lines = generatedScript.split(/\r?\n/).filter(line => line.trim());
-    
-    const tableData = [];
-    lines.forEach(line => {
-      const colonIndex = line.indexOf(":");
-      if (colonIndex > 0) {
-        const speaker = line.substring(0, colonIndex).trim();
-        const text = line.substring(colonIndex + 1).trim();
-        tableData.push([speaker, text]);
-      } else {
-        tableData.push(["", line]);
-      }
-    });
-    
-    // Create table
-    autoTable(doc, {
-      head: [["Speaker", "Dialogue"]],
-      body: tableData,
-      startY: 45,
-      styles: { fontSize: 10, cellPadding: 3 },
-      headStyles: { fillColor: [147, 51, 234], textColor: 255 },
-      alternateRowStyles: { fillColor: [245, 245, 245] },
-      columnStyles: {
-        0: { fontStyle: 'bold', cellWidth: 40 },
-        1: { cellWidth: 'auto' }
-      }
-    });
-    
-    // Save the PDF
-    const fileName = `${(showTitle || "podcast_script").replace(/[^a-z0-9]/gi, '_').toLowerCase()}_script.pdf`;
-    doc.save(fileName);
-    
-    setToast({ type: "success", message: "Script exported successfully!" });
-    setTimeout(() => setToast(null), 3000);
-    
-  } catch (error) {
-    console.error("Error exporting script:", error);
-    setToast({ type: "error", message: "Failed to export script. Please try again." });
-    setTimeout(() => setToast(null), 3000);
-  }
-};
-  return (
+
+    return (
         <div className="min-h-screen bg-cream dark:bg-[#0a0a0a]">
             <div className="h-2 bg-purple-gradient" />
             <main className="w-full max-w-[1400px] mx-auto px-6 py-10">
@@ -1474,59 +1415,34 @@ const exportScriptAsPDF = async () => {
                                             ? seriesId === s.id
                                             : !!seriesTitle && seriesTitle === s.title;
                                         return (
-                                        <div
+                                        <button
                                             key={s.id}
+                                            type="button"
+                                            onClick={() => {
+                                                    setSeriesId(s.id || "");
+                                                    setSeriesTitle(s.title || "");
+                                                    setNewSeriesTitle("");
+                                                }}
                                             className={`w-full rounded-xl border p-4 text-left transition ${
                                                 selected
                                                     ? "border-purple-400/70 bg-purple-500/10"
                                                     : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
                                             } ${isRTL ? "text-right" : "text-left"}`}
                                         >
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    setSeriesId(s.id || "");
-                                                    setSeriesTitle(s.title || "");
-                                                    setNewSeriesTitle("");
-                                                }}
-                                                className="w-full text-left"
-                                            >
-                                                <div className="flex items-center justify-between gap-2">
-                                                    <span className="font-semibold text-black dark:text-white">
-                                                        {s.title || t("create.series.untitled")}
+                                            <div className="flex items-center justify-between gap-2">
+                                                <span className="font-semibold text-black dark:text-white">
+                                                    {s.title || t("create.series.untitled")}
+                                                </span>
+                                                {selected && (
+                                                    <span className="text-xs text-purple-500 flex items-center gap-1">
+                                                        <Check className="w-3 h-3" /> {t("create.common.selected")}
                                                     </span>
-                                                    {selected && (
-                                                        <span className="text-xs text-purple-500 flex items-center gap-1">
-                                                            <Check className="w-3 h-3" /> {t("create.common.selected")}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                <p className="mt-1 text-xs text-black/60 dark:text-white/60">
-                                                    {t("create.series.episodes", { count: s.episodeCount || 0 })}
-                                                </p>
-                                            </button>
-
-                                            <div className="mt-3 flex flex-wrap gap-2">
-                                                <button
-                                                    type="button"
-                                                    disabled={seriesDeletingId === s.id}
-                                                    onClick={() => handleDeleteSeries(s, false)}
-                                                    className="inline-flex items-center gap-1 rounded-lg border border-red-200 dark:border-red-800/60 px-2.5 py-1.5 text-xs text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-60"
-                                                >
-                                                    <Trash2 className="w-3.5 h-3.5" />
-                                                    Delete Series
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    disabled={seriesDeletingId === s.id}
-                                                    onClick={() => handleDeleteSeries(s, true)}
-                                                    className="inline-flex items-center gap-1 rounded-lg border border-red-300 dark:border-red-700 px-2.5 py-1.5 text-xs font-semibold text-red-800 dark:text-red-200 hover:bg-red-100 dark:hover:bg-red-900/30 disabled:opacity-60"
-                                                >
-                                                    <Trash2 className="w-3.5 h-3.5" />
-                                                    Delete Series + Episodes
-                                                </button>
+                                                )}
                                             </div>
-                                        </div>
+                                            <p className="mt-1 text-xs text-black/60 dark:text-white/60">
+                                                {t("create.series.episodes", { count: s.episodeCount || 0 })}
+                                            </p>
+                                        </button>
                                     );
                                     })}
                                         {!seriesList.length && !seriesLoading && (
@@ -1802,150 +1718,167 @@ const exportScriptAsPDF = async () => {
                                                             return (
                                                                 <div className="flex items-center gap-3">
                                                                     {/* Filters dropdown (per speaker) */}
-                                                                        {(() => {
-                                                                        const f = speakerVoiceFilters[i] || {
-                                                                            open: false,
-                                                                            q: "",
-                                                                            language: "",
-                                                                            tone: "",
-                                                                            pitch: "",
-                                                                        };
+                                                                    {(() => {
+                                                                    const f = speakerVoiceFilters[i] || {
+                                                                        open: false,
+                                                                        q: "",
+                                                                        language: "",
+                                                                        tone: "",
+                                                                        pitch: "",
+                                                                    };
 
-                                                                        // Collect options dynamically from voices list
-                                                                        const languageOptions = Array.from(
-                                                                            new Set(
-                                                                            voices
-                                                                                .flatMap((v) => (Array.isArray(v.languages) ? v.languages : []))
-                                                                                .map((x) => String(x).trim())
-                                                                                .filter(Boolean)
-                                                                            )
-                                                                        ).sort();
+                                                                    const setF = (patch) =>
+                                                                        setSpeakerVoiceFilters((prev) => ({
+                                                                        ...prev,
+                                                                        [i]: { ...prev[i], ...patch },
+                                                                        }));
 
-                                                                        const toneOptions = Array.from(
-                                                                            new Set(
-                                                                            voices
-                                                                                .flatMap((v) => (Array.isArray(v.tone) ? v.tone : []))
-                                                                                .map((x) => String(x).trim())
-                                                                                .filter(Boolean)
-                                                                            )
-                                                                        ).sort();
+                                                                    const languageOptions = Array.from(
+                                                                        new Set(
+                                                                        voices
+                                                                            .flatMap((v) => (Array.isArray(v.languages) ? v.languages : []))
+                                                                            .map((x) => String(x).trim())
+                                                                            .filter(Boolean)
+                                                                        )
+                                                                    ).sort();
 
-                                                                        const pitchOptions = Array.from(
-                                                                            new Set(
-                                                                            voices
-                                                                                .map((v) => String(v.pitch || "").trim())
-                                                                                .filter(Boolean)
-                                                                            )
-                                                                        ).sort();
+                                                                    const toneOptions = Array.from(
+                                                                        new Set(
+                                                                        voices
+                                                                            .flatMap((v) => (Array.isArray(v.tone) ? v.tone : []))
+                                                                            .map((x) => String(x).trim())
+                                                                            .filter(Boolean)
+                                                                        )
+                                                                    ).sort();
 
-                                                                        const setF = (patch) =>
-                                                                            setSpeakerVoiceFilters((prev) => ({
-                                                                            ...prev,
-                                                                            [i]: { ...prev[i], ...patch },
-                                                                            }));
+                                                                    const pitchOptions = Array.from(
+                                                                        new Set(voices.map((v) => String(v.pitch || "").trim()).filter(Boolean))
+                                                                    ).sort();
 
-                                                                        return (
-                                                                            <div className="mb-3">
-                                                                            <button
+                                                                    const hasActive =
+                                                                        !!String(f.q || "").trim() || !!f.language || !!f.tone || !!f.pitch;
+
+                                                                    return (
+                                                                        <>
+                                                                    <button
+                                                                    type="button"
+                                                                    disabled={isHostLocked}
+                                                                    onClick={() => setF({ open: true })}
+                                                                    className={`relative inline-flex items-center justify-center h-[44px] w-[44px] rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 transition
+                                                                        ${isHostLocked ? "opacity-60 cursor-not-allowed" : "hover:bg-black/5 dark:hover:bg-white/5"}`}
+                                                                    aria-label={t("create.speakers.filters")}
+                                                                    title={t("create.speakers.filters")}
+                                                                    >
+                                                                    <SlidersHorizontal className="w-5 h-5" />
+
+                                                                    {/* active dot */}
+                                                                    {hasActive ? (
+                                                                        <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-purple-600 ring-2 ring-white dark:ring-neutral-900" />
+                                                                    ) : null}
+                                                                    </button>
+
+
+                                                                        <Modal
+                                                                            open={!!f.open && !isHostLocked}
+                                                                            title={t("create.speakers.filters")}
+                                                                            onClose={() => setF({ open: false })}
+                                                                            isRTL={isRTL}
+                                                                            footer={
+                                                                            <>
+                                                                                <button
                                                                                 type="button"
-                                                                                disabled={isHostLocked}
-                                                                                onClick={() => setF({ open: !f.open })}
-                                                                                className={`inline-flex items-center gap-2 px-4 h-[40px] rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-sm font-semibold transition ${isHostLocked ? "opacity-60 cursor-not-allowed" : "hover:bg-black/5 dark:hover:bg-white/5"}`}
-                                                                            >
-                                                                                {t("create.speakers.filters")}
-                                                                                <span className="text-xs opacity-70">
-                                                                                {f.q || f.language || f.tone || f.pitch ? t("create.common.active") : ""}
-                                                                                </span>
-                                                                            </button>
+                                                                                onClick={() => setF({ q: "", language: "", tone: "", pitch: "" })}
+                                                                                className="px-4 h-[42px] rounded-xl border border-neutral-300 dark:border-neutral-700 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                                                                >
+                                                                                {t("create.speakers.clearFilters")}
+                                                                                </button>
 
-                                                                            {f.open && !isHostLocked && (
-                                                                                <div className="mt-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 p-3 shadow-sm">
-                                                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                                                                    {/* Search */}
-                                                                                    <div>
-                                                                                    <label className="form-label">{t("create.speakers.search")}</label>
-                                                                                    <input
-                                                                                        value={f.q}
-                                                                                        onChange={(e) => setF({ q: e.target.value })}
-                                                                                        placeholder={t("create.speakers.searchPlaceholder")}
-                                                                                        className="form-input"
-                                                                                    />
-                                                                                    </div>
-
-                                                                                    {/* Language */}
-                                                                                    <div>
-                                                                                    <label className="form-label">{t("create.speakers.language")}</label>
-                                                                                    <select
-                                                                                        value={f.language}
-                                                                                        onChange={(e) => setF({ language: e.target.value })}
-                                                                                        className="form-input"
-                                                                                    >
-                                                                                        <option value="">{t("create.speakers.allLanguages")}</option>
-                                                                                        {languageOptions.map((lang) => (
-                                                                                        <option key={lang} value={lang}>
-                                                                                            {lang}
-                                                                                        </option>
-                                                                                        ))}
-                                                                                    </select>
-                                                                                    </div>
-
-                                                                                    {/* Tone */}
-                                                                                    <div>
-                                                                                    <label className="form-label">{t("create.speakers.tone")}</label>
-                                                                                    <select
-                                                                                        value={f.tone}
-                                                                                        onChange={(e) => setF({ tone: e.target.value })}
-                                                                                        className="form-input"
-                                                                                    >
-                                                                                        <option value="">{t("create.speakers.allTones")}</option>
-                                                                                        {toneOptions.map((t) => (
-                                                                                        <option key={t} value={t}>
-                                                                                            {t}
-                                                                                        </option>
-                                                                                        ))}
-                                                                                    </select>
-                                                                                    </div>
-
-                                                                                    {/* Pitch */}
-                                                                                    <div>
-                                                                                    <label className="form-label">{t("create.speakers.pitch")}</label>
-                                                                                    <select
-                                                                                        value={f.pitch}
-                                                                                        onChange={(e) => setF({ pitch: e.target.value })}
-                                                                                        className="form-input"
-                                                                                    >
-                                                                                        <option value="">{t("create.speakers.allPitches")}</option>
-                                                                                        {pitchOptions.map((p) => (
-                                                                                        <option key={p} value={p}>
-                                                                                            {p}
-                                                                                        </option>
-                                                                                        ))}
-                                                                                    </select>
-                                                                                    </div>
-                                                                                </div>
-
-                                                                                <div className="mt-3 flex items-center justify-between">
-                                                                                    <button
-                                                                                    type="button"
-                                                                                    onClick={() => setF({ q: "", language: "", tone: "", pitch: "" })}
-                                                                                    className="px-4 h-[38px] rounded-xl border border-neutral-300 dark:border-neutral-700 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition"
-                                                                                    >
-                                                                                    {t("create.speakers.clearFilters")}
-                                                                                    </button>
-
-                                                                                    <button
-                                                                                    type="button"
-                                                                                    onClick={() => setF({ open: false })}
-                                                                                    className="px-4 h-[38px] rounded-xl border border-purple-500 text-purple-600 text-sm font-semibold hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
-                                                                                    >
-                                                                                    {t("create.common.done")}
-                                                                                    </button>
-                                                                                </div>
-                                                                                </div>
-                                                                            )}
+                                                                                <button
+                                                                                type="button"
+                                                                                onClick={() => setF({ open: false })}
+                                                                                className="px-4 h-[42px] rounded-xl bg-purple-600 text-white text-sm font-semibold hover:opacity-95 transition"
+                                                                                >
+                                                                                {t("create.common.done")}
+                                                                                </button>
+                                                                            </>
+                                                                            }
+                                                                        >
+                                                                            <div className="grid grid-cols-1 gap-4">
+                                                                            {/* Search */}
+                                                                            <div>
+                                                                                <label className="form-label">{t("create.speakers.search")}</label>
+                                                                                <input
+                                                                                value={f.q}
+                                                                                onChange={(e) => setF({ q: e.target.value })}
+                                                                                placeholder={t("create.speakers.searchPlaceholder")}
+                                                                                className="form-input"
+                                                                                />
                                                                             </div>
-                                                                        );
-                                                                        })()}
+
+                                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                                                {/* Language */}
+                                                                                <div>
+                                                                                <label className="form-label">{t("create.speakers.language")}</label>
+                                                                                <select
+                                                                                    value={f.language}
+                                                                                    onChange={(e) => setF({ language: e.target.value })}
+                                                                                    className="form-input"
+                                                                                >
+                                                                                    <option value="">{t("create.speakers.allLanguages")}</option>
+                                                                                    {languageOptions.map((lang) => (
+                                                                                    <option key={lang} value={lang}>
+                                                                                        {lang}
+                                                                                    </option>
+                                                                                    ))}
+                                                                                </select>
+                                                                                </div>
+
+                                                                                {/* Tone */}
+                                                                                <div>
+                                                                                <label className="form-label">{t("create.speakers.tone")}</label>
+                                                                                <select
+                                                                                    value={f.tone}
+                                                                                    onChange={(e) => setF({ tone: e.target.value })}
+                                                                                    className="form-input"
+                                                                                >
+                                                                                    <option value="">{t("create.speakers.allTones")}</option>
+                                                                                    {toneOptions.map((tone) => (
+                                                                                    <option key={tone} value={tone}>
+                                                                                        {tone}
+                                                                                    </option>
+                                                                                    ))}
+                                                                                </select>
+                                                                                </div>
+
+                                                                                {/* Pitch */}
+                                                                                <div className="md:col-span-2">
+                                                                                <label className="form-label">{t("create.speakers.pitch")}</label>
+                                                                                <select
+                                                                                    value={f.pitch}
+                                                                                    onChange={(e) => setF({ pitch: e.target.value })}
+                                                                                    className="form-input"
+                                                                                >
+                                                                                    <option value="">{t("create.speakers.allPitches")}</option>
+                                                                                    {pitchOptions.map((p) => (
+                                                                                    <option key={p} value={p}>
+                                                                                        {p}
+                                                                                    </option>
+                                                                                    ))}
+                                                                                </select>
+                                                                                </div>
+                                                                            </div>
+
+                                                                            {/* Optional: small hint */}
+                                                                            <p className="text-xs text-black/60 dark:text-white/60">
+                                                                                {pool?.length
+                                                                                ? t("create.speakers.filteredCount", { count: pool.length })
+                                                                                : ""}
+                                                                            </p>
+                                                                            </div>
+                                                                        </Modal>
+                                                                        </>
+                                                                    );
+                                                                    })()}
                                                                     <select
                                                                         dir={isRTL ? "rtl" : "ltr"}
                                                                         disabled={isHostLocked}
@@ -1990,34 +1923,46 @@ const exportScriptAsPDF = async () => {
                                                                     </select>
 
                                                                     <button
-                                                                        type="button"
-                                                                        disabled={isHostLocked}
-                                                                        onClick={() => {
-                                                                            const selected =
-                                                                                pool.find(
-                                                                                    (v) => v.id === currentId
-                                                                                ) || pool[0];
-                                                                            if (selected?.preview_url) {
-                                                                                const audio = new Audio(
-                                                                                    selected.preview_url
-                                                                                );
-                                                                                audio
-                                                                                    .play()
-                                                                                    .catch((err) =>
-                                                                                        console.error(
-                                                                                            t("create.speakers.previewFailed"),
-                                                                                            err
-                                                                                        )
-                                                                                    );
-                                                                            } else {
-                                                                                alert(
-                                                                                    t("create.speakers.noPreviewAvailable")
-                                                                                );
-                                                                            }
-                                                                        }}
-                                                                        className={`inline-flex items-center justify-center gap-2 px-5 h-[44px] rounded-xl border border-purple-500 text-purple-600 font-semibold transition ${isHostLocked ? "opacity-60 cursor-not-allowed" : "hover:bg-purple-50 dark:hover:bg-purple-900/20"} ${isRTL ? "flex-row-reverse" : ""}`}
+                                                                    type="button"
+                                                                    disabled={isHostLocked}
+                                                                    onClick={async () => {
+                                                                    const voiceId = sp.voiceId; 
+                                                                    if (!voiceId) {
+                                                                        alert(t("create.speakers.selectVoice"));
+                                                                        return;
+                                                                    }
+
+                                                                    try {
+                                                                        const res = await fetch(`${API_BASE}/api/voices/preview`, {
+                                                                        method: "POST",
+                                                                        credentials: "include",
+                                                                        headers: { "Content-Type": "application/json" },
+                                                                        body: JSON.stringify({
+                                                                            voiceId,
+                                                                            text: "Hello, this is a WeCast voice preview.",
+                                                                        }),
+                                                                        });
+
+                                                                        if (!res.ok) {
+                                                                        const err = await res.json().catch(() => ({}));
+                                                                        alert(err?.error || "Preview failed");
+                                                                        return;
+                                                                        }
+
+                                                                        const blob = await res.blob();
+                                                                        const url = URL.createObjectURL(blob);
+                                                                        const audio = new Audio(url);
+                                                                        await audio.play();
+                                                                    } catch (e) {
+                                                                        console.error(e);
+                                                                        alert("Preview failed");
+                                                                    }
+                                                                    }}
+                                                                    className={`inline-flex items-center justify-center gap-2 px-5 h-[44px] rounded-xl border border-purple-500 text-purple-600 font-semibold transition ${
+                                                                        isHostLocked ? "opacity-60 cursor-not-allowed" : "hover:bg-purple-50 dark:hover:bg-purple-900/20"
+                                                                    } ${isRTL ? "flex-row-reverse" : ""}`}
                                                                     >
-                                                                        {t("create.common.preview")} <Play className="w-4 h-4" />
+                                                                    {t("create.common.preview")} <Play className="w-4 h-4" />
                                                                     </button>
                                                                 </div>
                                                             );
@@ -2112,108 +2057,102 @@ const exportScriptAsPDF = async () => {
 
 
                     {/* STEP 4: REVIEW & EDIT */}
-                 {/* STEP 4: REVIEW & EDIT */}
-{step === 4 && generatedScript && (
-   <section className="ui-card">
-    {/* Header with title and export button on opposite sides */}
-    <div className="flex items-center justify-between mb-4">
-        <h2 className="ui-card-title flex items-center gap-2">
-            <Edit className="w-4 h-4" />
-            {t("create.step4.reviewTitle")}
-        </h2>
-        
-        {/* Export PDF Button - positioned on the right side */}
-        <button
-            onClick={exportScriptAsPDF}
-            disabled={!generatedScript}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200 text-sm font-medium
-                     shadow-sm hover:shadow disabled:opacity-50 disabled:cursor-not-allowed
-                     bg-purple-600 hover:bg-purple-700 text-white`}
-            title="Export script as PDF"
-        >
-            <Download className="w-3.5 h-3.5" />
-            <span>Export as PDF</span>
-        </button>
-    </div>
-
-    <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800 mb-6">
-        <h3 className="text-xl font-bold text-green-700 dark:text-green-300 mb-4 flex items-center gap-2">
-            <Check className="w-5 h-5" /> {t("create.step4.scriptGeneratedTitle")}
-        </h3>
-
-            {/* Script Information ABOVE the script */}
-            <div className="bg-white dark:bg-neutral-800 rounded-xl p-4 mb-4">
-                <h4 className="font-semibold mb-3 text-black dark:text-white">
-                    {t("create.step4.scriptInfoTitle")}
-                </h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                    <div>
-                        <p>
-                            <strong>{t("create.step4.style")}:</strong> {styleLabelMap[scriptStyle] || scriptStyle}
-                        </p>
-                        <p>
-                            <strong>{t("create.step4.speakers")}:</strong> {speakersCount}
-                        </p>
-                        <p>
-                            <strong>{t("create.step4.totalWords")}:</strong>{" "}
-                            {generatedScript.split(/\s+/).filter(Boolean).length}
-                        </p>
-                    </div>
-                    <div>
-                        <p>
-                            <strong>{t("create.step4.speakerRoles")}:</strong>{" "}
-                            {speakers.map((s) => roleLabelFor(s.role)).join(", ")}
-                        </p>
-                        <p>
-                            <strong>{t("create.step4.status")}:</strong> {t("create.step4.readyForAudio")}
-                        </p>
-                    </div>
-                </div>
-            </div>
-
-            {/* Script Preview*/}
-            <div className="bg-white dark:bg-neutral-800 rounded-xl p-4">
-                <div className="flex items-center justify-between mb-3">
-                    <h4 className="font-semibold text-black dark:text-white">
-                        {t("create.step4.scriptPreview")}
-                    </h4>
-                </div>
-                
-                <div className="whitespace-pre-wrap text-sm text-black/80 dark:text-white/80 leading-relaxed max-h-96 overflow-y-auto">
-                    {displayedScript}
-                </div>
-            </div>
-        </div>
-
-        {/* Action Buttons */}
-        <div className="flex justify-between items-center">
+                    {step === 4 && generatedScript && (
+                        <section className="ui-card">
+                            {/* Header with title and export button on opposite sides */}
+        <div className="flex items-center justify-between mb-4">
+            <h2 className="ui-card-title flex items-center gap-2">
+                <Edit className="w-4 h-4" />
+                {t("create.step4.reviewTitle")}
+            </h2>
+            
+            {/* Export PDF Button */}
             <button
-                onClick={() => {
-                    // go back to text step and allow regeneration
-                    setStep(3);
-                }}
-                className="px-4 py-2 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
+                onClick={exportScriptAsPDF}
+                disabled={!generatedScript}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200 text-sm font-medium shadow-sm hover:shadow disabled:opacity-50 disabled:cursor-not-allowed bg-purple-600 hover:bg-purple-700 text-white"
+                title="Export script as PDF"
             >
-                {t("create.common.backToText")}
+                <Download className="w-3.5 h-3.5" />
+                <span>Export as PDF</span>
             </button>
-
-            <div className="flex gap-3">
-                <button
-                    onClick={navigateToEdit}
-                    className="px-4 py-2 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
-                >
-                    {t("create.step4.editInEditor")}
-                </button>
-                <button
-                    onClick={() => setStep(5)}
-                    className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
-                >
-                    {t("create.common.continueToMusic")} <ChevronRight className={`w-4 h-4 ${isRTL ? "rotate-180" : ""}`} />
-                </button>
-            </div>
         </div>
-    </section>
-)}
+
+                            <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800 mb-6">
+                                <h3 className="text-xl font-bold text-green-700 dark:text-green-300 mb-4 flex items-center gap-2">
+                                    <Check className="w-5 h-5" /> {t("create.step4.scriptGeneratedTitle")}
+                                </h3>
+
+                                {/* Script Information ABOVE the script */}
+                                <div className="bg-white dark:bg-neutral-800 rounded-xl p-4 mb-4">
+                                    <h4 className="font-semibold mb-3 text-black dark:text-white">
+                                        {t("create.step4.scriptInfoTitle")}
+                                    </h4>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                                        <div>
+                                            <p>
+                                                <strong>{t("create.step4.style")}:</strong> {styleLabelMap[scriptStyle] || scriptStyle}
+                                            </p>
+                                            <p>
+                                                <strong>{t("create.step4.speakers")}:</strong> {speakersCount}
+                                            </p>
+                                            <p>
+                                                <strong>{t("create.step4.totalWords")}:</strong>{" "}
+                                                {generatedScript.split(/\s+/).filter(Boolean).length}
+                                            </p>
+                                        </div>
+                                        <div>
+                                            <p>
+                                                <strong>{t("create.step4.speakerRoles")}:</strong>{" "}
+                                                {speakers.map((s) => roleLabelFor(s.role)).join(", ")}
+                                            </p>
+                                            <p>
+                                                <strong>{t("create.step4.status")}:</strong> {t("create.step4.readyForAudio")}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Script Preview */}
+                                <div className="bg-white dark:bg-neutral-800 rounded-xl p-4">
+                                    <h4 className="font-semibold mb-3 text-black dark:text-white">
+                                        {t("create.step4.scriptPreview")}
+                                    </h4>
+                                    <div className="whitespace-pre-wrap text-sm text-black/80 dark:text-white/80 leading-relaxed max-h-96 overflow-y-auto">
+                                        {displayedScript}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Action Buttons */}
+                            <div className="flex justify-between items-center">
+                                <button
+                                    onClick={() => {
+                                        // go back to text step and allow regeneration
+                                        setStep(3);
+                                    }}
+                                    className="px-4 py-2 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                >
+                                    {t("create.common.backToText")}
+                                </button>
+
+                                <div className="flex gap-3">
+                                    <button
+                                        onClick={navigateToEdit}
+                                        className="px-4 py-2 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                    >
+                                        {t("create.step4.editInEditor")}
+                                    </button>
+                                    <button
+                                        onClick={() => setStep(5)}
+                                        className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
+                                    >
+                                        {t("create.common.continueToMusic")} <ChevronRight className={`w-4 h-4 ${isRTL ? "rotate-180" : ""}`} />
+                                    </button>
+                                </div>
+                            </div>
+                        </section>
+                    )}
                     {/* STEP 5: TRANSITION MUSIC */}
                     {step === 5 && (
                         <section className="ui-card">
@@ -2561,3 +2500,4 @@ const exportScriptAsPDF = async () => {
         </div >
     );
 }
+
