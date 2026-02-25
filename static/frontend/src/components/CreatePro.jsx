@@ -973,6 +973,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
             sessionStorage.setItem("wecast_preview", JSON.stringify(previewPayload));
 
             setGeneratedAudio(baseAudioUrl + "?t=" + Date.now());
+            window.location.hash = `#/finalize?podcastId=${podcastId}`;
 
             setToast({
             type: "success",
@@ -992,6 +993,18 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
         }
         };
 
+const goToFinalize = () => {
+  const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
+  const podcastId = editData.podcastId;
+
+  if (!podcastId) {
+    setToast({ type: "error", message: t("create.errors.missingPodcastId") });
+    setTimeout(() => setToast(null), 2800);
+    return;
+  }
+
+  window.location.hash = `#/finalize?podcastId=${podcastId}`;
+};
 
     const navigateToEdit = () => {
         if (!generatedScript) {
@@ -2452,15 +2465,10 @@ const exportScriptAsPDF = async () => {
                                                 {t("create.step6.regenerateAudio")}
                                             </button>
                                             <button
-                                                onClick={() => {
-        let editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
-        let podcastId = editData.podcastId;
-                                                window.location.hash = podcastId ? `#/preview?id=${podcastId}` : "#/preview";
-                                                }}
-
-                                                className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                            onClick={goToFinalize}
+                                            className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
                                             >
-                                                {t("create.step6.openEpisode")}
+                                            Finalize & Publish
                                             </button>
 
                                             <button

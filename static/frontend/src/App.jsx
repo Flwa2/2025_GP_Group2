@@ -15,6 +15,8 @@ import EditScript from "./components/EditScript";
 import Create from "./components/CreatePro";
 import Preview from "./components/Preview";
 import Episodes from "./components/Episodes";
+import FinalizePublish from "./components/FinalizePublish";
+
 
 
 function isAuthenticated() {
@@ -41,6 +43,7 @@ export default function App() {
   const isEdit = hash.startsWith('#/edit');
   const isPreview = hash.startsWith("#/preview");
   const isEpisodes = hash.startsWith("#/episodes");
+  const isFinalize = hash.startsWith("#/finalize");
 
   useEffect(() => {
     const sectionLinks = ['#about', '#episodes'];
@@ -79,7 +82,9 @@ export default function App() {
           <EditScript />
         ) : isEpisodes ? (
           <Episodes />
-        ) : isPreview ? (
+        ) : isFinalize ? (
+          <FinalizePublish />
+        ) :isPreview ? (
           <Preview />
         ) : (
           <>

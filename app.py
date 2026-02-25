@@ -26,6 +26,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 import jwt
 from firebase_init import db  
+from PIL import Image, UnidentifiedImageError
+import json
 
 print("🔍 DEBUG in app.py:", db)
 
@@ -658,6 +660,7 @@ Script:
 
     return title
 
+
 def fallback_time_split_chapters(word_timeline, language: str = "en"):
     if not word_timeline:
         return []
@@ -1014,6 +1017,271 @@ def api_voice_preview():
         return jsonify(error=f"ElevenLabs error {r.status_code}", voice_id=voice_id, details=r.text[:800]), 502
 
     return Response(r.content, mimetype="audio/mpeg")
+
+def _require_login_user():
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return None, (jsonify(error="Not logged in"), 401)
+    return user_id, None
+
+
+def _assert_podcast_owner(podcast_id: str, user_id: str):
+    ref = db.collection("podcasts").document(podcast_id)
+    doc = ref.get()
+    if not doc.exists:
+        return None, (jsonify(error="Podcast not found"), 404)
+
+    pdata = doc.to_dict() or {}
+    if pdata.get("userId") != user_id:
+        return None, (jsonify(error="Forbidden"), 403)
+
+    return pdata, None
+
+
+def _get_draft_for(podcast_id: str):
+    draft = session.get("create_draft") or {}
+    # Safety: only return the draft if it matches the podcastId
+    if draft.get("podcastId") != podcast_id:
+        return {}
+    return draft
+
+
+def _set_draft_for(podcast_id: str, updates: dict):
+    draft = session.get("create_draft") or {}
+    if draft.get("podcastId") != podcast_id:
+        # If the draft isn't for this podcast, create a minimal draft entry
+        draft = {"podcastId": podcast_id}
+    draft.update(updates)
+    session["create_draft"] = draft
+    session.modified = True
+
+
+def _validate_image_bytes(image_bytes: bytes, min_size: int = 512):
+    try:
+        img = Image.open(BytesIO(image_bytes))
+        img.verify()  # verify file integrity
+    except UnidentifiedImageError:
+        return False, "Unsupported image format. Please upload PNG/JPG."
+    except Exception:
+        return False, "Invalid image file."
+
+    # reopen after verify
+    img = Image.open(BytesIO(image_bytes))
+    w, h = img.size
+
+    if w < min_size or h < min_size:
+        return False, f"Image too small. Minimum is {min_size}x{min_size}px."
+
+    # We won’t force square (can crop on frontend). But you can enforce if you want:
+    # if w != h: return False, "Please upload a square image (1:1)."
+
+    return True, {"width": w, "height": h, "format": (img.format or "").upper()}
+
+
+def _build_cover_prompt(title: str, style: str, language: str, description: str, extra: str = ""):
+    lang_hint = "Arabic" if language == "ar" else "English"
+
+    # IMPORTANT: no text on image (title is shown in UI, not baked into art)
+    return f"""
+Create a professional podcast cover art image.
+
+Context:
+- Episode title: "{title}"
+- Podcast style: {style or "Conversational"}
+- Language context: {lang_hint}
+
+Design requirements:
+- Square composition (1:1), podcast-platform friendly
+- Modern, clean, high contrast, minimal clutter
+- A single strong focal concept + abstract shapes related to the topic
+- Do NOT include readable text, letters, numbers, logos, or watermarks
+- Avoid photorealistic faces; prefer abstract/illustrative/graphic styles
+
+Topic description:
+{description[:1200]}
+
+Optional direction:
+{extra}
+""".strip()
+
+
+def _generate_cover_b64(prompt: str, size: str = "1024x1024") -> str:
+    """
+    Uses OpenAI Images API (gpt-image-1) and returns base64 PNG.
+    """
+    img = client.images.generate(
+        model="gpt-image-1",
+        prompt=prompt,
+        size=size,
+    )
+    return img.data[0].b64_json
+
+@app.get("/api/podcasts/<podcast_id>/finalize")
+def api_finalize_get(podcast_id):
+    user_id, err = _require_login_user()
+    if err:
+        return err
+
+    pdata, err = _assert_podcast_owner(podcast_id, user_id)
+    if err:
+        return err
+
+    draft = _get_draft_for(podcast_id)
+    cover_b64 = draft.get("coverArtBase64")
+    cover_meta = draft.get("coverArtMeta") or {}
+    title = draft.get("title") or pdata.get("title") or "Untitled Episode"
+
+    return jsonify(
+        ok=True,
+        podcastId=podcast_id,
+        title=title,
+        coverArtBase64=cover_b64,
+        coverArtMeta=cover_meta,
+    )
+
+@app.post("/api/podcasts/<podcast_id>/cover/generate")
+def api_cover_generate(podcast_id):
+    user_id, err = _require_login_user()
+    if err:
+        return err
+
+    pdata, err = _assert_podcast_owner(podcast_id, user_id)
+    if err:
+        return err
+
+    payload = request.get_json(silent=True) or {}
+
+    # prefer the latest title (payload -> session draft -> firestore)
+    draft = _get_draft_for(podcast_id)
+    title = (payload.get("title") or draft.get("title") or pdata.get("title") or "Untitled Episode").strip()
+
+    # topic text: prefer session description, otherwise fetch from Firestore script
+    description = (payload.get("description") or draft.get("description") or "").strip()
+    if not description:
+        try:
+            sdoc = db.collection("podcasts").document(podcast_id).collection("scripts").document("main").get()
+            if sdoc.exists:
+                sdata = sdoc.to_dict() or {}
+                description = (sdata.get("sourceText") or sdata.get("finalScriptText") or "")[:2000]
+        except Exception:
+            description = ""
+
+    style = (payload.get("style") or draft.get("script_style") or pdata.get("style") or "Conversational").strip()
+    language = (payload.get("language") or draft.get("language") or pdata.get("language") or "en").strip().lower()
+    extra = (payload.get("direction") or "").strip()  # optional: "blue palette", "minimal", etc.
+
+    prompt = _build_cover_prompt(title=title, style=style, language=language, description=description, extra=extra)
+
+    try:
+        b64 = _generate_cover_b64(prompt, size="1024x1024")
+    except Exception as e:
+        print("Cover generation error:", e)
+        return jsonify(error="Failed to generate cover art"), 500
+
+    # Save to SESSION ONLY (no storage yet)
+    _set_draft_for(podcast_id, {
+        "coverArtBase64": b64,
+        "coverArtMeta": {"generatedAt": datetime.utcnow().isoformat(), "source": "openai"},
+        "title": title,  # keep title synced for step 7
+    })
+
+    return jsonify(ok=True, podcastId=podcast_id, coverArtBase64=b64)
+
+@app.post("/api/podcasts/<podcast_id>/cover/upload")
+@app.post("/api/podcasts/<podcast_id>/cover/upload")
+def api_cover_upload(podcast_id):
+    user_id, err = _require_login_user()
+    if err:
+        return err
+
+    _, err = _assert_podcast_owner(podcast_id, user_id)
+    if err:
+        return err
+
+    if "file" not in request.files:
+        return jsonify(error="Missing file"), 400
+
+    f = request.files["file"]
+    image_bytes = f.read()
+    if not image_bytes:
+        return jsonify(error="Empty file"), 400
+
+    ok, info = _validate_image_bytes(image_bytes, min_size=512)
+    if not ok:
+        return jsonify(error=info), 400
+
+    mimeType = "image/png" if info["format"] == "PNG" else "image/jpeg"
+
+    # Encode to base64 for session storage + frontend display
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+    _set_draft_for(podcast_id, {
+        "coverArtBase64": b64,
+        "coverArtMeta": {
+            "uploadedAt": datetime.utcnow().isoformat(),
+            "source": "upload",
+            "width": info["width"],
+            "height": info["height"],
+            "format": info["format"],
+            "mimeType": mimeType,   
+        },
+    })
+
+    return jsonify(
+        ok=True,
+        podcastId=podcast_id,
+        coverArtBase64=b64,
+        mimeType=mimeType,   
+        meta=info
+    )
+
+@app.post("/api/podcasts/<podcast_id>/title")
+def api_podcast_update_title(podcast_id):
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    ref = db.collection("podcasts").document(podcast_id)
+    doc = ref.get()
+    if not doc.exists:
+        return jsonify(error="Podcast not found"), 404
+
+    pdata = doc.to_dict() or {}
+    if pdata.get("userId") != user_id:
+        return jsonify(error="Forbidden"), 403
+
+    payload = request.get_json(silent=True) or {}
+    title = (payload.get("title") or "").strip()
+    if not title:
+        return jsonify(error="Title is required"), 400
+
+    ref.set(
+        {"title": title, "lastEditedAt": firestore.SERVER_TIMESTAMP},
+        merge=True
+    )
+
+    # also keep session draft in sync if it’s the same podcast
+    draft = session.get("create_draft") or {}
+    if draft.get("podcastId") == podcast_id:
+        draft["title"] = title
+        draft["show_title"] = title
+        session["create_draft"] = draft
+        session.modified = True
+
+    return jsonify(ok=True, podcastId=podcast_id, title=title)
+
+@app.post("/api/podcasts/<podcast_id>/cover/clear")
+def api_cover_clear(podcast_id):
+    user_id, err = _require_login_user()
+    if err:
+        return err
+
+    _, err = _assert_podcast_owner(podcast_id, user_id)
+    if err:
+        return err
+
+    _set_draft_for(podcast_id, {"coverArtBase64": None, "coverArtMeta": {}})
+    return jsonify(ok=True)
 
 @app.get("/api/me")
 def api_me():

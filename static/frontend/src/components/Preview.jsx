@@ -107,6 +107,13 @@ export default function Preview() {
   const [seriesTitle, setSeriesTitle] = useState("");
   const [episodeNumber, setEpisodeNumber] = useState(null);
   const [summaryLoadedFromDb, setSummaryLoadedFromDb] = useState(false);
+  const [coverB64, setCoverB64] = useState(null);
+  const [coverMime, setCoverMime] = useState("image/png");
+
+  const coverSrc = useMemo(() => {
+    if (!coverB64) return null;
+    return `data:${coverMime};base64,${coverB64}`;
+  }, [coverB64, coverMime]);
 
   const transcriptRef = useRef(null);
   const activeWordRef = useRef(null);
@@ -165,6 +172,8 @@ export default function Preview() {
     setWords([]);
     setAudioUrl("");
     setTitle("");
+    setCoverB64(null);
+    setCoverMime("image/png");
     setSeriesTitle("");
     setEpisodeNumber(null);
 
@@ -221,8 +230,26 @@ export default function Preview() {
       } catch {}
     };
 
+    const loadCover = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/podcasts/${episodeId}/finalize`, {
+          credentials: "include",
+        });
+        const data = await res.json();
+        if (!res.ok) return;
+
+        if (!isMounted) return;
+
+        setCoverB64(data.coverArtBase64 || null);
+
+        const meta = data.coverArtMeta || {};
+        setCoverMime(meta.mimeType || "image/png");
+      } catch {}
+    };
+
     loadEpisode();
     loadTranscript();
+    loadCover();
 
     return () => {
       isMounted = false;
@@ -472,7 +499,24 @@ export default function Preview() {
         <div className="flex items-center justify-between">
           <div>
           <div className="flex flex-wrap items-center gap-3 justify-between">
-            <h1 className="text-3xl font-extrabold">{t("preview.title")}</h1>
+            <div className="flex items-center gap-4">
+              {coverSrc ? (
+                <img
+                  src={coverSrc}
+                  alt="Cover"
+                  className="w-16 h-16 rounded-2xl object-cover border border-black/10"
+                />
+              ) : null}
+
+            <div>
+                <h1 className="text-3xl font-extrabold leading-tight">
+                  {displayTitle}
+                </h1>
+                <p className="text-sm text-black/60 dark:text-white/60">
+                  {t("preview.subtitle")}
+                </p>
+              </div>
+            </div>
             {seriesTitle && episodeNumber ? (
               <span className="inline-flex items-center gap-2 rounded-full border border-purple-200 bg-purple-50 px-3 py-1 text-xs font-semibold text-purple-700">
                 {seriesTitle}

@@ -83,3 +83,4 @@ httpx<0.28
 elevenlabs
 firebase-admin
 pydub
+Pillow
