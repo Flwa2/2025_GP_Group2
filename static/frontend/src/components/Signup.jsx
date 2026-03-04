@@ -15,17 +15,19 @@ function getRedirectParams() {
     return {
         redirect: params.get("redirect") || "",
         id: params.get("id") || "",
+        from: params.get("from") || "",
     };
 }
 
 function redirectAfterAuth() {
-    const { redirect, id } = getRedirectParams();
+    const { redirect, id, from } = getRedirectParams();
     if (redirect === "edit") {
         window.location.hash = "#/edit";
     } else if (redirect === "create") {
         window.location.hash = "#/create";
     } else if (redirect === "preview") {
-        window.location.hash = id ? `#/preview?id=${id}` : "#/preview";
+        const fromSuffix = from ? `&from=${encodeURIComponent(from)}` : "";
+        window.location.hash = id ? `#/preview?id=${id}${fromSuffix}` : `#/preview${from ? `?from=${encodeURIComponent(from)}` : ""}`;
     } else {
         window.location.hash = "#/";
     }

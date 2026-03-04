@@ -6,11 +6,39 @@
 body {
   margin: 0;
   padding: 0;
-  font-family: 'Manrope', sans-serif;
+  font-family: "Plus Jakarta Sans", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.5;
+  color: #111827;
 }
 
 html {
   scroll-behavior: smooth;
+}
+
+[dir="rtl"] body {
+  font-family: "IBM Plex Sans Arabic", "Plus Jakarta Sans", "Segoe UI", Tahoma, Arial, sans-serif;
+}
+
+.app-main {
+  position: relative;
+  padding-bottom: 0;
+}
+
+/* Preview Pattern B: only transcript body scrolls internally */
+.preview-layout-grid {
+  align-items: start;
+}
+
+.preview-left-stack,
+.preview-right-stack {
+  align-self: start;
+}
+
+@media (min-width: 1024px) {
+  .preview-main-area {
+    max-height: calc(100dvh - 11rem);
+    overflow: visible;
+  }
 }
 
 /* Custom circular motion animations */
@@ -126,6 +154,48 @@ html {
   display: inline-block;
   transform: rotate(-3deg);
   letter-spacing: 1px;
+}
+
+@layer components {
+  .section-shell {
+    @apply mx-auto w-full max-w-[1280px] px-4 sm:px-6 lg:px-10;
+  }
+
+  .section-block {
+    @apply py-14 sm:py-16 lg:py-20;
+  }
+
+  .heading-xl {
+    @apply text-3xl font-extrabold leading-tight sm:text-4xl lg:text-5xl;
+  }
+
+  .heading-lg {
+    @apply text-2xl font-extrabold leading-tight sm:text-3xl lg:text-4xl;
+  }
+
+  .heading-md {
+    @apply text-xl font-bold leading-snug sm:text-2xl;
+  }
+
+  .body-lg {
+    @apply text-lg leading-relaxed sm:text-xl;
+  }
+
+  .body-md {
+    @apply text-base leading-relaxed sm:text-lg;
+  }
+
+  .body-sm {
+    @apply text-sm leading-relaxed;
+  }
+
+  .btn-primary {
+    @apply inline-flex h-11 items-center justify-center rounded-xl border border-black bg-black px-6 text-base font-semibold text-white transition-colors duration-200 hover:bg-black/90 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-black/20 dark:border-white dark:bg-white dark:text-black dark:hover:bg-gray-100 dark:focus-visible:ring-white/20;
+  }
+
+  .btn-secondary {
+    @apply inline-flex h-11 items-center justify-center rounded-xl border border-black/15 bg-white px-6 text-base font-semibold text-neutral-900 transition-colors duration-200 hover:bg-neutral-100 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-neutral-300/40 dark:border-white/15 dark:bg-neutral-900/80 dark:text-white dark:hover:bg-white/10 dark:focus-visible:ring-white/20;
+  }
 }
 
 @layer components {
@@ -264,3 +334,4 @@ html {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 .animate-spin-slow { animation: spin 2.2s linear infinite; }
+

@@ -1,4 +1,4 @@
-# app.py
+﻿# app.py
 
 from flask import (
     Flask,
@@ -21,15 +21,15 @@ import os
 import re
 import requests
 import base64
-from firebase_admin import firestore
+from firebase_admin import firestore, storage
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import jwt
-from firebase_init import db  
+from firebase_init import db, get_storage_bucket
 from PIL import Image, UnidentifiedImageError
 import json
 
-print("🔍 DEBUG in app.py:", db)
+print("DEBUG in app.py:", db)
 
 SHOW_TITLE_PLACEHOLDER = "{{SHOW_TITLE}}"
 # ------------------------------------------------------------
@@ -89,7 +89,7 @@ if ffmpeg_path and os.path.exists(ffmpeg_path):
     ffmpeg_dir = os.path.dirname(ffmpeg_path)
     os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
 else:
-    print("⚠️ ffmpeg_path missing or invalid")
+    print("âڑ ï¸ڈ ffmpeg_path missing or invalid")
 
 if ffprobe_path and os.path.exists(ffprobe_path):
     AudioSegment.ffprobe = ffprobe_path
@@ -97,7 +97,7 @@ if ffprobe_path and os.path.exists(ffprobe_path):
     if ffprobe_dir not in os.environ.get("PATH", ""):
         os.environ["PATH"] = ffprobe_dir + os.pathsep + os.environ.get("PATH", "")
 else:
-    print("⚠️ ffprobe_path missing or invalid")
+    print("âڑ ï¸ڈ ffprobe_path missing or invalid")
 
 print("DEBUG AudioSegment.converter:", getattr(AudioSegment, "converter", None))
 print("DEBUG AudioSegment.ffprobe:", getattr(AudioSegment, "ffprobe", None))
@@ -105,6 +105,7 @@ print("DEBUG PATH starts with:", os.environ["PATH"].split(os.pathsep)[0])
 
 
 app.secret_key = app.config["SECRET_KEY"]
+RECYCLE_BIN_RETENTION_DAYS = int(os.getenv("RECYCLE_BIN_RETENTION_DAYS", "30"))
 
 
 
@@ -149,6 +150,35 @@ if not ELEVENLABS_API_KEY:
     )
 
 voice_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+
+def _chat_completion_with_fallback(messages, temperature=0.7, models=None):
+    """
+    Try multiple OpenAI chat models in order and return the first success.
+    """
+    model_candidates = models or [
+        os.getenv("OPENAI_CHAT_MODEL", "").strip() or "gpt-4o",
+        os.getenv("OPENAI_CHAT_FALLBACK_MODEL", "").strip() or "gpt-4o-mini",
+    ]
+
+    seen = set()
+    ordered = []
+    for m in model_candidates:
+        if m and m not in seen:
+            ordered.append(m)
+            seen.add(m)
+
+    errors = []
+    for model in ordered:
+        try:
+            return client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+            )
+        except Exception as e:
+            errors.append(f"{model}: {e}")
+
+    raise RuntimeError(" | ".join(errors) if errors else "No OpenAI chat model configured")
 
 
 # ------------------------------------------------------------
@@ -233,58 +263,9 @@ def build_transcript_text_with_speakers(words):
 
     return "".join(parts).strip()
 
-def extract_host_speakers(speakers_info):
-    hosts = []
-    for s in speakers_info or []:
-        role = str(s.get("role") or "").strip().lower()
-        if role in ("host", "cohost", "narrator"):
-            hosts.append({
-                "name": (s.get("name") or "").strip(),
-                "gender": (s.get("gender") or "").strip(),
-                "role": (s.get("role") or "").strip(),
-                "providerVoiceId": (s.get("voiceId") or s.get("providerVoiceId") or "").strip(),
-            })
-    return hosts
-
-
-def increment_series_episode(series_ref):
-    txn = db.transaction()
-
-    @firestore.transactional
-    def _increment(txn):
-        snap = series_ref.get(transaction=txn)
-        if not snap.exists:
-            return None, ""
-        data = snap.to_dict() or {}
-        current = int(data.get("episodeCount") or 0)
-        next_count = current + 1
-        txn.update(series_ref, {
-            "episodeCount": next_count,
-            "updatedAt": firestore.SERVER_TIMESTAMP,
-        })
-        return next_count, data.get("title") or ""
-
-    return _increment(txn)
-
-
-def create_series_for_user(user_id: str, title: str):
-    series_ref = db.collection("series").document()
-    now = firestore.SERVER_TIMESTAMP
-    series_ref.set({
-        "userId": user_id,
-        "title": title,
-        "style": "",
-        "hostSpeakers": [],
-        "episodeCount": 0,
-        "createdAt": now,
-        "updatedAt": now,
-    })
-    return series_ref.id
-
-
 def save_generated_podcast_to_firestore(user_id: str, title: str, script_style: str,
                                        description: str, script: str, speakers_info: list,
-                                       language: str = "", series_id: str = ""):
+                                       language: str = ""):
     # 1) Create the podcast doc with an auto-ID
     podcast_ref = db.collection("podcasts").document()
     podcast_id = podcast_ref.id
@@ -298,6 +279,7 @@ def save_generated_podcast_to_firestore(user_id: str, title: str, script_style: 
     podcast_ref.set({
         "userId": user_id,
         "title": title or "Untitled Episode",
+        "description": description,
         "language": lang,
         "style": script_style,
         "speakersCount": len(speakers_info or []),
@@ -327,34 +309,7 @@ def save_generated_podcast_to_firestore(user_id: str, title: str, script_style: 
         "lastEditedAt": now,
     })
 
-    episode_number = None
-    series_title = ""
-
-    if series_id:
-        series_ref = db.collection("series").document(series_id)
-        sdoc = series_ref.get()
-        if sdoc.exists:
-            sdata = sdoc.to_dict() or {}
-            if sdata.get("userId") == user_id:
-                series_updates = {}
-                if not sdata.get("style") and script_style:
-                    series_updates["style"] = script_style
-                if not sdata.get("hostSpeakers"):
-                    hosts = extract_host_speakers(speakers_info)
-                    if hosts:
-                        series_updates["hostSpeakers"] = hosts
-                if series_updates:
-                    series_updates["updatedAt"] = now
-                    series_ref.set(series_updates, merge=True)
-
-                episode_number, series_title = increment_series_episode(series_ref)
-                podcast_ref.set({
-                    "seriesId": series_id,
-                    "seriesTitle": series_title,
-                    "episodeNumber": episode_number,
-                }, merge=True)
-
-    return podcast_id, episode_number, series_title
+    return podcast_id
 
 def generate_podcast_script(description: str, speakers_info: list, script_style: str):
     """Generate a structured podcast script where ALL speakers talk,
@@ -372,10 +327,10 @@ def generate_podcast_script(description: str, speakers_info: list, script_style:
             --------------------
             INTRO
             --------------------
-            - يجب أن تكون أول جملة منطوقة في المقدمة من المقدم الرئيسي (أول متحدث في القائمة).
-    - يجب أن تحتوي هذه الجملة على {{SHOW_TITLE}} حرفيًا داخل علامات اقتباس، مثال:
-    <اسم_المقدم>: مرحبًا بكم في حلقة جديدة من "{{SHOW_TITLE}}".
-    - بعد هذه الجملة، أكمل المقدمة بتقديم الموضوع والمتحدثين بشكل طبيعي.
+            - ظٹط¬ط¨ ط£ظ† طھظƒظˆظ† ط£ظˆظ„ ط¬ظ…ظ„ط© ظ…ظ†ط·ظˆظ‚ط© ظپظٹ ط§ظ„ظ…ظ‚ط¯ظ…ط© ظ…ظ† ط§ظ„ظ…ظ‚ط¯ظ… ط§ظ„ط±ط¦ظٹط³ظٹ (ط£ظˆظ„ ظ…طھط­ط¯ط« ظپظٹ ط§ظ„ظ‚ط§ط¦ظ…ط©).
+    - ظٹط¬ط¨ ط£ظ† طھط­طھظˆظٹ ظ‡ط°ظ‡ ط§ظ„ط¬ظ…ظ„ط© ط¹ظ„ظ‰ {{SHOW_TITLE}} ط­ط±ظپظٹظ‹ط§ ط¯ط§ط®ظ„ ط¹ظ„ط§ظ…ط§طھ ط§ظ‚طھط¨ط§ط³طŒ ظ…ط«ط§ظ„:
+    <ط§ط³ظ…_ط§ظ„ظ…ظ‚ط¯ظ…>: ظ…ط±ط­ط¨ظ‹ط§ ط¨ظƒظ… ظپظٹ ط­ظ„ظ‚ط© ط¬ط¯ظٹط¯ط© ظ…ظ† "{{SHOW_TITLE}}".
+    - ط¨ط¹ط¯ ظ‡ط°ظ‡ ط§ظ„ط¬ظ…ظ„ط©طŒ ط£ظƒظ…ظ„ ط§ظ„ظ…ظ‚ط¯ظ…ط© ط¨طھظ‚ط¯ظٹظ… ط§ظ„ظ…ظˆط¶ظˆط¹ ظˆط§ظ„ظ…طھط­ط¯ط«ظٹظ† ط¨ط´ظƒظ„ ط·ط¨ظٹط¹ظٹ.
     """
     else:
             intro_block = """
@@ -402,28 +357,28 @@ def generate_podcast_script(description: str, speakers_info: list, script_style:
     # Style guidelines used in prompt
     style_guidelines = {
         "Interview": """
-• Tone: Professional, journalistic.
-• Flow: Host asks, guest answers.
-• Turn-taking: MUST alternate speakers.
-• Goal: Insightful conversation.
+â€¢ Tone: Professional, journalistic.
+â€¢ Flow: Host asks, guest answers.
+â€¢ Turn-taking: MUST alternate speakers.
+â€¢ Goal: Insightful conversation.
 """,
         "Storytelling": """
-• Tone: Cinematic and narrative.
-• Flow: Story with emotional beats.
-• Turn-taking: All speakers appear in intro, body, outro.
-• Goal: Immersive storytelling.
+â€¢ Tone: Cinematic and narrative.
+â€¢ Flow: Story with emotional beats.
+â€¢ Turn-taking: All speakers appear in intro, body, outro.
+â€¢ Goal: Immersive storytelling.
 """,
         "Educational": """
-• Tone: Clear and helpful.
-• Flow: Explain → clarify → examples.
-• Turn-taking: Host + guests engage.
-• Goal: Learn through dialogue.
+â€¢ Tone: Clear and helpful.
+â€¢ Flow: Explain â†’ clarify â†’ examples.
+â€¢ Turn-taking: Host + guests engage.
+â€¢ Goal: Learn through dialogue.
 """,
         "Conversational": """
-• Tone: Friendly and natural.
-• Flow: Co-host casual conversation.
-• Turn-taking: Hosts react and alternate often.
-• Goal: Feel like real conversation.
+â€¢ Tone: Friendly and natural.
+â€¢ Flow: Co-host casual conversation.
+â€¢ Turn-taking: Hosts react and alternate often.
+â€¢ Goal: Feel like real conversation.
 """,
     }
 
@@ -487,8 +442,8 @@ OUTRO
 - Sound cues must be inside square brackets.
 - Keep the script natural and flowing.
 
-SPEAKER RULES (MANDATORY — DO NOT VIOLATE):
-- Speaker Interaction Rule: When a speaker replies, they should naturally reference the other speaker's label when appropriate during conversation. Speakers MUST address each other using the exact labels provided (example: if speakers are x and v, then the script may contain: "That’s interesting, v." or "What do you think, x?").
+SPEAKER RULES (MANDATORY â€” DO NOT VIOLATE):
+- Speaker Interaction Rule: When a speaker replies, they should naturally reference the other speaker's label when appropriate during conversation. Speakers MUST address each other using the exact labels provided (example: if speakers are x and v, then the script may contain: "Thatâ€™s interesting, v." or "What do you think, x?").
 - Keep speaker labels EXACTLY as written in the input (example: ga, ha, sp, user, narrator).
 - Do NOT rename, modify, expand, substitute, or invent new speaker names.
 - If the original text contains: "ga:", "ha:" or any label format, use them EXACTLY.
@@ -500,19 +455,19 @@ TRANSITION SPEECH RULES (VERY IMPORTANT):
 
 - The sentence immediately BEFORE a [music] tag must sound like a natural ending, conclusion, or pause. 
 - Do NOT end abruptly. End with tone markers such as:
-  • a reflective closing thought
-  • a conversational wrap-up
-  • a gentle shift phrase such as:
+  â€¢ a reflective closing thought
+  â€¢ a conversational wrap-up
+  â€¢ a gentle shift phrase such as:
       "We'll continue right after this..."
       "More on that in a moment."
       "Let's pause for a second."
 
 - The FIRST sentence after a [music] tag must feel like a fresh beginning or a smooth re-entry. 
 - Use natural re-entry language like:
-      "Welcome back—"
-      "Now let’s continue—"
-      "Picking up where we left off—"
-      "So now—"
+      "Welcome backâ€”"
+      "Now letâ€™s continueâ€”"
+      "Picking up where we left offâ€”"
+      "So nowâ€”"
 
 - DO NOT be robotic or repetitive. 
 - Tone must feel intentional, confident, and designed for audio.
@@ -527,8 +482,7 @@ Transform the following text into a structured podcast script:
 """
 
     # ---- Call GPT ----
-    response = client.chat.completions.create(
-        model="gpt-4o",
+    response = _chat_completion_with_fallback(
         messages=[
             {
                 "role": "system",
@@ -548,7 +502,7 @@ Transform the following text into a structured podcast script:
 
     if PLACEHOLDER not in raw_script:
         m = re.search(
-            r"(episode of\s+[\"“'«])(.+?)([\"”'»])",
+            r"(episode of\s+[\"â€œ'آ«])(.+?)([\"â€‌'آ»])",
             raw_script,
             flags=re.IGNORECASE,
         )
@@ -558,7 +512,7 @@ Transform the following text into a structured podcast script:
 
     if PLACEHOLDER not in raw_script and is_arabic(raw_script):
         m = re.search(
-            r"(?:حلقة جديدة من|حلقة من|من)\s*[\"“«](.+?)[\"”»]",
+            r"(?:ط­ظ„ظ‚ط© ط¬ط¯ظٹط¯ط© ظ…ظ†|ط­ظ„ظ‚ط© ظ…ظ†|ظ…ظ†)\s*[\"â€œآ«](.+?)[\"â€‌آ»]",
             raw_script,
         )
         if m:
@@ -566,7 +520,7 @@ Transform the following text into a structured podcast script:
             raw_script = raw_script.replace(bad_title, PLACEHOLDER, 1)
 
     # ============================================================
-    # 🧹 CLEAN ONLY BAD LINES — DO NOT DELETE MAIN SCRIPT
+    # ًں§¹ CLEAN ONLY BAD LINES â€” DO NOT DELETE MAIN SCRIPT
     # ============================================================
     cleaned_lines = []
     for ln in raw_script.splitlines():
@@ -592,7 +546,7 @@ Transform the following text into a structured podcast script:
 
 
 def generate_title_from_script(script: str, script_style: str = "") -> str:
-    """Generate a short, catchy podcast episode title (4–8 words)."""
+    """Generate a short, catchy podcast episode title (4â€“8 words)."""
 
     text = script or ""
     if not text.strip():
@@ -600,32 +554,32 @@ def generate_title_from_script(script: str, script_style: str = "") -> str:
 
     # Detect language from the script itself
     is_ar = is_arabic(text)
-    style_label = script_style or ("تعليمي" if is_ar else "General")
+    style_label = script_style or ("طھط¹ظ„ظٹظ…ظٹ" if is_ar else "General")
 
     if is_ar:
         # Arabic title instructions
         prompt = f"""
-أنت كاتب عناوين لبودكاست.
+ط£ظ†طھ ظƒط§طھط¨ ط¹ظ†ط§ظˆظٹظ† ظ„ط¨ظˆط¯ظƒط§ط³طھ.
 
-اكتب عنوانًا واحدًا قصيرًا وجذابًا لحلقة بودكاست
-مكوّنًا من ٤ إلى ٨ كلمات تقريبًا.
+ط§ظƒطھط¨ ط¹ظ†ظˆط§ظ†ظ‹ط§ ظˆط§ط­ط¯ظ‹ط§ ظ‚طµظٹط±ظ‹ط§ ظˆط¬ط°ط§ط¨ظ‹ط§ ظ„ط­ظ„ظ‚ط© ط¨ظˆط¯ظƒط§ط³طھ
+ظ…ظƒظˆظ‘ظ†ظ‹ط§ ظ…ظ† ظ¤ ط¥ظ„ظ‰ ظ¨ ظƒظ„ظ…ط§طھ طھظ‚ط±ظٹط¨ظ‹ط§.
 
-القواعد:
-- العنوان باللغة العربية فقط.
-- لا تضع أرقام للحلقات.
-- لا تستخدم علامات اقتباس أو إيموجي.
-- أعد سطرًا واحدًا يحتوي على العنوان فقط بدون أي شرح إضافي.
+ط§ظ„ظ‚ظˆط§ط¹ط¯:
+- ط§ظ„ط¹ظ†ظˆط§ظ† ط¨ط§ظ„ظ„ط؛ط© ط§ظ„ط¹ط±ط¨ظٹط© ظپظ‚ط·.
+- ظ„ط§ طھط¶ط¹ ط£ط±ظ‚ط§ظ… ظ„ظ„ط­ظ„ظ‚ط§طھ.
+- ظ„ط§ طھط³طھط®ط¯ظ… ط¹ظ„ط§ظ…ط§طھ ط§ظ‚طھط¨ط§ط³ ط£ظˆ ط¥ظٹظ…ظˆط¬ظٹ.
+- ط£ط¹ط¯ ط³ط·ط±ظ‹ط§ ظˆط§ط­ط¯ظ‹ط§ ظٹط­طھظˆظٹ ط¹ظ„ظ‰ ط§ظ„ط¹ظ†ظˆط§ظ† ظپظ‚ط· ط¨ط¯ظˆظ† ط£ظٹ ط´ط±ط­ ط¥ط¶ط§ظپظٹ.
 
-نمط الحلقة: {style_label}
+ظ†ظ…ط· ط§ظ„ط­ظ„ظ‚ط©: {style_label}
 
-النص:
+ط§ظ„ظ†طµ:
 \"\"\"{text[:4000]}\"\"\"        
 """
     else:
         prompt = f"""
 You are an assistant helping to name a podcast episode.
 
-Write ONE short, catchy podcast episode title in 4–8 words.
+Write ONE short, catchy podcast episode title in 4â€“8 words.
 
 Style: {style_label}
 
@@ -640,8 +594,7 @@ Script:
 \"\"\"{text[:4000]}\"\"\"        
 """
 
-    resp = client.chat.completions.create(
-        model="gpt-4o",
+    resp = _chat_completion_with_fallback(
         messages=[
             {
                 "role": "system",
@@ -653,10 +606,10 @@ Script:
     )
 
     title = (resp.choices[0].message.content or "").strip()
-    title = title.strip('"“”«»').strip()
+    title = title.strip('"â€œâ€‌آ«آ»').strip()
 
     if not title:
-        return "حلقة بدون عنوان" if is_ar else "Untitled Episode"
+        return "ط­ظ„ظ‚ط© ط¨ط¯ظˆظ† ط¹ظ†ظˆط§ظ†" if is_ar else "Untitled Episode"
 
     return title
 
@@ -697,8 +650,8 @@ Transcript:
 Split this podcast transcript into podcast chapters for a player.
 Return 5 to 7 chapters.
 For each chapter:
-- title: short (2–6 words)
-- anchor: a short phrase (4–12 words) that appears in the transcript and starts that section (must be nearly exact text)
+- title: short (2â€“6 words)
+- anchor: a short phrase (4â€“12 words) that appears in the transcript and starts that section (must be nearly exact text)
 
 Return JSON only:
 {{"chapters":[{{"title":"...","anchor":"..."}}, ...]}}
@@ -750,7 +703,7 @@ def build_chapters(word_timeline, transcript_text, language="en"):
 
     chapters.sort(key=lambda x: x["startSec"])
 
-    # Guardrails: must be “actual chapters”
+    # Guardrails: must be â€œactual chaptersâ€‌
     # If fewer than 5 chapters, fallback to deterministic time split
     if len(chapters) < 5:
         chapters = fallback_time_split_chapters(word_timeline, language=language)
@@ -764,25 +717,25 @@ def validate_roles(style: str, speakers_info: list):
     if style == "Interview":
         return (
             roles in [["host", "guest"], ["host", "host", "guest"]],
-            "For 'Interview' style, valid setups: 1 host → 1 guest or 2 hosts → 1 guest.",
+            "For 'Interview' style, valid setups: 1 host â†’ 1 guest or 2 hosts â†’ 1 guest.",
         )
 
     if style == "Storytelling":
         return (
             roles in [["host"], ["host", "guest"], ["host", "guest", "guest"]],
-            "For 'Storytelling' style, valid setups: 1 host solo, 1 host → 1 guest, or 1 host → 2 guests.",
+            "For 'Storytelling' style, valid setups: 1 host solo, 1 host â†’ 1 guest, or 1 host â†’ 2 guests.",
         )
 
     if style == "Educational":
         return (
             roles in [["host"], ["host", "guest"], ["host", "guest", "guest"]],
-            "For 'Educational' style, valid setups: 1 host solo, 1 host → 1 guest, or 1 host → 2 guests.",
+            "For 'Educational' style, valid setups: 1 host solo, 1 host â†’ 1 guest, or 1 host â†’ 2 guests.",
         )
 
     if style == "Conversational":
         return (
             roles in [["host", "host"], ["host", "host", "host"]],
-            "For 'Conversational', use 2–3 hosts (no guests).",
+            "For 'Conversational', use 2â€“3 hosts (no guests).",
         )
 
     return (True, "")
@@ -1072,7 +1025,7 @@ def _validate_image_bytes(image_bytes: bytes, min_size: int = 512):
     if w < min_size or h < min_size:
         return False, f"Image too small. Minimum is {min_size}x{min_size}px."
 
-    # We won’t force square (can crop on frontend). But you can enforce if you want:
+    # We wonâ€™t force square (can crop on frontend). But you can enforce if you want:
     # if w != h: return False, "Please upload a square image (1:1)."
 
     return True, {"width": w, "height": h, "format": (img.format or "").upper()}
@@ -1115,6 +1068,89 @@ def _generate_cover_b64(prompt: str, size: str = "1024x1024") -> str:
         size=size,
     )
     return img.data[0].b64_json
+
+
+def _cover_ext_from_mime(mime_type: str) -> str:
+    mt = (mime_type or "").lower()
+    if mt == "image/jpeg":
+        return "jpg"
+    if mt == "image/webp":
+        return "webp"
+    return "png"
+
+
+def _make_cover_thumb_b64(image_bytes: bytes, size: int = 256) -> str:
+    """
+    Create a small JPEG thumbnail base64 suitable for Firestore storage.
+    """
+    try:
+        img = Image.open(BytesIO(image_bytes)).convert("RGB")
+        img.thumbnail((size, size))
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=78, optimize=True)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+    except Exception:
+        return ""
+
+
+def _persist_cover_to_storage_and_doc(podcast_id: str, cover_b64: str, mime_type: str = "image/png"):
+    """
+    Persist cover image to Firebase Storage when possible, and always store
+    a compact DB thumbnail fallback (coverThumbB64) for Episodes cards.
+    Returns: (cover_url, storage_path, thumb_b64, persist_error)
+    """
+    if not cover_b64:
+        return "", "", "", "missing_cover_data"
+
+    img_bytes = base64.b64decode(cover_b64)
+    thumb_b64 = _make_cover_thumb_b64(img_bytes)
+    ext = _cover_ext_from_mime(mime_type)
+    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    storage_path = f"covers/{podcast_id}/{ts}.{ext}"
+
+    bucket = get_storage_bucket()
+    bucket_name = (getattr(bucket, "name", "") or "").strip()
+    candidates = [bucket_name] if bucket_name else []
+    if bucket_name.endswith(".appspot.com"):
+        candidates.append(bucket_name.replace(".appspot.com", ".firebasestorage.app"))
+    elif bucket_name.endswith(".firebasestorage.app"):
+        candidates.append(bucket_name.replace(".firebasestorage.app", ".appspot.com"))
+
+    last_err = None
+    cover_url = ""
+    used_bucket = ""
+    for bname in [x for x in candidates if x]:
+        try:
+            b = storage.bucket(bname)
+            blob = b.blob(storage_path)
+            blob.upload_from_string(img_bytes, content_type=mime_type)
+            # Signed URL (long-lived) avoids ACL/public-bucket requirements.
+            cover_url = blob.generate_signed_url(
+                expiration=timedelta(days=3650),
+                method="GET",
+            )
+            used_bucket = bname
+            break
+        except Exception as e:
+            last_err = e
+
+    db.collection("podcasts").document(podcast_id).set(
+        {
+            "coverUrl": cover_url,
+            "coverPath": storage_path,
+            "coverMimeType": mime_type,
+            "coverBucket": used_bucket,
+            "coverThumbB64": thumb_b64,
+            "coverUpdatedAt": firestore.SERVER_TIMESTAMP,
+        },
+        merge=True,
+    )
+
+    persist_error = ""
+    if not cover_url:
+        persist_error = f"storage_upload_failed buckets={candidates} last_error={last_err}"
+
+    return cover_url, storage_path, thumb_b64, persist_error
 
 @app.get("/api/podcasts/<podcast_id>/finalize")
 def api_finalize_get(podcast_id):
@@ -1176,16 +1212,38 @@ def api_cover_generate(podcast_id):
         b64 = _generate_cover_b64(prompt, size="1024x1024")
     except Exception as e:
         print("Cover generation error:", e)
-        return jsonify(error="Failed to generate cover art"), 500
+        return jsonify(error=f"Failed to generate cover art: {str(e)}"), 500
 
-    # Save to SESSION ONLY (no storage yet)
+    try:
+        cover_url, storage_path, thumb_b64, persist_error = _persist_cover_to_storage_and_doc(
+            podcast_id, b64, "image/png"
+        )
+    except Exception as e:
+        print("Cover persist error:", e)
+        return jsonify(error="Cover generated but failed to persist."), 500
+
+    # Keep session draft for immediate preview/finalize UI state.
     _set_draft_for(podcast_id, {
         "coverArtBase64": b64,
-        "coverArtMeta": {"generatedAt": datetime.utcnow().isoformat(), "source": "openai"},
+        "coverArtMeta": {
+            "generatedAt": datetime.utcnow().isoformat(),
+            "source": "openai",
+            "mimeType": "image/png",
+            "storagePath": storage_path,
+            "coverUrl": cover_url,
+            "persistError": persist_error,
+        },
         "title": title,  # keep title synced for step 7
     })
 
-    return jsonify(ok=True, podcastId=podcast_id, coverArtBase64=b64)
+    return jsonify(
+        ok=True,
+        podcastId=podcast_id,
+        coverArtBase64=b64,
+        coverUrl=cover_url,
+        coverThumbB64=thumb_b64,
+        warning=("Cover thumbnail saved; storage URL unavailable." if persist_error else ""),
+    )
 
 @app.post("/api/podcasts/<podcast_id>/cover/upload")
 @app.post("/api/podcasts/<podcast_id>/cover/upload")
@@ -1215,6 +1273,14 @@ def api_cover_upload(podcast_id):
     # Encode to base64 for session storage + frontend display
     b64 = base64.b64encode(image_bytes).decode("utf-8")
 
+    try:
+        cover_url, storage_path, thumb_b64, persist_error = _persist_cover_to_storage_and_doc(
+            podcast_id, b64, mimeType
+        )
+    except Exception as e:
+        print("Cover persist error:", e)
+        return jsonify(error="Cover uploaded but failed to persist."), 500
+
     _set_draft_for(podcast_id, {
         "coverArtBase64": b64,
         "coverArtMeta": {
@@ -1223,7 +1289,10 @@ def api_cover_upload(podcast_id):
             "width": info["width"],
             "height": info["height"],
             "format": info["format"],
-            "mimeType": mimeType,   
+            "mimeType": mimeType,
+            "storagePath": storage_path,
+            "coverUrl": cover_url,
+            "persistError": persist_error,
         },
     })
 
@@ -1231,8 +1300,11 @@ def api_cover_upload(podcast_id):
         ok=True,
         podcastId=podcast_id,
         coverArtBase64=b64,
-        mimeType=mimeType,   
-        meta=info
+        coverUrl=cover_url,
+        coverThumbB64=thumb_b64,
+        mimeType=mimeType,
+        meta=info,
+        warning=("Cover thumbnail saved; storage URL unavailable." if persist_error else ""),
     )
 
 @app.post("/api/podcasts/<podcast_id>/title")
@@ -1260,7 +1332,7 @@ def api_podcast_update_title(podcast_id):
         merge=True
     )
 
-    # also keep session draft in sync if it’s the same podcast
+    # also keep session draft in sync if itâ€™s the same podcast
     draft = session.get("create_draft") or {}
     if draft.get("podcastId") == podcast_id:
         draft["title"] = title
@@ -1279,6 +1351,28 @@ def api_cover_clear(podcast_id):
     _, err = _assert_podcast_owner(podcast_id, user_id)
     if err:
         return err
+
+    try:
+        pdata, _ = _assert_podcast_owner(podcast_id, user_id)
+        old_path = (pdata or {}).get("coverPath") or ""
+        if old_path:
+            bucket = get_storage_bucket()
+            blob = bucket.blob(old_path)
+            if blob.exists():
+                blob.delete()
+    except Exception as e:
+        print("Cover delete warning:", e)
+
+    db.collection("podcasts").document(podcast_id).set(
+        {
+            "coverUrl": "",
+            "coverPath": "",
+            "coverMimeType": "",
+            "coverThumbB64": "",
+            "coverUpdatedAt": firestore.SERVER_TIMESTAMP,
+        },
+        merge=True,
+    )
 
     _set_draft_for(podcast_id, {"coverArtBase64": None, "coverArtMeta": {}})
     return jsonify(ok=True)
@@ -1315,8 +1409,6 @@ def api_generate():
     speakers = int(data.get("speakers") or 0)
     speakers_info = data.get("speakers_info") or []
     description = (data.get("description") or "").strip()
-    series_id = (data.get("seriesId") or "").strip()
-    series_title = (data.get("seriesTitle") or "").strip()
     ui_language = (data.get("language") or "").strip().lower()
 
     ok, msg = validate_roles(script_style, speakers_info)
@@ -1329,13 +1421,21 @@ def api_generate():
     if len(description.split()) < 500:
         return jsonify(ok=False, error="Your text must be at least 500 words."), 400
 
-    script = generate_podcast_script(description, speakers_info, script_style)
+    try:
+        script = generate_podcast_script(description, speakers_info, script_style)
+    except Exception as e:
+        print("api_generate script error:", e)
+        return jsonify(ok=False, error=f"Script generation failed: {str(e)}"), 500
 
-    title = generate_title_from_script(script, script_style)
+    try:
+        title = generate_title_from_script(script, script_style)
+    except Exception as e:
+        print("api_generate title error:", e)
+        title = "Podcast Show"
 
     script_template = script  
     show_title = title or "Podcast Show"
-    # ✅ figure out user (prefer session)
+    # âœ… figure out user (prefer session)
     user_id = session.get("user_id")
     if not user_id:
         # fallback to JWT header if you want
@@ -1345,17 +1445,13 @@ def api_generate():
     if not user_id:
         return jsonify(ok=False, error="Not logged in."), 401
 
-    if not series_id and series_title:
-        series_id = create_series_for_user(user_id, series_title)
-
-    podcast_id, episode_number, series_title = save_generated_podcast_to_firestore(
+    podcast_id = save_generated_podcast_to_firestore(
         user_id=user_id,
         title=title,
         script_style=script_style,
         description=description,
         script=script_template,
         speakers_info=speakers_info,
-        series_id=series_id,
         language=ui_language,
     )
 
@@ -1369,13 +1465,10 @@ def api_generate():
         "script": script_template,
         "show_title": show_title,
         "title": title,
-        "seriesId": series_id,
-        "seriesTitle": series_title,
-        "episodeNumber": episode_number,
     }
 
 
-    return jsonify(ok=True, script=script_template, title=title, show_title=show_title, podcastId=podcast_id, seriesId=series_id, seriesTitle=series_title, episodeNumber=episode_number)
+    return jsonify(ok=True, script=script_template, title=title, show_title=show_title, podcastId=podcast_id)
 
 @app.get("/api/draft")
 def api_draft():
@@ -1383,63 +1476,6 @@ def api_draft():
     return jsonify(session.get("create_draft", {}))
 
 
-@app.get("/api/series")
-def api_series_list():
-    user_id = session.get("user_id") or get_current_user_email()
-    if not user_id:
-        return jsonify(error="Not logged in"), 401
-
-    query = db.collection("series").where("userId", "==", user_id)
-    items = []
-    for doc in query.stream():
-        data = doc.to_dict() or {}
-        items.append({**data, "id": doc.id})
-
-    return jsonify(items=items)
-
-
-@app.post("/api/series")
-def api_series_create():
-    user_id = session.get("user_id") or get_current_user_email()
-    if not user_id:
-        return jsonify(error="Not logged in"), 401
-
-    data = request.get_json(silent=True) or {}
-    title = (data.get("title") or "").strip()
-    if not title:
-        return jsonify(error="Series title is required"), 400
-
-    series_ref = db.collection("series").document()
-    now = firestore.SERVER_TIMESTAMP
-    series_ref.set({
-        "userId": user_id,
-        "title": title,
-        "style": "",
-        "hostSpeakers": [],
-        "episodeCount": 0,
-        "createdAt": now,
-        "updatedAt": now,
-    })
-
-    return jsonify(id=series_ref.id, title=title)
-
-
-@app.get("/api/series/<series_id>")
-def api_series_get(series_id):
-    user_id = session.get("user_id") or get_current_user_email()
-    if not user_id:
-        return jsonify(error="Not logged in"), 401
-
-    ref = db.collection("series").document(series_id)
-    doc = ref.get()
-    if not doc.exists:
-        return jsonify(error="Series not found"), 404
-
-    data = doc.to_dict() or {}
-    if data.get("userId") != user_id:
-        return jsonify(error="Forbidden"), 403
-
-    return jsonify({**data, "id": series_id})
 
 
 @app.get("/api/episodes")
@@ -1448,27 +1484,257 @@ def api_episodes_list():
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
+    def _clean_for_brief(text: str):
+        if not text:
+            return ""
+        lines = []
+        for raw_line in str(text).replace("\r", "\n").split("\n"):
+            line = raw_line.strip()
+            if not line:
+                continue
+            # Ignore section headers and stage directions.
+            if re.match(r"^(INTRO|BODY|OUTRO)\s*:?$", line, re.IGNORECASE):
+                continue
+            if re.match(r"^[\[\(].*[\]\)]$", line):
+                continue
+
+            # Convert "Speaker: text" to just "text" for a clean synopsis.
+            m = re.match(r"^[^:]{1,40}:\s+(.+)$", line)
+            if m:
+                line = m.group(1).strip()
+            lines.append(line)
+
+        return " ".join(lines)
+
+    def _short_brief(text: str, limit: int = 220):
+        raw = " ".join((_clean_for_brief(text) or "").split())
+        if not raw:
+            return ""
+        if len(raw) <= limit:
+            return raw
+
+        cutoff = raw[:limit]
+        punct_idx = max(cutoff.rfind("."), cutoff.rfind("!"), cutoff.rfind("?"))
+        if punct_idx >= 80:
+            return cutoff[: punct_idx + 1].rstrip()
+        return cutoff.rstrip() + "..."
+
+    def _has_arabic(text: str):
+        return bool(re.search(r"[\u0600-\u06FF]", text or ""))
+
+    def _choose_best_brief(candidates, prefer_arabic: bool):
+        usable = [c for c in candidates if (c or "").strip()]
+        if not usable:
+            return ""
+        if not prefer_arabic:
+            return usable[0]
+        for candidate in usable:
+            if _has_arabic(candidate):
+                return candidate
+        return usable[0]
+
+    def _coerce_datetime(value):
+        if isinstance(value, datetime):
+            return value
+        to_datetime = getattr(value, "to_datetime", None)
+        if callable(to_datetime):
+            try:
+                return to_datetime()
+            except Exception:
+                return None
+        return None
+
+    def _purge_episode_document(ref):
+        for sub_name in ("scripts", "speakers", "transcripts"):
+            try:
+                for sub_doc in ref.collection(sub_name).stream():
+                    sub_doc.reference.delete()
+            except Exception:
+                pass
+        ref.delete()
+
     query = db.collection("podcasts").where("userId", "==", user_id)
+    now_utc = datetime.now(timezone.utc)
+    recycle_cutoff = now_utc - timedelta(days=RECYCLE_BIN_RETENTION_DAYS)
     items = []
+    recycle_items = []
     for doc in query.stream():
         data = doc.to_dict() or {}
-        items.append({
-            "id": doc.id,
-            "title": data.get("title") or "Untitled Episode",
-            "seriesId": data.get("seriesId") or "",
-            "seriesTitle": data.get("seriesTitle") or "",
-            "episodeNumber": data.get("episodeNumber"),
-            "createdAt": data.get("createdAt"),
-        })
+        deleted_at = _coerce_datetime(data.get("deletedAt"))
+        if deleted_at and deleted_at.tzinfo is None:
+            deleted_at = deleted_at.replace(tzinfo=timezone.utc)
+        if deleted_at and deleted_at <= recycle_cutoff:
+            _purge_episode_document(doc.reference)
+            continue
 
-    return jsonify(items=items)
+        # Show only finalized/saved episodes.
+        # Legacy compatibility: older saved episodes may still carry status="draft"
+        # from historical flows, so we treat rich, finalized-looking records as saved.
+        status = str(data.get("status") or "").strip().lower()
+        if status == "deleted" and deleted_at:
+            is_saved = True
+            legacy_saved = False
+        else:
+            is_saved = status == "saved" or bool(data.get("savedAt"))
+            legacy_saved = (
+                status == "draft"
+                and bool(data.get("audioUrl"))
+                and bool(data.get("summary"))
+                and isinstance(data.get("chapters"), list)
+                and len(data.get("chapters")) > 0
+            )
+        if not (is_saved or legacy_saved):
+            continue
+
+        script_source = ""
+        script_final = ""
+        script_doc = (
+            db.collection("podcasts")
+            .document(doc.id)
+            .collection("scripts")
+            .document("main")
+            .get()
+        )
+        if script_doc.exists:
+            sdata = script_doc.to_dict() or {}
+            script_source = sdata.get("sourceText") or ""
+            script_final = sdata.get("finalScriptText") or ""
+
+        title = data.get("title") or ""
+        prefer_arabic_brief = _has_arabic(title) or (data.get("language") == "ar")
+        # Keep brief episode-specific first, and prefer Arabic text for Arabic episodes.
+        brief = _choose_best_brief(
+            [
+                data.get("summary") or "",
+                data.get("transcriptText") or "",
+                script_final,
+                script_source,
+                data.get("description") or "",
+            ],
+            prefer_arabic=prefer_arabic_brief,
+        )
+
+        payload = {
+            "id": doc.id,
+            "title": title or "Untitled Episode",
+            "brief": _short_brief(brief),
+            "audioUrl": data.get("audioUrl") or "",
+            "coverUrl": data.get("coverUrl") or "",
+            "coverThumbB64": data.get("coverThumbB64") or "",
+            "createdAt": data.get("createdAt"),
+        }
+
+        if deleted_at:
+            payload["deletedAt"] = deleted_at.isoformat()
+            payload["deleteAfter"] = (
+                deleted_at + timedelta(days=RECYCLE_BIN_RETENTION_DAYS)
+            ).isoformat()
+            recycle_items.append(payload)
+        else:
+            items.append(payload)
+
+    return jsonify(
+        items=items,
+        recycleBin=recycle_items,
+        retentionDays=RECYCLE_BIN_RETENTION_DAYS,
+    )
+
+
+@app.post("/api/episodes/<episode_id>/trash")
+def api_trash_episode(episode_id):
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    ref = db.collection("podcasts").document(episode_id)
+    doc = ref.get()
+    if not doc.exists:
+        return jsonify(error="Episode not found"), 404
+
+    data = doc.to_dict() or {}
+    if data.get("userId") != user_id:
+        return jsonify(error="Forbidden"), 403
+
+    current_status = str(data.get("status") or "").strip() or "saved"
+    deleted_at = datetime.now(timezone.utc)
+    ref.set(
+        {
+            "status": "deleted",
+            "deletedAt": deleted_at,
+            "deletedBy": user_id,
+            "deletedFromStatus": current_status,
+        },
+        merge=True,
+    )
+
+    return jsonify(ok=True, trashedId=episode_id, deletedAt=deleted_at.isoformat())
+
+
+@app.post("/api/episodes/<episode_id>/restore")
+def api_restore_episode(episode_id):
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    ref = db.collection("podcasts").document(episode_id)
+    doc = ref.get()
+    if not doc.exists:
+        return jsonify(error="Episode not found"), 404
+
+    data = doc.to_dict() or {}
+    if data.get("userId") != user_id:
+        return jsonify(error="Forbidden"), 403
+
+    fallback_status = "saved" if data.get("savedAt") else "draft"
+    restored_status = str(data.get("deletedFromStatus") or "").strip() or fallback_status
+    if restored_status == "deleted":
+        restored_status = fallback_status
+
+    ref.update(
+        {
+            "status": restored_status,
+            "deletedAt": firestore.DELETE_FIELD,
+            "deletedBy": firestore.DELETE_FIELD,
+            "deletedFromStatus": firestore.DELETE_FIELD,
+        }
+    )
+
+    return jsonify(ok=True, restoredId=episode_id)
+
+
+@app.post("/api/episodes/<episode_id>/delete")
+def api_delete_episode(episode_id):
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    ref = db.collection("podcasts").document(episode_id)
+    doc = ref.get()
+    if not doc.exists:
+        return jsonify(error="Episode not found"), 404
+
+    data = doc.to_dict() or {}
+    if data.get("userId") != user_id:
+        return jsonify(error="Forbidden"), 403
+
+    # Delete known subcollections first so DB and UI stay consistent.
+    for sub_name in ("scripts", "speakers", "transcripts"):
+        try:
+            for sub_doc in ref.collection(sub_name).stream():
+                sub_doc.reference.delete()
+        except Exception:
+            pass
+
+    ref.delete()
+
+    return jsonify(ok=True, deletedId=episode_id)
 
 @app.post("/api/edit/save")
 def api_edit_save():
     """
     Save edited script (and optionally updated title).
-    - دائماً نحدّث session["create_draft"]
-    - وإذا فيه user_id في الـ session، نخزن نفس الشيء في Firestore أيضاً
+    - ط¯ط§ط¦ظ…ط§ظ‹ ظ†ط­ط¯ظ‘ط« session["create_draft"]
+    - ظˆط¥ط°ط§ ظپظٹظ‡ user_id ظپظٹ ط§ظ„ظ€ sessionطŒ ظ†ط®ط²ظ† ظ†ظپط³ ط§ظ„ط´ظٹط، ظپظٹ Firestore ط£ظٹط¶ط§ظ‹
     """
     data = request.get_json(silent=True) or {}
     edited_script = (data.get("edited_script") or "").strip()
@@ -1477,7 +1743,7 @@ def api_edit_save():
     if not edited_script:
         return jsonify({"ok": False, "error": "Edited script is empty"}), 400
 
-    # 1) حدّث الـ session draft
+    # 1) ط­ط¯ظ‘ط« ط§ظ„ظ€ session draft
     draft = session.get("create_draft") or {}
     draft["script"] = edited_script
 
@@ -1488,7 +1754,7 @@ def api_edit_save():
     session["create_draft"] = draft
     session.modified = True
 
-    # 2) لو المستخدم مسجل دخول، خزّن نسخة في Firestore
+    # 2) ظ„ظˆ ط§ظ„ظ…ط³طھط®ط¯ظ… ظ…ط³ط¬ظ„ ط¯ط®ظˆظ„طŒ ط®ط²ظ‘ظ† ظ†ط³ط®ط© ظپظٹ Firestore
     user_id = session.get("user_id")
     if user_id:
         draft_ref = db.collection("drafts").document(user_id)
@@ -1542,10 +1808,10 @@ def clean_script_for_tts(script: str) -> str:
         if line.startswith("#"):
             continue
 
-        if re.fullmatch(r"(intro|body|outro)[:：]?\s*$", line, re.IGNORECASE):
+        if re.fullmatch(r"(intro|body|outro)[:ï¼ڑ]?\s*$", line, re.IGNORECASE):
             continue
 
-        if re.match(r"^([^:：]+)[:：]\s*(intro|body|outro)\s*$", line, re.IGNORECASE):
+        if re.match(r"^([^:ï¼ڑ]+)[:ï¼ڑ]\s*(intro|body|outro)\s*$", line, re.IGNORECASE):
             continue
 
         if re.fullmatch(r"\[[^\]]+\]", line):
@@ -1556,10 +1822,10 @@ def clean_script_for_tts(script: str) -> str:
 
         line = re.sub(r"[\u200B-\u200D\uFEFF]", "", line)
 
-        if re.fullmatch(r"[-_=*~•·\u2022]{2,}", line):
+        if re.fullmatch(r"[-_=*~â€¢آ·\u2022]{2,}", line):
             continue
 
-        line = re.sub(r"^[A-Za-z0-9]{1,10}\s*[:：]\s*", "", line)
+        line = re.sub(r"^[A-Za-z0-9]{1,10}\s*[:ï¼ڑ]\s*", "", line)
 
         line = re.sub(r"^[^\w]+", "", line)
         line = re.sub(r"\s{2,}", " ", line).strip()
@@ -1752,7 +2018,7 @@ def api_audio():
     payload = request.get_json(silent=True) or {}
 
     script = (payload.get("scriptText") or request.form.get("scriptText") or "").strip()
-    podcast_id = (payload.get("podcastId") or "").strip()   # ✅ NEW
+    podcast_id = (payload.get("podcastId") or "").strip()   # âœ… NEW
     ui_language = (payload.get("language") or "").strip().lower()
 
     print("DEBUG /api/audio script length:", len(script))
@@ -1776,7 +2042,7 @@ def api_audio():
     session["last_audio_url"] = result["url"]
     session.modified = True
 
-    # ✅ NEW: save live transcript (word timeline) to Firestore
+    # âœ… NEW: save live transcript (word timeline) to Firestore
     user_id = session.get("user_id") or get_current_user_email()
     if user_id and podcast_id:
         podcast_ref = db.collection("podcasts").document(podcast_id)
@@ -1870,8 +2136,8 @@ def summarize_transcript():
             is_ar = is_arabic(text)
 
         if is_ar:
-            system_prompt = "أنت مساعد مفيد يقوم بإنشاء ملخصات بودكاست موجزة. يجب أن تكون جميع الردود بحد أقصى 250 كلمة."
-            user_prompt = f"يرجى تلخيص نص البودكاست التالي بحد أقصى 250 كلمة. ركز على النقاط الرئيسية والأفكار المهمة:\n\n{text}"
+            system_prompt = "ط£ظ†طھ ظ…ط³ط§ط¹ط¯ ظ…ظپظٹط¯ ظٹظ‚ظˆظ… ط¨ط¥ظ†ط´ط§ط، ظ…ظ„ط®طµط§طھ ط¨ظˆط¯ظƒط§ط³طھ ظ…ظˆط¬ط²ط©. ظٹط¬ط¨ ط£ظ† طھظƒظˆظ† ط¬ظ…ظٹط¹ ط§ظ„ط±ط¯ظˆط¯ ط¨ط­ط¯ ط£ظ‚طµظ‰ 250 ظƒظ„ظ…ط©."
+            user_prompt = f"ظٹط±ط¬ظ‰ طھظ„ط®ظٹطµ ظ†طµ ط§ظ„ط¨ظˆط¯ظƒط§ط³طھ ط§ظ„طھط§ظ„ظٹ ط¨ط­ط¯ ط£ظ‚طµظ‰ 250 ظƒظ„ظ…ط©. ط±ظƒط² ط¹ظ„ظ‰ ط§ظ„ظ†ظ‚ط§ط· ط§ظ„ط±ط¦ظٹط³ظٹط© ظˆط§ظ„ط£ظپظƒط§ط± ط§ظ„ظ…ظ‡ظ…ط©:\n\n{text}"
         else:
             system_prompt = "You are a helpful assistant that creates concise podcast summaries. Always respond with 250 words or less."
             user_prompt = f"Please summarize this podcast transcript in 250 words or less. Focus on the main points, key insights, and important discussions:\n\n{text}"
@@ -1893,7 +2159,7 @@ def summarize_transcript():
         if len(words) > 250:
             summary = " ".join(words[:250]) + "..."
 
-        # ✅ Save into Firestore (and ensure ownership)
+        # âœ… Save into Firestore (and ensure ownership)
         podcast_ref = db.collection("podcasts").document(podcast_id)
         doc = podcast_ref.get()
         if not doc.exists:
@@ -2003,6 +2269,9 @@ def save_all_podcast(podcast_id):
         updates["transcriptText"] = transcript_text
         updates["transcriptUpdatedAt"] = firestore.SERVER_TIMESTAMP
 
+    updates["status"] = "saved"
+    updates["savedAt"] = firestore.SERVER_TIMESTAMP
+
     if updates:
         ref.set(updates, merge=True)
 
@@ -2044,7 +2313,7 @@ def api_audio_last():
 def signup():
     data = request.get_json() or {}
 
-    email = (data.get("email") or "").strip()
+    email = (data.get("email") or "").strip().lower()
     password = (data.get("password") or "").strip()
     name = (data.get("name") or "").strip()
 
@@ -2076,6 +2345,7 @@ def signup():
         {
             "email": email,
             "name": name or "",
+            "username_lower": (name or "").lower(),
             "password_hash": password_hash,
             "created_at": datetime.utcnow().isoformat(),
             "role": "user",
@@ -2103,29 +2373,53 @@ def signup():
 
 @app.route("/api/login", methods=["POST"])
 def login():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
 
-    email = data.get("email")
-    password = data.get("password")
+    identifier = (data.get("identifier") or data.get("email") or "").strip()
+    password = data.get("password") or ""
 
-    if not email or not password:
-        return jsonify({"error": "Email and password are required"}), 400
+    if not identifier or not password:
+        return jsonify({"error": "Email/username and password are required"}), 400
 
-    user_ref = db.collection("users").document(email)
-    doc = user_ref.get()
+    users = db.collection("users")
+    user_data = None
+    user_email = None
 
-    if not doc.exists:
-        return jsonify({"error": "Invalid email or password"}), 401
+    if "@" in identifier:
+        # Support existing records that may have been stored with mixed-case email.
+        email_candidates = [identifier, identifier.lower()]
+        for candidate in email_candidates:
+            doc = users.document(candidate).get()
+            if doc.exists:
+                user_data = doc.to_dict() or {}
+                user_email = user_data.get("email") or candidate
+                break
+    else:
+        username = identifier.lower()
+        username_docs = list(
+            users.where("username_lower", "==", username).limit(2).stream()
+        )
+        if not username_docs:
+            # Backward compatibility for older users without username_lower.
+            username_docs = list(users.where("name", "==", identifier).limit(2).stream())
 
-    user_data = doc.to_dict()
+        if len(username_docs) > 1:
+            return jsonify({"error": "Multiple users match this username. Please log in with email."}), 409
+        if len(username_docs) == 1:
+            user_data = username_docs[0].to_dict() or {}
+            user_email = user_data.get("email") or username_docs[0].id
+
+    if not user_data:
+        return jsonify({"error": "Invalid email/username or password"}), 401
+
     stored_hash = user_data.get("password_hash")
 
-    if not check_password_hash(stored_hash, password):
-        return jsonify({"error": "Invalid email or password"}), 401
+    if not stored_hash or not check_password_hash(stored_hash, password):
+        return jsonify({"error": "Invalid email/username or password"}), 401
 
-    token = create_token(email, email)
+    token = create_token(user_email, user_email)
     
-    session["user_id"] = email
+    session["user_id"] = user_email
     session.modified = True
 
     return (
@@ -2245,7 +2539,7 @@ def social_login():
         )
 
     except Exception as e:
-        print("🔥 OAuth login error:", e)
+        print("ًں”¥ OAuth login error:", e)
         return jsonify(error="Invalid or expired OAuth token"), 401
 
 # ------------------------------------------------------------
@@ -2254,3 +2548,4 @@ def social_login():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
+

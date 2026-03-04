@@ -129,6 +129,7 @@ export default function Preview() {
 
   const params = new URLSearchParams(window.location.hash.split("?")[1] || "");
   const episodeId = params.get("id");
+  const fromSource = params.get("from") || sessionStorage.getItem("preview_from") || "";
   const [externalSeek, setExternalSeek] = useState(null);
   const displayTitle = title || t("preview.title");
 
@@ -488,6 +489,24 @@ export default function Preview() {
     }
   };
 
+  const handleBack = () => {
+    if (fromSource === "episodes") {
+      window.location.hash = "#/episodes";
+      return;
+    }
+
+    const currentStep = Number.parseInt(
+      sessionStorage.getItem("currentStep") || "1",
+      10
+    );
+    const previousStep = Number.isFinite(currentStep)
+      ? Math.max(1, currentStep - 1)
+      : 1;
+
+    sessionStorage.setItem("forceStep", String(previousStep));
+    window.location.hash = "#/create";
+  };
+
   return (
     <div
       className={[
@@ -526,17 +545,11 @@ export default function Preview() {
               </span>
             ) : null}
           </div>
-            <p className="text-sm text-black/60 dark:text-white/60">
-              {t("preview.subtitle")}
-            </p>
           </div>
 
           <div className="flex items-center gap-3">
             <button
-              onClick={() => {
-                sessionStorage.setItem("forceStep", "6");
-                window.location.hash = "#/create";
-              }}
+              onClick={handleBack}
               className="px-4 py-2 rounded-xl border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/10 transition"
             >
               {t("preview.back")}
@@ -658,7 +671,7 @@ export default function Preview() {
 
           {/* Right rail: chapters + summary */}
           <div ref={rightColRef} className="lg:col-span-5 w-full">
-            <div className="w-full lg:sticky lg:top-24 space-y-4">
+            <div className="w-full lg:sticky lg:top-24 lg:-mt-3 space-y-4">
               {/* Chapters card */}
               <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 shadow-lg overflow-hidden">
                 <button

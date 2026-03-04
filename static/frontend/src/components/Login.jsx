@@ -1,5 +1,5 @@
 // src/components/Login.jsx
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Eye, EyeOff, Mail, Lock, ArrowLeft } from "lucide-react";
 import { signInWithPopup } from "firebase/auth";
 import { auth, googleProvider, githubProvider } from "../firebaseClient";
@@ -7,6 +7,8 @@ import { auth, googleProvider, githubProvider } from "../firebaseClient";
 const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
   : "http://localhost:5000";
+
+const REMEMBERED_LOGIN_KEY = "rememberedLoginIdentifier";
   
 function getRedirectParams() {
   const hash = window.location.hash || "";
@@ -15,17 +17,19 @@ function getRedirectParams() {
   return {
     redirect: params.get("redirect") || "",
     id: params.get("id") || "",
+    from: params.get("from") || "",
   };
 }
 
 function redirectAfterAuth() {
-  const { redirect, id } = getRedirectParams();
+  const { redirect, id, from } = getRedirectParams();
   if (redirect === "edit") {
     window.location.hash = "#/edit";
   } else if (redirect === "create") {
     window.location.hash = "#/create";
   } else if (redirect === "preview") {
-    window.location.hash = id ? `#/preview?id=${id}` : "#/preview";
+    const fromSuffix = from ? `&from=${encodeURIComponent(from)}` : "";
+    window.location.hash = id ? `#/preview?id=${id}${fromSuffix}` : `#/preview${from ? `?from=${encodeURIComponent(from)}` : ""}`;
   } else {
     window.location.hash = "#/";
   }
@@ -33,7 +37,7 @@ function redirectAfterAuth() {
 
 export default function Login() {
   const [mode, setMode] = useState("login"); // "login" | "reset"
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [pwd, setPwd] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
   const [resetEmail, setResetEmail] = useState("");
@@ -47,6 +51,14 @@ export default function Login() {
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    const rememberedLogin = localStorage.getItem(REMEMBERED_LOGIN_KEY);
+    if (rememberedLogin) {
+      setIdentifier(rememberedLogin);
+      setRememberMe(true);
+    }
+  }, []);
+
   const switchToLogin = () => {
     setMode("login");
     setError("");
@@ -58,7 +70,7 @@ export default function Login() {
     setError("");
     setInfo("");
     // prefill reset email with login email if typed
-    if (email && !resetEmail) setResetEmail(email);
+    if (identifier && !resetEmail) setResetEmail(identifier);
   };
 
   // ------------------ LOGIN SUBMIT ------------------
@@ -67,8 +79,8 @@ export default function Login() {
     setError("");
     setInfo("");
 
-    if (!email.trim() || !pwd.trim()) {
-      setError("Please enter both email and password.");
+    if (!identifier.trim() || !pwd.trim()) {
+      setError("Please enter both email/username and password.");
       return;
     }
 
@@ -79,7 +91,7 @@ export default function Login() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ email, password: pwd }),
+        body: JSON.stringify({ identifier, email: identifier, password: pwd }),
       });
 
       let data = {};
@@ -124,6 +136,12 @@ export default function Login() {
           // Only until the tab or browser is closed
           sessionStorage.setItem("token", data.token);
         }
+      }
+
+      if (rememberMe) {
+        localStorage.setItem(REMEMBERED_LOGIN_KEY, identifier.trim());
+      } else {
+        localStorage.removeItem(REMEMBERED_LOGIN_KEY);
       }
 
       if (data.user) {
@@ -369,23 +387,23 @@ export default function Login() {
           {/* ------------------ LOGIN FORM ------------------ */}
           {mode === "login" && (
             <form onSubmit={handleSubmit} className="space-y-5">
-              {/* Email */}
+              {/* Email / Username */}
               <div>
                 <label className="block text-sm font-medium text-black dark:text-white mb-2">
-                  Email
+                  Email or username
                 </label>
                 <div className="flex items-center border rounded-lg bg-white dark:bg-white/5 border-black/10 dark:border-white/15 focus-within:ring-2 focus-within:ring-purple-500">
                   <span className="pl-3 text-black/60 dark:text-white/60">
                     <Mail className="w-5 h-5" />
                   </span>
                   <input
-                    type="email"
+                    type="text"
                     className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text-white placeholder-black/50 dark:placeholder-white/50"
-                    placeholder="you@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com or your username"
+                    value={identifier}
+                    onChange={(e) => setIdentifier(e.target.value)}
                     required
-                    autoComplete="email"
+                    autoComplete="username"
                   />
                 </div>
               </div>
@@ -434,7 +452,7 @@ export default function Login() {
                 <button
                   type="button"
                   onClick={switchToReset}
-                  className="text-purple-700 dark:text:purple-300 hover:underline"
+                  className="text-purple-700 dark:text-purple-300 hover:underline"
                 >
                   Forgot password?
                 </button>
@@ -443,7 +461,7 @@ export default function Login() {
               {/* Submit */}
               <button
                 type="submit"
-                className="w-full btn-cta font-bold py-3 rounded-lg transition disabled:opacity-60"
+                className="w-full btn-primary"
                 disabled={loading}
               >
                 {loading ? "Logging in..." : "Log in"}
@@ -451,11 +469,11 @@ export default function Login() {
 
               {/* Divider */}
               <div className="flex items-center gap-4">
-                <div className="h-px flex-1 bg-black/10 dark:bg:white/10" />
-                <span className="text-xs text:black/50 dark:text:white/50">
+                <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
+                <span className="text-xs text-black/50 dark:text-white/50">
                   or continue with
                 </span>
-                <div className="h-px flex-1 bg-black/10 dark:bg:white/10" />
+                <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
               </div>
 
               {/* Social login */}
@@ -464,7 +482,7 @@ export default function Login() {
                   type="button"
                   onClick={handleGoogleLogin}
                   disabled={loading}
-                  className="w-full inline-flex items-center justify-center gap-3 border rounded-lg py-2.5 font-medium transition hover:bg:black/5 dark:hover:bg:white/10 border-black/10 dark:border:white/15 text:black dark:text:white"
+                  className="w-full inline-flex h-11 items-center justify-center gap-3 rounded-xl border border-black/10 bg-white px-4 text-sm font-semibold text-black transition-colors duration-200 hover:bg-black/5 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-black/10 dark:border-white/15 dark:bg-neutral-900/80 dark:text-white dark:hover:bg-white/10 dark:focus-visible:ring-white/20"
                 >
                   {/* Google icon */}
                   <svg
@@ -496,7 +514,7 @@ export default function Login() {
                   type="button"
                   onClick={handleGithubLogin}
                   disabled={loading}
-                  className="w-full inline-flex items-center justify-center gap-3 border rounded-lg py-2.5 font-medium transition hover:bg:black/5 dark:hover:bg:white/10 border-black/10 dark:border:white/15 text:black dark:text:white"
+                  className="w-full inline-flex h-11 items-center justify-center gap-3 rounded-xl border border-black/10 bg-white px-4 text-sm font-semibold text-black transition-colors duration-200 hover:bg-black/5 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-black/10 dark:border-white/15 dark:bg-neutral-900/80 dark:text-white dark:hover:bg-white/10 dark:focus-visible:ring-white/20"
                 >
                   {/* GitHub icon */}
                   <svg
@@ -533,12 +551,12 @@ export default function Login() {
                   Registered email
                 </label>
                 <div className="flex items-center border rounded-lg bg-white dark:bg-white/5 border-black/10 dark:border-white/15 ...">
-                  <span className="pl-3 text-black/60 dark:text:white/60">
+                  <span className="pl-3 text-black/60 dark:text-white/60">
                     <Mail className="w-5 h-5" />
                   </span>
                   <input
                     type="email"
-                    className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text:white placeholder-black/50 dark:placeholder:white/50"
+                    className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text-white placeholder-black/50 dark:placeholder-white/50"
                     placeholder="you@example.com"
                     value={resetEmail}
                     onChange={(e) => setResetEmail(e.target.value)}
@@ -549,16 +567,16 @@ export default function Login() {
 
               {/* New password */}
               <div>
-                <label className="block text-sm font-medium text-black dark:text:white mb-2">
+                <label className="block text-sm font-medium text-black dark:text-white mb-2">
                   New password
                 </label>
-                <div className="flex items-center border rounded-lg bg-white dark:bg:white/5 border-black/10 dark:border:white/15 focus-within:ring-2 focus-within:ring-purple-500">
-                  <span className="pl-3 text-black/60 dark:text:white/60">
+                <div className="flex items-center border rounded-lg bg-white dark:bg-white/5 border-black/10 dark:border-white/15 focus-within:ring-2 focus-within:ring-purple-500">
+                  <span className="pl-3 text-black/60 dark:text-white/60">
                     <Lock className="w-5 h-5" />
                   </span>
                   <input
                     type={showResetPwd ? "text" : "password"}
-                    className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text:white placeholder-black/50 dark:placeholder:white/50"
+                    className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text-white placeholder-black/50 dark:placeholder-white/50"
                     placeholder="New password"
                     value={resetPwd}
                     onChange={(e) => setResetPwd(e.target.value)}
@@ -567,7 +585,7 @@ export default function Login() {
                   <button
                     type="button"
                     onClick={() => setShowResetPwd((v) => !v)}
-                    className="pr-3 text-black/60 dark:text:white/60 hover:text:black dark:hover:text:white transition"
+                    className="pr-3 text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white transition"
                     aria-label={showResetPwd ? "Hide password" : "Show password"}
                   >
                     {showResetPwd ? (
@@ -577,23 +595,23 @@ export default function Login() {
                     )}
                   </button>
                 </div>
-                <p className="mt-1 text-xs text-black/60 dark:text:white/60">
+                <p className="mt-1 text-xs text-black/60 dark:text-white/60">
                   At least 8 characters, including one uppercase letter, one number, and one symbol.
                 </p>
               </div>
 
               {/* Confirm password */}
               <div>
-                <label className="block text-sm font-medium text-black dark:text:white mb-2">
+                <label className="block text-sm font-medium text-black dark:text-white mb-2">
                   Confirm new password
                 </label>
-                <div className="flex items-center border rounded-lg bg-white dark:bg:white/5 border-black/10 dark:border:white/15 focus-within:ring-2 focus-within:ring-purple-500">
-                  <span className="pl-3 text-black/60 dark:text:white/60">
+                <div className="flex items-center border rounded-lg bg-white dark:bg-white/5 border-black/10 dark:border-white/15 focus-within:ring-2 focus-within:ring-purple-500">
+                  <span className="pl-3 text-black/60 dark:text-white/60">
                     <Lock className="w-5 h-5" />
                   </span>
                   <input
                     type={showResetPwd ? "text" : "password"}
-                    className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text:white placeholder-black/50 dark:placeholder:white/50"
+                    className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text-white placeholder-black/50 dark:placeholder-white/50"
                     placeholder="Confirm new password"
                     value={resetConfirm}
                     onChange={(e) => setResetConfirm(e.target.value)}
@@ -604,7 +622,7 @@ export default function Login() {
 
               <button
                 type="submit"
-                className="w-full btn-cta font-bold py-3 rounded-lg transition disabled:opacity-60"
+                className="w-full btn-primary"
                 disabled={loading}
               >
                 {loading ? "Updating password..." : "Change password"}

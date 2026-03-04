@@ -198,7 +198,6 @@ export default function EditScript() {
   const displayedScript = scriptTemplate
     ? scriptTemplate.replaceAll("{{SHOW_TITLE}}", showTitle || "Podcast Show")
     : script;
-
   const handleScriptChange = (e) => {
     const next = e.target.value;
     const prev = script;
@@ -397,7 +396,7 @@ export default function EditScript() {
       return;
     }
 
-    const { lineStart, colonIdx } = getLineMeta(val, start);
+    const { colonIdx } = getLineMeta(val, start);
     if (colonIdx !== -1) {
       const labelEnd = colonIdx + 1;
       const touchesLabel = start <= labelEnd || end <= labelEnd;

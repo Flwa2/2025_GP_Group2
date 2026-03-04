@@ -56,7 +56,7 @@ export default function Account() {
     if (storedUserRaw) {
       try {
         const u = JSON.parse(storedUserRaw);
-        const name = u.displayName || u.name || profile.displayName;
+        const name = u.displayName || u.name || "WeCast User";
         setProfile((p) => ({
           ...p,
           displayName: name,

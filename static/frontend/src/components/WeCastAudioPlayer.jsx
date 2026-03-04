@@ -123,7 +123,9 @@ export default function WeCastAudioPlayer({
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-    } catch {}
+    } catch (_err) {
+      void _err;
+    }
   };
 
   // NEW: reset when src changes

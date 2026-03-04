@@ -7,7 +7,7 @@ module.exports = {
   ],
   theme: {
     extend: {
-      fontFamily: { sans: ['Manrope', 'sans-serif'] },
+      fontFamily: { sans: ['Inter', 'sans-serif'] },
       colors: {
         cream: '#F4E4C1',
         'purple-gradient-start': '#8B5CF6',

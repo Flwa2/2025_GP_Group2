@@ -1,5 +1,5 @@
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
     Mic2,
@@ -27,6 +27,13 @@ import Modal from "../components/Modal";
 const API_BASE = import.meta.env.PROD
     ? "https://wecast.onrender.com"
     : "http://localhost:5000";
+
+const STYLE_LIMITS = {
+    Interview: [2, 3],
+    Storytelling: [1, 2, 3],
+    Educational: [1, 2, 3],
+    Conversational: [2, 3],
+};
 
 
 /* -------------------- overlay: rotating logo -------------------- */
@@ -98,15 +105,7 @@ function Toast({ toast, onClose, closeLabel = "Close" }) {
 export default function CreatePro() {
     const { t, i18n } = useTranslation();
     const isRTL = i18n.language === "ar";
-    const [step, setStep] = useState(0);
-    const [podcastMode, setPodcastMode] = useState("");
-    const [seriesList, setSeriesList] = useState([]);
-    const [seriesLoading, setSeriesLoading] = useState(false);
-    const [seriesId, setSeriesId] = useState("");
-    const [seriesTitle, setSeriesTitle] = useState("");
-    const [newSeriesTitle, setNewSeriesTitle] = useState("");
-    const [seriesLockedHosts, setSeriesLockedHosts] = useState(false);
-    const [seriesLockedStyle, setSeriesLockedStyle] = useState(false);
+    const [step, setStep] = useState(1);
 
     useEffect(() => {
         sessionStorage.setItem("currentStep", step);
@@ -116,65 +115,6 @@ export default function CreatePro() {
         window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
     }, [step]);
 
-    useEffect(() => {
-        if (podcastMode !== "series") return;
-        let isMounted = true;
-        const loadSeries = async () => {
-            try {
-                setSeriesLoading(true);
-                const res = await fetch(`${API_BASE}/api/series`, {
-                    credentials: "include",
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data?.error || "Failed to load series");
-                let items = Array.isArray(data?.items) ? data.items : [];
-
-                if (!items.length) {
-                    try {
-                        const epRes = await fetch(`${API_BASE}/api/episodes`, {
-                            credentials: "include",
-                        });
-                        const epData = await epRes.json();
-                        if (epRes.ok) {
-                            const grouped = {};
-                            (epData?.items || []).forEach((ep) => {
-                                const title = (ep.seriesTitle || "").trim();
-                                if (!title) return;
-                                if (!grouped[title]) grouped[title] = 0;
-                                grouped[title] += 1;
-                            });
-                            items = Object.entries(grouped).map(([title, count]) => ({
-                                id: "",
-                                title,
-                                episodeCount: count,
-                            }));
-                        }
-                    } catch {}
-                }
-
-                if (isMounted) {
-                    setSeriesList(items);
-                }
-            } catch (e) {
-                if (isMounted) setSeriesList([]);
-            } finally {
-                if (isMounted) setSeriesLoading(false);
-            }
-        };
-        loadSeries();
-        return () => {
-            isMounted = false;
-        };
-    }, [podcastMode]);
-
-    useEffect(() => {
-        if (podcastMode === "series") return;
-        setSeriesId("");
-        setSeriesTitle("");
-        setNewSeriesTitle("");
-        setSeriesLockedHosts(false);
-        setSeriesLockedStyle(false);
-    }, [podcastMode]);
     const [generatedAudio, setGeneratedAudio] = useState(null);
     const [generatingAudio, setGeneratingAudio] = useState(false);
     const [generatedScript, setGeneratedScript] = useState(null);
@@ -253,7 +193,7 @@ useEffect(() => {
 
     return next;
   });
-}, [speakers.length]);
+}, [speakers]);
 
 // Group voices by gender (supports backend labels too)
 const voiceGroups = useMemo(() => {
@@ -270,7 +210,7 @@ const voiceGroups = useMemo(() => {
 }, [voices]);
 
 // default voice assignment (returns providerVoiceId)
-const defaultVoiceForGender = (gender = "Male", usedIds = new Set()) => {
+const defaultVoiceForGender = useCallback((gender = "Male", usedIds = new Set()) => {
   const isFemale = String(gender || "").toLowerCase() === "female";
   const key = isFemale ? "female" : "male";
 
@@ -290,7 +230,7 @@ const defaultVoiceForGender = (gender = "Male", usedIds = new Set()) => {
   if (unusedAny) return getVoiceId(unusedAny);
 
   return getVoiceId(pool[0]) || getVoiceId(voices[0]) || "";
-};
+}, [voiceGroups, voices]);
 
 // Filter voices for a specific speaker (frontend)
 const getFilteredVoicesForSpeaker = (speakerIndex) => {
@@ -331,6 +271,8 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
     const [bodyMusic, setBodyMusic] = useState("");
     const [outroMusic, setOutroMusic] = useState("");
     const [availableTracks, setAvailableTracks] = useState([]);
+    const [showSampleReplaceModal, setShowSampleReplaceModal] = useState(false);
+    const [pendingSampleLang, setPendingSampleLang] = useState("en");
 
     const MUSIC_CATEGORIES = {
         dramatic: [
@@ -385,13 +327,62 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
         if (editData.scriptTemplate) {
             setScriptTemplate(editData.scriptTemplate);
         }
-    }, []);
+    }, [t]);
 
 
     //  ElevenLabs voices
 
     const MIN = 500;
     const MAX = 2500;
+    const countWords = (text) => String(text || "").trim().split(/\s+/).filter(Boolean).length;
+    const isArabicText = (text) => /[\u0600-\u06FF]/.test(String(text || ""));
+
+    const EN_SAMPLE_TEXT = `Qiddiya: Saudi Arabia's Emerging Global Capital of Entertainment, Sports, and Culture
+Qiddiya stands as one of the boldest and most imaginative components of Saudi Arabia's Vision 2030. Located just 40 kilometers southwest of Riyadh, the project is designed to transform the Kingdom's entertainment and cultural landscape, offering world-class experiences that appeal to residents, tourists, and global enthusiasts alike. Stretching across more than 360 square kilometers, Qiddiya is not simply a recreational zone. It is an entire city built around the idea that entertainment, creativity, and human connection can reshape how people live, learn, and spend their time.
+From its inception, Qiddiya was envisioned as a place where people can break away from routine and immerse themselves in new experiences. The city's master plan blends natural landscapes with cutting-edge architecture, creating environments that support adventure, performance, learning, and relaxation. Its massive scope makes it one of the largest entertainment developments in the world, and it aims to position Saudi Arabia as a major global destination in this sector.
+One of Qiddiya's most anticipated attractions is its flagship theme park district, which will feature thrill rides, family activities, and landmark amusement experiences. Among these attractions is Falcon's Flight, expected to be the world's fastest, tallest, and longest roller coaster. This ride alone has already drawn worldwide attention, signaling Qiddiya's intention to push boundaries and set new records. Alongside the theme parks, the city will host a state-of-the-art water park, outdoor adventure zones, and immersive digital entertainment centers that reflect the growing demand for interactive experiences.
+Qiddiya is equally committed to developing sports. The project includes facilities for football, basketball, swimming, climbing, and extreme sports, as well as a motorsport complex capable of holding major international events. The motorsport zone will include tracks designed for speed, precision, and professional competitions, helping create new opportunities for athletes, teams, and spectators. By investing in these areas, Qiddiya aims to nurture local talent and promote a more active, engaged lifestyle for the Saudi population.
+Culture and arts form another core pillar of the project. Qiddiya will feature performance theaters, museums, creative studios, and festival venues that support both Saudi and international art forms. These spaces will offer opportunities for learning, innovation, and artistic exchange, encouraging young creators to explore their talents and share their stories. With a focus on education and creative development, Qiddiya aims to inspire the next generation of Saudi artists, designers, and performers.
+Economically, the impact of Qiddiya is expected to be significant. The project will generate thousands of jobs across a wide range of fields, from technology and engineering to hospitality, design, and operations. Its location near Riyadh positions it to attract millions of visitors each year, contributing to the growth of both domestic and international tourism. As the Kingdom continues diversifying its economy, Qiddiya will play a key role in helping build a sustainable entertainment sector that supports long-term growth.
+In terms of lifestyle, Qiddiya's residential areas will integrate seamlessly with its recreational spaces. Housing, retail centers, hotels, green parks, and community facilities will form a vibrant environment where people can live close to entertainment, culture, and nature. This approach reflects a modern vision of city planning that prioritizes convenience, quality of life, and social connection.
+Qiddiya represents a powerful statement about the future Saudi Arabia is building. It is more than a destination. It is a symbol of innovation, ambition, and cultural transformation. As it continues to develop, the city promises not only unforgettable experiences, but also new opportunities for learning, creativity, and community. By blending entertainment with education, nature with technology, and global trends with local identity, Qiddiya is set to redefine what a modern entertainment city can be.`;
+
+    const AR_SAMPLE_TEXT = `القدية: عاصمة سعودية صاعدة للترفيه والرياضة والثقافة
+تُعد القدية واحدة من أكثر مشاريع رؤية السعودية 2030 طموحًا وابتكارًا. تقع على بُعد نحو 40 كيلومترًا جنوب غرب الرياض، وقد صُممت لإحداث نقلة نوعية في مشهد الترفيه والثقافة داخل المملكة، من خلال تقديم تجارب عالمية المستوى تستهدف السكان والزوار والمهتمين من مختلف أنحاء العالم. وتمتد القدية على مساحة تتجاوز 360 كيلومترًا مربعًا، وهي ليست مجرد منطقة ترفيهية، بل مدينة متكاملة تقوم على فكرة أن الترفيه والإبداع والتواصل الإنساني يمكن أن يعيدوا تشكيل طريقة عيش الناس وتعلمهم وقضاء أوقاتهم.
+منذ انطلاق فكرتها، تم تصور القدية كمكان يبتعد فيه الناس عن الروتين وينغمسون في تجارب جديدة. وتمزج الخطة الرئيسية للمدينة بين الطبيعة والهندسة المعمارية الحديثة، لتوفير بيئات تدعم المغامرة والعروض الفنية والتعلم والاسترخاء. ويجعلها حجمها الضخم واحدة من أكبر وجهات الترفيه قيد التطوير في العالم، كما تهدف إلى ترسيخ مكانة السعودية كوجهة عالمية رئيسية في هذا القطاع.
+ومن أبرز معالم القدية المرتقبة منطقة المدن الترفيهية الكبرى، التي ستضم ألعابًا حماسية وأنشطة عائلية وتجارب ترفيهية فريدة. ومن بين هذه المعالم لعبة فالكونز فلايت، المتوقع أن تكون الأسرع والأطول والأعلى في العالم. وقد لاقت هذه اللعبة اهتمامًا عالميًا واسعًا، ما يعكس رغبة القدية في تجاوز الحدود التقليدية وصناعة أرقام قياسية جديدة. وإلى جانب المدن الترفيهية، ستضم المدينة حديقة مائية متطورة، ومناطق مغامرات خارجية، ومراكز ترفيه رقمي تفاعلي تواكب الطلب المتزايد على التجارب الحديثة.
+كما تولي القدية اهتمامًا كبيرًا بالرياضة، إذ تشمل مرافق لكرة القدم وكرة السلة والسباحة والتسلق والرياضات المتطرفة، إضافة إلى مجمع رياضي للمحركات قادر على استضافة بطولات دولية كبرى. وسيضم هذا المجمع حلبات مصممة للسرعة والدقة والمنافسات الاحترافية، بما يفتح آفاقًا جديدة للرياضيين والفرق والجماهير. ومن خلال هذه الاستثمارات، تسعى القدية إلى تنمية المواهب المحلية وتعزيز نمط حياة أكثر نشاطًا وحيوية في المجتمع السعودي.
+وتُعد الثقافة والفنون ركيزة أساسية أخرى في المشروع. إذ ستحتضن القدية مسارح للعروض ومتاحف واستوديوهات إبداعية ومواقع للمهرجانات تدعم الفنون السعودية والعالمية. وستوفر هذه المساحات فرصًا للتعلم والابتكار والتبادل الفني، بما يشجع الجيل الجديد على اكتشاف مواهبه والتعبير عن قصصه. ومع التركيز على التعليم والتطوير الإبداعي، تهدف القدية إلى إلهام جيل جديد من الفنانين والمصممين والمبدعين في المملكة.
+اقتصاديًا، من المتوقع أن يكون أثر القدية كبيرًا، حيث ستوفر آلاف الوظائف في مجالات متنوعة مثل التقنية والهندسة والضيافة والتصميم والتشغيل. كما أن قربها من الرياض يجعلها مؤهلة لاستقطاب ملايين الزوار سنويًا، بما يدعم نمو السياحة المحلية والدولية. ومع استمرار المملكة في تنويع اقتصادها، ستلعب القدية دورًا محوريًا في بناء قطاع ترفيهي مستدام يدعم النمو طويل الأجل.
+وعلى مستوى نمط الحياة، ستتكامل المناطق السكنية في القدية مع مساحات الترفيه بسلاسة. فالمنازل ومراكز التسوق والفنادق والحدائق والمرافق المجتمعية ستشكّل بيئة نابضة بالحياة يعيش فيها الناس بالقرب من الثقافة والطبيعة والأنشطة المتنوعة. ويعكس هذا التوجه رؤية حديثة للتخطيط الحضري تركز على الراحة وجودة الحياة وتعزيز الروابط الاجتماعية.
+تمثل القدية رسالة قوية عن المستقبل الذي تبنيه السعودية. فهي ليست مجرد وجهة، بل رمز للابتكار والطموح والتحول الثقافي. ومع استمرار تطورها، تعد المدينة بتقديم تجارب لا تُنسى وفرص جديدة للتعلم والإبداع وبناء المجتمع. ومن خلال المزج بين الترفيه والتعليم، والطبيعة والتقنية، والاتجاهات العالمية والهوية المحلية، تستعد القدية لإعادة تعريف مفهوم مدينة الترفيه الحديثة.`;
+
+    const ensureMinWords = (baseText) => {
+        const chunks = [];
+        while (countWords(chunks.join("\n\n")) < MIN) {
+            chunks.push(baseText);
+        }
+        return chunks.join("\n\n");
+    };
+
+    const buildSampleText = (lang = "en") => {
+        const base = lang === "ar" ? AR_SAMPLE_TEXT : EN_SAMPLE_TEXT;
+        return ensureMinWords(base);
+    };
+
+    const applySampleText = (lang = "en") => {
+        setDescription(buildSampleText(lang));
+        setErrors((prev) => ({ ...prev, description: "", server: "" }));
+    };
+
+    const handleUseSampleText = (lang = "en") => {
+        if (description.trim()) {
+            setPendingSampleLang(lang);
+            setShowSampleReplaceModal(true);
+            return;
+        }
+        applySampleText(lang);
+    };
 
     useEffect(() => {
         const handleNavigation = () => {
@@ -424,8 +415,6 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                 setSpeakersCount(editData.speakersCount || 0);
                 setSpeakers(editData.speakers || []);
                 setDescription(editData.description || "");
-                if (editData.seriesId) setSeriesId(editData.seriesId);
-                if (editData.seriesTitle) setSeriesTitle(editData.seriesTitle);
 
                 setStep(4);
 
@@ -438,23 +427,26 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
 
             if (forceStep) {
-                setStep(parseInt(forceStep));
+                const nextStep = Number.parseInt(forceStep, 10);
+                setStep(Number.isFinite(nextStep) && nextStep > 0 ? nextStep : 1);
                 sessionStorage.removeItem("forceStep");
                 return;
             }
 
             if (stepParam) {
-                setStep(parseInt(stepParam));
+                const nextStep = Number.parseInt(stepParam, 10);
+                setStep(Number.isFinite(nextStep) && nextStep > 0 ? nextStep : 1);
                 return;
             }
 
             if (saved) {
-                setStep(parseInt(saved));
+                const nextStep = Number.parseInt(saved, 10);
+                setStep(Number.isFinite(nextStep) && nextStep > 0 ? nextStep : 1);
             }
         };
 
         handleNavigation();
-    }, []);
+    }, [t]);
 
 
     useEffect(() => {
@@ -471,8 +463,6 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                     setSpeakersCount(editData.speakersCount || 0);
                     setSpeakers(editData.speakers || []);
                     setDescription(editData.description || "");
-                    if (editData.seriesId) setSeriesId(editData.seriesId);
-                    if (editData.seriesTitle) setSeriesTitle(editData.seriesTitle);
 
                     let titleFromStorage =
                         (editData.showTitle || "").trim() ||
@@ -505,19 +495,11 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
         handleHashChange();
 
         return () => window.removeEventListener('hashchange', handleHashChange);
-    }, [generatedScript]);
+    }, [generatedScript, t]);
 
 
 
     /* ---------- rules ---------- */
-    // limits the number of speakers per style
-    const styleLimits = {
-        Interview: [2, 3],
-        Storytelling: [1, 2, 3],
-        Educational: [1, 2, 3],
-        Conversational: [2, 3],
-    };
-
     const STYLE_GUIDELINES = {
         Interview: (
             <>
@@ -607,12 +589,12 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
     const defaultCount = (style) =>
         style === "Interview" ? 2 : style === "Conversational" ? 2 : 1;
 
-    const styleLabelMap = {
+    const styleLabelMap = useMemo(() => ({
         Interview: t("create.styles.interview.title"),
         Storytelling: t("create.styles.storytelling.title"),
         Educational: t("create.styles.educational.title"),
         Conversational: t("create.styles.conversational.title"),
-    };
+    }), [t]);
 
     const roleLabelFor = (role) => {
         if (role === "host") return t("create.roles.host");
@@ -626,10 +608,10 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
 
     useEffect(() => {
-        if (!scriptStyle || seriesLockedHosts) return;
+        if (!scriptStyle) return;
 
         setSpeakers((prev) => {
-            const limits = styleLimits[scriptStyle] || [];
+            const limits = STYLE_LIMITS[scriptStyle] || [];
 
             let count = prev.length || Number(speakersCount) || 0;
 
@@ -682,7 +664,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
         });
 
         setErrors({});
-    }, [scriptStyle, speakersCount, seriesLockedHosts]);
+    }, [scriptStyle, speakersCount]);
 
 
 
@@ -705,13 +687,13 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
             return next;
         });
-    }, [loadingVoices, voices.length, speakers.length]);
+    }, [loadingVoices, voices.length, speakers.length, defaultVoiceForGender]);
 
 
     useEffect(() => {
-        if (!scriptStyle || !speakersCount || seriesLockedHosts) return;
+        if (!scriptStyle || !speakersCount) return;
         const count = Number(speakersCount);
-        const limits = styleLimits[scriptStyle] || [];
+        const limits = STYLE_LIMITS[scriptStyle] || [];
         if (!limits.includes(count)) return;
 
         setSpeakers((prev) => {
@@ -762,11 +744,10 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
             }
             return next;
         });
-    }, [speakersCount, scriptStyle, voices.length, seriesLockedHosts]);
+    }, [speakersCount, scriptStyle, voices.length]);
 
     /* ---------- helpers ---------- */
-    const allowedCounts = useMemo(() => styleLimits[scriptStyle] || [], [scriptStyle]);
-    const showRoleSelect = scriptStyle !== "Conversational" && scriptStyle !== "Educational" && scriptStyle !== "Storytelling" && scriptStyle !== "Interview";
+    const allowedCounts = useMemo(() => STYLE_LIMITS[scriptStyle] || [], [scriptStyle]);
     const anyEmptySpeakerName = speakers.some((s) => !String(s.name || "").trim());
 
     const normalizeName = (s = "") =>
@@ -840,8 +821,6 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                     speakers: Number(speakersCount),
                     speakers_info: speakers,
                     description,
-                    seriesId: seriesId || undefined,
-                    seriesTitle: seriesTitle || newSeriesTitle || undefined,
                     language: i18n.language,
                 }),
             });
@@ -853,8 +832,6 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                 return;
             }
             const podcastId = data.podcastId;
-            if (data.seriesId) setSeriesId(data.seriesId);
-            if (data.seriesTitle) setSeriesTitle(data.seriesTitle);
             const template = data.script;
 
             const backendTitle =
@@ -878,9 +855,6 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                 showTitle: backendTitle,
                 episodeTitle: backendTitle,
                 generatedScript: rendered,
-                seriesId: data.seriesId || seriesId || "",
-                seriesTitle: data.seriesTitle || seriesTitle || "",
-                episodeNumber: data.episodeNumber || null,
             };
             sessionStorage.setItem("editData", JSON.stringify(editData));
             sessionStorage.removeItem("guestEditDraft");
@@ -892,7 +866,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
             });
             setTimeout(() => setToast(null), 2400);
             setStep(4);
-        } catch (e) {
+        } catch {
             setErrors({ server: t("create.errors.generationFailedBackend") });
         } finally {
             setSubmitting(false);
@@ -923,7 +897,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                         sessionStorage.setItem("editData", JSON.stringify(editData));
                     }
                 }
-            } catch (error) {
+            } catch {
                 // ignore and fall back to error toast
             }
         }
@@ -973,7 +947,6 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
             sessionStorage.setItem("wecast_preview", JSON.stringify(previewPayload));
 
             setGeneratedAudio(baseAudioUrl + "?t=" + Date.now());
-            window.location.hash = `#/finalize?podcastId=${podcastId}`;
 
             setToast({
             type: "success",
@@ -993,18 +966,6 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
         }
         };
 
-const goToFinalize = () => {
-  const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
-  const podcastId = editData.podcastId;
-
-  if (!podcastId) {
-    setToast({ type: "error", message: t("create.errors.missingPodcastId") });
-    setTimeout(() => setToast(null), 2800);
-    return;
-  }
-
-  window.location.hash = `#/finalize?podcastId=${podcastId}`;
-};
 
     const navigateToEdit = () => {
         if (!generatedScript) {
@@ -1025,12 +986,26 @@ const goToFinalize = () => {
             scriptTemplate,
             showTitle,
             episodeTitle: showTitle,
-            seriesId,
-            seriesTitle,
         };
 
         sessionStorage.setItem("editData", JSON.stringify(editData));
         window.location.hash = "#/edit";
+    };
+
+    const navigateToFinalize = () => {
+        const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
+        const podcastId = editData.podcastId;
+
+        if (!podcastId) {
+            setToast({
+                type: "error",
+                message: t("create.errors.missingPodcastId"),
+            });
+            setTimeout(() => setToast(null), 2800);
+            return;
+        }
+
+        window.location.hash = `#/finalize?podcastId=${encodeURIComponent(podcastId)}`;
     };
 
 // Add this function before the return statement
@@ -1103,7 +1078,6 @@ const exportScriptAsPDF = async () => {
 };
     /* ---------- stepper ---------- */
     const stepTitles = {
-        0: t("create.preStep.title"),
         1: t("create.step1.title"),
         2: t("create.step2.title"),
         3: t("create.step3.title"),
@@ -1113,156 +1087,12 @@ const exportScriptAsPDF = async () => {
     };
 
     const stepDescriptions = {
-        0: t("create.preStep.desc"),
         1: t("create.step1.desc"),
         2: t("create.step2.desc"),
         3: t("create.step3.desc"),
         4: t("create.step4.desc"),
         5: t("create.step5.desc"),
         6: t("create.step6.desc"),
-    };
-
-    const preStepOptions = [
-        {
-            key: "episode",
-            title: t("create.preStep.episodeTitle"),
-            desc: t("create.preStep.episodeDesc"),
-            icon: Play,
-        },
-        {
-            key: "series",
-            title: t("create.preStep.seriesTitle"),
-            desc: t("create.preStep.seriesDesc"),
-            icon: Layers,
-        },
-    ];
-
-    const normalizeSeriesSpeaker = (s = {}) => ({
-        name: (s.name || "").trim(),
-        gender: (s.gender || "Male").trim(),
-        role: (s.role || "host").trim(),
-        voiceId: (s.voiceId || s.providerVoiceId || "").trim(),
-        filterPreset: s.filterPreset || "all",
-    });
-
-    const applySeriesSettings = (seriesData = {}) => {
-        const style = (seriesData.style || "").trim();
-        const hostSpeakers = Array.isArray(seriesData.hostSpeakers)
-            ? seriesData.hostSpeakers.map(normalizeSeriesSpeaker)
-            : [];
-
-        if (style) {
-            setScriptStyle(style);
-            setSeriesLockedStyle(true);
-        } else {
-            setSeriesLockedStyle(false);
-        }
-
-        if (hostSpeakers.length) {
-            setSeriesLockedHosts(true);
-
-            const limits = styleLimits[style] || [];
-            const minAllowed = limits[0] || hostSpeakers.length;
-            const maxAllowed = limits[limits.length - 1] || hostSpeakers.length;
-
-            let targetCount = hostSpeakers.length;
-            if (style !== "Conversational") {
-                targetCount = hostSpeakers.length + 1;
-            }
-            targetCount = Math.min(Math.max(targetCount, minAllowed), maxAllowed);
-
-            const next = [...hostSpeakers];
-            while (next.length < targetCount) {
-                next.push({
-                    name: "",
-                    gender: "Female",
-                    role: "guest",
-                    voiceId: "",
-                    filterPreset: "all",
-                });
-            }
-
-            setSpeakersCount(targetCount);
-            setSpeakers(next);
-        } else {
-            setSeriesLockedHosts(false);
-        }
-    };
-
-    const handlePreStepContinue = async () => {
-        if (!podcastMode) {
-            setToast({
-                type: "error",
-                message: t("create.preStep.error"),
-            });
-            setTimeout(() => setToast(null), 2400);
-            return;
-        }
-
-        if (podcastMode === "episode") {
-            setSeriesId("");
-            setSeriesTitle("");
-            setSeriesLockedHosts(false);
-            setSeriesLockedStyle(false);
-            setStep(1);
-            return;
-        }
-
-        const trimmedTitle = newSeriesTitle.trim();
-
-        try {
-            if (trimmedTitle) {
-                const res = await fetch(`${API_BASE}/api/series`, {
-                    method: "POST",
-                    credentials: "include",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ title: trimmedTitle }),
-                });
-                const data = await res.json();
-                if (!res.ok) {
-                    throw new Error(data?.error || "Failed to create series");
-                }
-                setSeriesId(data.id);
-                setSeriesTitle(data.title || trimmedTitle);
-                setNewSeriesTitle("");
-                setSeriesLockedHosts(false);
-                setSeriesLockedStyle(false);
-                setStep(1);
-                return;
-            }
-
-            if (!seriesId) {
-                setToast({
-                    type: "error",
-                    message: t("create.preStep.seriesPickError"),
-                });
-                setTimeout(() => setToast(null), 2400);
-                return;
-            }
-
-            const res = await fetch(`${API_BASE}/api/series/${seriesId}`, {
-                credentials: "include",
-            });
-            const data = await res.json();
-            if (!res.ok) {
-                throw new Error(data?.error || "Failed to load series");
-            }
-
-            setSeriesTitle(data.title || "");
-            applySeriesSettings(data);
-
-            if (data.style) {
-                setStep(2);
-            } else {
-                setStep(1);
-            }
-        } catch (e) {
-            setToast({
-                type: "error",
-                message: t("create.preStep.seriesLoadError"),
-            });
-            setTimeout(() => setToast(null), 2400);
-        }
     };
 
     const stepperLabels = [
@@ -1272,6 +1102,7 @@ const exportScriptAsPDF = async () => {
         t("create.stepper.reviewEdit"),
         t("create.stepper.selectMusic"),
         t("create.stepper.generateAudio"),
+        "Finalize & Publish",
     ];
     const StepDot = ({ n, label }) => {
         const state = step === n ? "active" : step > n ? "done" : "pending";
@@ -1358,6 +1189,8 @@ const exportScriptAsPDF = async () => {
                             <StepLine on={step > 5} />
 
                             <StepDot n={6} label={stepperLabels[5]} />
+                            <StepLine on={false} />
+                            <StepDot n={7} label={stepperLabels[6]} />
                         </div>
                     </div>
                 )}
@@ -1366,161 +1199,20 @@ const exportScriptAsPDF = async () => {
 
 
                 <div className="max-w-5xl mx-auto">
-                    {/* STEP 0: PODCAST MODE */}
-                    {step === 0 && (
-                        <section className="ui-card">
-                            <h2 className="ui-card-title flex items-center gap-2 justify-center">
-                                <Mic2 className="w-4 h-4" /> {t("create.preStep.questionTitle")}
-                            </h2>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
-                                {preStepOptions.map((opt) => {
-                                    const Icon = opt.icon;
-                                    const selected = podcastMode === opt.key;
-                                    return (
-                                        <button
-                                            key={opt.key}
-                                            type="button"
-                                            onClick={() => setPodcastMode(opt.key)}
-                                            className={`group w-full rounded-2xl border p-5 transition ${isRTL ? "text-right" : "text-left"} ${
-                                                selected
-                                                    ? "border-purple-400/70 bg-purple-500/10"
-                                                    : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
-                                            }`}
-                                        >
-                                            <div className="flex items-start gap-3">
-                                                <span className={`grid h-9 w-9 place-items-center rounded-xl ${selected ? "bg-purple-600 text-white" : "bg-black/5 dark:bg-white/5 text-black/70 dark:text-white/70"}`}>
-                                                    <Icon className="h-4 w-4" />
-                                                </span>
-                                                <div className="flex-1">
-                                                    <div className="flex items-center gap-2 font-semibold text-black dark:text-white">
-                                                        <span>{opt.title}</span>
-                                                        {selected && (
-                                                            <span className="text-xs text-purple-500 flex items-center gap-1">
-                                                                <Check className="w-3 h-3" /> {t("create.common.selected")}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                    <p className="mt-1 text-sm text-black/70 dark:text-white/70">
-                                                        {opt.desc}
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                            {podcastMode === "series" && (
-                                <div className="mt-6 rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white/70 dark:bg-neutral-900/60 p-5">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <h3 className="text-sm font-semibold text-black/80 dark:text-white/80">
-                                            {t("create.series.chooseTitle")}
-                                        </h3>
-                                        {seriesLoading && (
-                                            <span className="text-xs text-black/50 dark:text-white/50">
-                                                {t("create.series.loading")}
-                                            </span>
-                                        )}
-                                    </div>
-
-                                    <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                                    {seriesList.map((s) => {
-                                        const selected = seriesId
-                                            ? seriesId === s.id
-                                            : !!seriesTitle && seriesTitle === s.title;
-                                        return (
-                                        <button
-                                            key={s.id}
-                                            type="button"
-                                            onClick={() => {
-                                                    setSeriesId(s.id || "");
-                                                    setSeriesTitle(s.title || "");
-                                                    setNewSeriesTitle("");
-                                                }}
-                                            className={`w-full rounded-xl border p-4 text-left transition ${
-                                                selected
-                                                    ? "border-purple-400/70 bg-purple-500/10"
-                                                    : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
-                                            } ${isRTL ? "text-right" : "text-left"}`}
-                                        >
-                                            <div className="flex items-center justify-between gap-2">
-                                                <span className="font-semibold text-black dark:text-white">
-                                                    {s.title || t("create.series.untitled")}
-                                                </span>
-                                                {selected && (
-                                                    <span className="text-xs text-purple-500 flex items-center gap-1">
-                                                        <Check className="w-3 h-3" /> {t("create.common.selected")}
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <p className="mt-1 text-xs text-black/60 dark:text-white/60">
-                                                {t("create.series.episodes", { count: s.episodeCount || 0 })}
-                                            </p>
-                                        </button>
-                                    );
-                                    })}
-                                        {!seriesList.length && !seriesLoading && (
-                                            <div className="text-sm text-black/60 dark:text-white/60">
-                                                {t("create.series.empty")}
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    <div className="mt-4">
-                                        <label className="form-label">{t("create.series.newLabel")}</label>
-                                        <input
-                                            value={newSeriesTitle}
-                                            onChange={(e) => {
-                                                setNewSeriesTitle(e.target.value);
-                                                if (e.target.value) {
-                                                    setSeriesId("");
-                                                    setSeriesTitle("");
-                                                }
-                                            }}
-                                            placeholder={t("create.series.newPlaceholder")}
-                                            className="form-input"
-                                        />
-                                    </div>
-
-                                    {seriesTitle && (
-                                        <div className="mt-3 text-xs text-purple-600">
-                                            {t("create.series.selected", { title: seriesTitle })}
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                            <div className="mt-6 flex justify-end">
-                                <button
-                                    type="button"
-                                    onClick={handlePreStepContinue}
-                                    className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
-                                >
-                                    {t("create.common.continue")} <ChevronRight className={`w-4 h-4 ${isRTL ? "rotate-180" : ""}`} />
-                                </button>
-                            </div>
-                        </section>
-                    )}
                     {/* STEP 1: STYLE */}
                     {step === 1 && (
                         <section className="ui-card">
                             <h2 className="ui-card-title flex items-center gap-2 justify-center">
                                 <Mic2 className="w-4 h-4" /> {t("create.sections.podcastStyle")}
                             </h2>
-                            {seriesLockedStyle && (
-                                <p className="mt-2 text-sm text-purple-600 text-center">
-                                    {t("create.series.styleLocked")}
-                                </p>
-                            )}
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4 justify-items-center">
                                 {styleCards.map((s) => (
                                     <label
                                         key={s.key}
-                                        onClick={() => {
-                                            if (seriesLockedStyle) return;
-                                            setScriptStyle(s.key);
-                                        }}
+                                        onClick={() => setScriptStyle(s.key)}
                                         onMouseEnter={() => setHoverKey(s.key)}
                                         onMouseLeave={() => setHoverKey((k) => (k === s.key ? null : k))}
-                                        className={`group relative w-full max-w-xl p-4 rounded-xl border transition ${seriesLockedStyle ? "cursor-not-allowed opacity-70" : "cursor-pointer"} ${scriptStyle === s.key ? "border-purple-400/60 bg-purple-500/10" : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"}`}
+                                        className={`group relative w-full max-w-xl p-4 rounded-xl border transition cursor-pointer ${scriptStyle === s.key ? "border-purple-400/60 bg-purple-500/10" : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"}`}
                                     >
                                         <div className="flex items-start gap-3">
                                             <input type="radio" checked={scriptStyle === s.key} readOnly className="accent-purple-600 mt-1" />
@@ -1544,13 +1236,18 @@ const exportScriptAsPDF = async () => {
                                         </div>
                                         {hoverKey === s.key && (
                                             <div className="absolute left-5 right-5 top-[calc(100%+30px)] z-40">
-                                                <div className="relative rounded-2xl bg-gradient-to-br from-purple-400 to-violet-700 text-white shadow-2xl border border-white/10 p-4 animate-[popoverIn_120ms_ease-out]">
-                                                    <div className="flex items-center gap-2 font-semibold tracking-wide">
-                                                        <Info className="w-4 h-4 opacity-90" />
-                                                        <span>{t("create.guidelines.title")}</span>
+                                                <div className="relative rounded-2xl bg-gradient-to-br from-fuchsia-500 via-purple-600 to-indigo-700 text-white shadow-[0_18px_45px_rgba(76,29,149,0.45)] border border-white/20 p-5 animate-[popoverIn_120ms_ease-out]">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <div className="flex items-center gap-2 font-semibold tracking-wide">
+                                                            <Info className="w-4 h-4 opacity-90" />
+                                                            <span className="text-lg">{t("create.guidelines.title")}</span>
+                                                        </div>
+                                                        <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-white/20 border border-white/25">
+                                                            {s.title}
+                                                        </span>
                                                     </div>
-                                                    <div className="mt-2 leading-relaxed text-[0.95rem]">{STYLE_GUIDELINES[s.key]}</div>
-                                                    <span className="absolute -top-2 left-8 w-3 h-3 rotate-45 bg-purple-600 shadow-[0_6px_16px_rgba(0,0,0,0.25)] border-l border-t border-white/10" />
+                                                    <div className="mt-3 leading-relaxed text-[1rem] text-white/95">{STYLE_GUIDELINES[s.key]}</div>
+                                                    <span className="absolute -top-2 left-8 w-4 h-4 rotate-45 bg-purple-600 shadow-[0_8px_18px_rgba(0,0,0,0.30)] border-l border-t border-white/20" />
                                                 </div>
                                             </div>
                                         )}
@@ -1570,23 +1267,17 @@ const exportScriptAsPDF = async () => {
                     {step === 2 && (
                         <section className="ui-card">
                             <h2 className="ui-card-title flex items-center gap-2 justify-center"><Users className="w-4 h-4" /> {t("create.sections.speakers")}</h2>
-                            {seriesLockedHosts && (
-                                <p className="mt-2 text-sm text-purple-600 text-center">
-                                    {t("create.series.hostLocked")}
-                                </p>
-                            )}
                             {scriptStyle && (
                                 <div className="flex items-center gap-2 flex-wrap mt-3 justify-center">
                                     {allowedCounts.map((n) => (
                                         <button
                                             key={n}
                                             onClick={() => setSpeakersCount(n)}
-                                            disabled={seriesLockedHosts}
                                             className={`px-4 py-2 text-sm font-semibold rounded-xl transition border ${
                                                 speakersCount === n
                                                     ? "bg-purple-600 text-white border-purple-600"
                                                     : "bg-black/5 dark:bg-white/5 border-neutral-300 dark:border-neutral-800 text-black/70 dark:text-white/70 hover:bg-black/10"
-                                            } ${seriesLockedHosts ? "opacity-60 cursor-not-allowed" : ""}`}
+                                            }`}
                                         >
                                             {n} {n === 1 ? t("create.common.speaker") : t("create.common.speakers")}
                                         </button>
@@ -1623,7 +1314,7 @@ const exportScriptAsPDF = async () => {
                                             roleCounts[rawRole] > 1 && roleKey !== "host"
                                                 ? `${roleLabel} ${occurrence}`
                                                 : roleLabel;
-                                        const isHostLocked = seriesLockedHosts && ["host", "cohost", "narrator"].includes(roleKey);
+                                        const isHostLocked = false;
 
                                         return (
                                             <div
@@ -1720,10 +1411,6 @@ const exportScriptAsPDF = async () => {
                                                                 {t("create.speakers.noVoices")}
                                                             </p>
                                                         ) : (() => {
-                                                            const genderKey =
-                                                                (sp.gender || "").toLowerCase() === "female"
-                                                                    ? "female"
-                                                                    : "male";
                                                             const pool = getFilteredVoicesForSpeaker(i);
                                                             const poolIds = new Set(pool.map(getVoiceId));
                                                             const currentId = sp.voiceId || "";
@@ -2007,21 +1694,38 @@ const exportScriptAsPDF = async () => {
                                 <NotebookPen className="w-4 h-4" />
                                 {t("create.step3.enterTextTitle")}
                             </h2>
+                            <div className={`mb-2 flex ${isRTL ? "justify-start" : "justify-end"}`}>
+                                <button
+                                    type="button"
+                                    onClick={() => handleUseSampleText("en")}
+                                    className="inline-flex items-center rounded-lg border border-black/10 dark:border-white/10 px-3 py-1.5 text-xs font-semibold text-black/80 dark:text-white/85 hover:bg-black/5 dark:hover:bg-white/10 transition"
+                                >
+                                    Use English sample
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => handleUseSampleText("ar")}
+                                    className="ml-2 inline-flex items-center rounded-lg border border-black/10 dark:border-white/10 px-3 py-1.5 text-xs font-semibold text-black/80 dark:text-white/85 hover:bg-black/5 dark:hover:bg-white/10 transition"
+                                >
+                                    Use Arabic sample
+                                </button>
+                            </div>
 
                             <textarea
                                 id="wecast_textarea"
                                 value={description}
                                 onChange={(e) => setDescription(e.target.value)}
                                 placeholder={t("create.step3.textPlaceholder", { min: MIN, max: MAX })}
-                                className="form-textarea mt-3"
+                                dir={isArabicText(description) || isRTL ? "rtl" : "ltr"}
+                                className={`form-textarea mt-3 ${isArabicText(description) || isRTL ? "text-right" : "text-left"}`}
                                 rows={8}
                             />
 
                             {(() => {
-                                const wordCount = description.trim().split(/\s+/).filter(Boolean).length;
+                                const wordCount = countWords(description);
 
                                 return (
-                                    <div className="mt-2 text-sm flex justify-between">
+                                    <div className={`mt-2 text-sm flex ${isRTL ? "flex-row-reverse" : ""} justify-between`}>
                                         <span
                                             className={
                                                 wordCount < MIN || wordCount > MAX
@@ -2465,10 +2169,16 @@ const exportScriptAsPDF = async () => {
                                                 {t("create.step6.regenerateAudio")}
                                             </button>
                                             <button
-                                            onClick={goToFinalize}
-                                            className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                                onClick={() => {
+        let editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
+        let podcastId = editData.podcastId;
+                                                sessionStorage.setItem("preview_from", "create");
+                                                window.location.hash = podcastId ? `#/preview?id=${podcastId}&from=create` : "#/preview?from=create";
+                                                }}
+
+                                                className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
                                             >
-                                            Finalize & Publish
+                                                {t("create.step6.openEpisode")}
                                             </button>
 
                                             <button
@@ -2476,6 +2186,12 @@ const exportScriptAsPDF = async () => {
                                                 className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
                                             >
                                                 {t("create.step6.editScript")}
+                                            </button>
+                                            <button
+                                                onClick={navigateToFinalize}
+                                                className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
+                                            >
+                                                Finalize & Publish <ChevronRight className={`w-4 h-4 ${isRTL ? "rotate-180" : ""}`} />
                                             </button>
 
                                         </div>
@@ -2499,6 +2215,37 @@ const exportScriptAsPDF = async () => {
                     subtitle={t("create.loading.audioSubtitle")}
                     logoAlt={t("create.common.logoAlt")}
                 />
+                {showSampleReplaceModal && (
+                    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                        <div className="w-[min(92vw,460px)] rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-2xl p-6">
+                            <h2 className="text-lg font-bold text-black dark:text-white mb-2">
+                                Replace Existing Text?
+                            </h2>
+                            <p className="text-sm text-black/70 dark:text-white/70 mb-5">
+                                This action will replace your current editor content with the selected sample text.
+                            </p>
+                            <div className="flex items-center justify-end gap-3">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowSampleReplaceModal(false)}
+                                    className="px-4 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        applySampleText(pendingSampleLang);
+                                        setShowSampleReplaceModal(false);
+                                    }}
+                                    className="px-4 py-2 rounded-xl bg-black text-white dark:bg-white dark:text-black text-sm font-semibold hover:opacity-90 transition"
+                                >
+                                    Replace Text
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
                 <Toast
                     toast={toast}
                     onClose={() => setToast(null)}

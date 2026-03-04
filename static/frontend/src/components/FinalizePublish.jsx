@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ""; // "" if same-origin proxy
 
@@ -39,6 +38,8 @@ if (!podcastId) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [busyText, setBusyText] = useState("");
+  const [notice, setNotice] = useState("");
+  const [noticeType, setNoticeType] = useState("info");
 
   const [title, setTitle] = useState("");
   const [savedTitle, setSavedTitle] = useState("");
@@ -121,6 +122,16 @@ if (!podcastId) {
       setCoverB64(resp.coverArtBase64);
       setCoverMime("image/png");
       setCoverMeta({ source: "openai" });
+      if (resp.warning) {
+        setNotice(resp.warning);
+        setNoticeType("warn");
+      } else {
+        setNotice("Cover generated and saved.");
+        setNoticeType("success");
+      }
+    } catch (e) {
+      setNotice(e?.message || "Failed to generate cover.");
+      setNoticeType("error");
     } finally { setBusy(false); setBusyText(""); }
   }
 
@@ -131,6 +142,11 @@ if (!podcastId) {
       setCoverB64(null);
       setCoverMeta({});
       setCoverMime("image/png");
+      setNotice("Cover cleared.");
+      setNoticeType("info");
+    } catch (e) {
+      setNotice(e?.message || "Failed to clear cover.");
+      setNoticeType("error");
     } finally {
       setBusy(false);
     }
@@ -151,6 +167,16 @@ if (!podcastId) {
       setCoverB64(resp.coverArtBase64);
       setCoverMime(resp.mimeType || "image/png"); // from backend
       setCoverMeta(resp.meta || {});
+      if (resp.warning) {
+        setNotice(resp.warning);
+        setNoticeType("warn");
+      } else {
+        setNotice("Cover uploaded and saved.");
+        setNoticeType("success");
+      }
+    } catch (e) {
+      setNotice(e?.message || "Failed to upload cover.");
+      setNoticeType("error");
     } finally { setBusy(false); setBusyText(""); }
   }
 
@@ -176,6 +202,31 @@ if (!podcastId) {
       <p style={{ marginTop: 0, opacity: 0.8 }}>
         Generate or upload cover art, and edit the episode title.
       </p>
+      {notice && (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: "10px 12px",
+            borderRadius: 10,
+            border: "1px solid",
+            borderColor:
+              noticeType === "error" ? "#fecaca" :
+              noticeType === "warn" ? "#fde68a" :
+              noticeType === "success" ? "#bbf7d0" : "#e5e7eb",
+            background:
+              noticeType === "error" ? "#fef2f2" :
+              noticeType === "warn" ? "#fffbeb" :
+              noticeType === "success" ? "#f0fdf4" : "#f9fafb",
+            color:
+              noticeType === "error" ? "#991b1b" :
+              noticeType === "warn" ? "#92400e" :
+              noticeType === "success" ? "#166534" : "#111827",
+            fontSize: 14,
+          }}
+        >
+          {notice}
+        </div>
+      )}
 
         {busy && (
         <div className="mb-6">

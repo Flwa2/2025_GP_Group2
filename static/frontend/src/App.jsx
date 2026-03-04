@@ -34,7 +34,7 @@ function useHashRoute() {
 }
 
 export default function App() {
-  const { i18n } = useTranslation();
+  useTranslation();
   const hash = useHashRoute();
   const isAccount = hash.startsWith('#/account');
   const isSignup = hash.startsWith('#/signup');
@@ -52,11 +52,11 @@ export default function App() {
     }
   }, [hash]);
   return (
-    <div className="min-h-screen bg-cream dark:bg-[#0a0a1a] text-black dark:text-white overflow-x-hidden transition-colors duration-500">
+    <div className="min-h-screen flex flex-col bg-cream dark:bg-[#0a0a1a] text-black dark:text-white transition-colors duration-500">
       <div className="h-2 bg-purple-gradient"></div>
       <Header />
 
-      <main className="pt-20">
+      <main className={isEpisodes ? "app-main pt-14 flex-1" : "app-main pt-16 flex-1"}>
         {isAccount ? (
           <Account />
         ) : isSignup ? (
@@ -97,8 +97,8 @@ export default function App() {
             <FooterArt />
           </>
         )}
-        <Footer />
       </main>
+      <Footer />
     </div>
   );
 }
