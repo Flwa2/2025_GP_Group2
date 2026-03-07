@@ -327,10 +327,10 @@ def generate_podcast_script(description: str, speakers_info: list, script_style:
             --------------------
             INTRO
             --------------------
-            - ظٹط¬ط¨ ط£ظ† طھظƒظˆظ† ط£ظˆظ„ ط¬ظ…ظ„ط© ظ…ظ†ط·ظˆظ‚ط© ظپظٹ ط§ظ„ظ…ظ‚ط¯ظ…ط© ظ…ظ† ط§ظ„ظ…ظ‚ط¯ظ… ط§ظ„ط±ط¦ظٹط³ظٹ (ط£ظˆظ„ ظ…طھط­ط¯ط« ظپظٹ ط§ظ„ظ‚ط§ط¦ظ…ط©).
-    - ظٹط¬ط¨ ط£ظ† طھط­طھظˆظٹ ظ‡ط°ظ‡ ط§ظ„ط¬ظ…ظ„ط© ط¹ظ„ظ‰ {{SHOW_TITLE}} ط­ط±ظپظٹظ‹ط§ ط¯ط§ط®ظ„ ط¹ظ„ط§ظ…ط§طھ ط§ظ‚طھط¨ط§ط³طŒ ظ…ط«ط§ظ„:
-    <ط§ط³ظ…_ط§ظ„ظ…ظ‚ط¯ظ…>: ظ…ط±ط­ط¨ظ‹ط§ ط¨ظƒظ… ظپظٹ ط­ظ„ظ‚ط© ط¬ط¯ظٹط¯ط© ظ…ظ† "{{SHOW_TITLE}}".
-    - ط¨ط¹ط¯ ظ‡ط°ظ‡ ط§ظ„ط¬ظ…ظ„ط©طŒ ط£ظƒظ…ظ„ ط§ظ„ظ…ظ‚ط¯ظ…ط© ط¨طھظ‚ط¯ظٹظ… ط§ظ„ظ…ظˆط¶ظˆط¹ ظˆط§ظ„ظ…طھط­ط¯ط«ظٹظ† ط¨ط´ظƒظ„ ط·ط¨ظٹط¹ظٹ.
+            - يجب أن تكون أول جملة منطوقة في المقدمة من المقدم الرئيسي (أول متحدث في القائمة).
+    - يجب أن تحتوي هذه الجملة على {{SHOW_TITLE}} حرفيًا داخل علامات اقتباس، مثال:
+    <اسم_المقدم>: مرحبًا بكم في حلقة جديدة من "{{SHOW_TITLE}}".
+    - بعد هذه الجملة، أكمل المقدمة بتقديم الموضوع والمتحدثين بشكل طبيعي.
     """
     else:
             intro_block = """
@@ -443,7 +443,7 @@ OUTRO
 - Keep the script natural and flowing.
 
 SPEAKER RULES (MANDATORY â€” DO NOT VIOLATE):
-- Speaker Interaction Rule: When a speaker replies, they should naturally reference the other speaker's label when appropriate during conversation. Speakers MUST address each other using the exact labels provided (example: if speakers are x and v, then the script may contain: "Thatâ€™s interesting, v." or "What do you think, x?").
+- Speaker Interaction Rule: When a speaker replies, they should naturally reference the other speaker's label when appropriate during conversation. Speakers MUST address each other using the exact labels provided (example: if speakers are x and v, then the script may contain: "That’s interesting, v." or "What do you think, x?").
 - Keep speaker labels EXACTLY as written in the input (example: ga, ha, sp, user, narrator).
 - Do NOT rename, modify, expand, substitute, or invent new speaker names.
 - If the original text contains: "ga:", "ha:" or any label format, use them EXACTLY.
@@ -512,7 +512,7 @@ Transform the following text into a structured podcast script:
 
     if PLACEHOLDER not in raw_script and is_arabic(raw_script):
         m = re.search(
-            r"(?:ط­ظ„ظ‚ط© ط¬ط¯ظٹط¯ط© ظ…ظ†|ط­ظ„ظ‚ط© ظ…ظ†|ظ…ظ†)\s*[\"â€œآ«](.+?)[\"â€‌آ»]",
+            r"(?:حلقة جديدة من|حلقة من|من)\s*[\"“«](.+?)[\"”»]",
             raw_script,
         )
         if m:
@@ -554,25 +554,25 @@ def generate_title_from_script(script: str, script_style: str = "") -> str:
 
     # Detect language from the script itself
     is_ar = is_arabic(text)
-    style_label = script_style or ("طھط¹ظ„ظٹظ…ظٹ" if is_ar else "General")
+    style_label = script_style or ("تعليمي" if is_ar else "General")
 
     if is_ar:
         # Arabic title instructions
         prompt = f"""
-ط£ظ†طھ ظƒط§طھط¨ ط¹ظ†ط§ظˆظٹظ† ظ„ط¨ظˆط¯ظƒط§ط³طھ.
+أنت كاتب عناوين لبودكاست.
 
-ط§ظƒطھط¨ ط¹ظ†ظˆط§ظ†ظ‹ط§ ظˆط§ط­ط¯ظ‹ط§ ظ‚طµظٹط±ظ‹ط§ ظˆط¬ط°ط§ط¨ظ‹ط§ ظ„ط­ظ„ظ‚ط© ط¨ظˆط¯ظƒط§ط³طھ
-ظ…ظƒظˆظ‘ظ†ظ‹ط§ ظ…ظ† ظ¤ ط¥ظ„ظ‰ ظ¨ ظƒظ„ظ…ط§طھ طھظ‚ط±ظٹط¨ظ‹ط§.
+اكتب عنوانًا واحدًا قصيرًا وجذابًا لحلقة بودكاست
+مكوّنًا من ٤ إلى ٨ كلمات تقريبًا.
 
-ط§ظ„ظ‚ظˆط§ط¹ط¯:
-- ط§ظ„ط¹ظ†ظˆط§ظ† ط¨ط§ظ„ظ„ط؛ط© ط§ظ„ط¹ط±ط¨ظٹط© ظپظ‚ط·.
-- ظ„ط§ طھط¶ط¹ ط£ط±ظ‚ط§ظ… ظ„ظ„ط­ظ„ظ‚ط§طھ.
-- ظ„ط§ طھط³طھط®ط¯ظ… ط¹ظ„ط§ظ…ط§طھ ط§ظ‚طھط¨ط§ط³ ط£ظˆ ط¥ظٹظ…ظˆط¬ظٹ.
-- ط£ط¹ط¯ ط³ط·ط±ظ‹ط§ ظˆط§ط­ط¯ظ‹ط§ ظٹط­طھظˆظٹ ط¹ظ„ظ‰ ط§ظ„ط¹ظ†ظˆط§ظ† ظپظ‚ط· ط¨ط¯ظˆظ† ط£ظٹ ط´ط±ط­ ط¥ط¶ط§ظپظٹ.
+القواعد:
+- العنوان باللغة العربية فقط.
+- لا تضع أرقام للحلقات.
+- لا تستخدم علامات اقتباس أو إيموجي.
+- أعد سطرًا واحدًا يحتوي على العنوان فقط بدون أي شرح إضافي.
 
-ظ†ظ…ط· ط§ظ„ط­ظ„ظ‚ط©: {style_label}
+نمط الحلقة: {style_label}
 
-ط§ظ„ظ†طµ:
+النص:
 \"\"\"{text[:4000]}\"\"\"        
 """
     else:
@@ -609,7 +609,7 @@ Script:
     title = title.strip('"â€œâ€‌آ«آ»').strip()
 
     if not title:
-        return "ط­ظ„ظ‚ط© ط¨ط¯ظˆظ† ط¹ظ†ظˆط§ظ†" if is_ar else "Untitled Episode"
+        return "حلقة بدون عنوان" if is_ar else "Untitled Episode"
 
     return title
 
@@ -2335,8 +2335,8 @@ def summarize_transcript():
             is_ar = is_arabic(text)
 
         if is_ar:
-            system_prompt = "ط£ظ†طھ ظ…ط³ط§ط¹ط¯ ظ…ظپظٹط¯ ظٹظ‚ظˆظ… ط¨ط¥ظ†ط´ط§ط، ظ…ظ„ط®طµط§طھ ط¨ظˆط¯ظƒط§ط³طھ ظ…ظˆط¬ط²ط©. ظٹط¬ط¨ ط£ظ† طھظƒظˆظ† ط¬ظ…ظٹط¹ ط§ظ„ط±ط¯ظˆط¯ ط¨ط­ط¯ ط£ظ‚طµظ‰ 250 ظƒظ„ظ…ط©."
-            user_prompt = f"ظٹط±ط¬ظ‰ طھظ„ط®ظٹطµ ظ†طµ ط§ظ„ط¨ظˆط¯ظƒط§ط³طھ ط§ظ„طھط§ظ„ظٹ ط¨ط­ط¯ ط£ظ‚طµظ‰ 250 ظƒظ„ظ…ط©. ط±ظƒط² ط¹ظ„ظ‰ ط§ظ„ظ†ظ‚ط§ط· ط§ظ„ط±ط¦ظٹط³ظٹط© ظˆط§ظ„ط£ظپظƒط§ط± ط§ظ„ظ…ظ‡ظ…ط©:\n\n{text}"
+            system_prompt = "أنت مساعد مفيد يقوم بإنشاء ملخصات بودكاست موجزة. يجب أن تكون جميع الردود بحد أقصى 250 كلمة."
+            user_prompt = f"يرجى تلخيص نص البودكاست التالي بحد أقصى 250 كلمة. ركز على النقاط الرئيسية والأفكار المهمة:\n\n{text}"
         else:
             system_prompt = "You are a helpful assistant that creates concise podcast summaries. Always respond with 250 words or less."
             user_prompt = f"Please summarize this podcast transcript in 250 words or less. Focus on the main points, key insights, and important discussions:\n\n{text}"
