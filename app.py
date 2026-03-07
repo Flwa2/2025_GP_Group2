@@ -1245,7 +1245,99 @@ def api_cover_generate(podcast_id):
         warning=("Cover thumbnail saved; storage URL unavailable." if persist_error else ""),
     )
 
-@app.post("/api/podcasts/<podcast_id>/cover/upload")
+@app.post("/api/podcast/<podcast_id>/update")
+def api_update_podcast(podcast_id):
+    """Save all changes to podcast (script, speakers, music)"""
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    data = request.get_json(silent=True) or {}
+    print(f"Received update for podcast {podcast_id}")
+    print(f"Data keys: {data.keys()}")
+    
+    # Get podcast document
+    podcast_ref = db.collection("podcasts").document(podcast_id)
+    podcast_doc = podcast_ref.get()
+    
+    if not podcast_doc.exists:
+        return jsonify(error="Podcast not found"), 404
+
+    podcast_data = podcast_doc.to_dict() or {}
+    
+    # Verify ownership
+    if podcast_data.get("userId") != user_id:
+        return jsonify(error="Forbidden"), 403
+
+    # Update main podcast document
+    updates = {
+        "title": data.get("showTitle", podcast_data.get("title", "")),
+        "lastEditedAt": firestore.SERVER_TIMESTAMP,
+    }
+    
+    if data.get("description"):
+        updates["description"] = data.get("description")
+    
+    if data.get("category"):
+        updates["category"] = data.get("category")
+        session["category"] = data.get("category")
+    
+    podcast_ref.set(updates, merge=True)
+    print(f"Updated main podcast document")
+
+    # IMPORTANT: Get the script that the frontend sent (already has updated speaker names)
+    script_to_save = data.get("script", "")
+    print(f"DEBUG: Saving script with length: {len(script_to_save)}")
+    print(f"DEBUG: Script preview: {script_to_save[:200]}")
+    
+    # Update script - the frontend has already updated the speaker names
+    if script_to_save:
+        script_ref = podcast_ref.collection("scripts").document("main")
+        script_ref.set({
+            "finalScriptText": script_to_save,
+            "wordCount": len((script_to_save or "").split()),
+            "lastEditedAt": firestore.SERVER_TIMESTAMP,
+        }, merge=True)
+        print(f"DEBUG: Script saved to Firestore")
+    else:
+        print(f"DEBUG: No script to save")
+
+    # Update speakers - delete old ones and add new ones
+    if data.get("speakers"):
+        print(f"DEBUG: Saving {len(data.get('speakers'))} speakers")
+        
+        # Delete existing speakers
+        for speaker_doc in podcast_ref.collection("speakers").stream():
+            speaker_doc.reference.delete()
+        
+        # Add new speakers
+        for speaker in data.get("speakers", []):
+            podcast_ref.collection("speakers").document().set({
+                "name": speaker.get("name", ""),
+                "gender": speaker.get("gender", "Male"),
+                "role": speaker.get("role", "host"),
+                "providerVoiceId": speaker.get("voiceId", ""),
+                "updatedAt": firestore.SERVER_TIMESTAMP,
+            })
+        print(f"DEBUG: Speakers saved")
+
+    # Save music selections to session
+    if data.get("introMusic") is not None:
+        session["introMusic"] = data.get("introMusic")
+    if data.get("bodyMusic") is not None:
+        session["bodyMusic"] = data.get("bodyMusic")
+    if data.get("outroMusic") is not None:
+        session["outroMusic"] = data.get("outroMusic")
+    
+    session.modified = True
+
+    return jsonify({
+        "ok": True,
+        "message": "Podcast updated successfully",
+        "podcastId": podcast_id,
+        "updatedScript": script_to_save  # Return the updated script to frontend
+    })
+
 @app.post("/api/podcasts/<podcast_id>/cover/upload")
 def api_cover_upload(podcast_id):
     user_id, err = _require_login_user()
@@ -1383,25 +1475,193 @@ def api_me():
     Return the logged-in user's basic profile from Firestore.
     Uses the session user_id set during /api/login or /api/social-login.
     """
-    user_id = session.get("user_id")  # we stored email as user_id on login
+    user_id = session.get("user_id") or get_current_user_email()
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
-    user_ref = db.collection("users").document(user_id)
-    doc = user_ref.get()
+    try:
+        user_ref = db.collection("users").document(user_id)
+        doc = user_ref.get()
 
-    if not doc.exists:
-        return jsonify(error="User not found"), 404
+        if not doc.exists:
+            return jsonify(error="User not found"), 404
 
-    data = doc.to_dict() or {}
+        data = doc.to_dict() or {}
 
-    return jsonify(
-        email=data.get("email", user_id),
-        displayName=data.get("name", "WeCast User"),
-        handle=data.get("handle", "@wecast"),
-    )
+        return jsonify(
+            email=data.get("email", user_id),
+            displayName=data.get("name", data.get("displayName", "WeCast User")),
+            bio=data.get("bio", "I create AI-powered podcasts."),
+            avatarUrl=data.get("avatarUrl", ""),
+            handle=data.get("handle", f"@{data.get('name', 'user').lower().replace(' ', '')}"),
+            createdAt=data.get("created_at"),
+        )
+    except Exception as e:
+        print(f"Error fetching user profile: {e}")
+        return jsonify(error="Failed to fetch profile"), 500
 
 
+@app.post("/api/profile/update")
+def api_profile_update():
+    """Update user profile information"""
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    # Handle form data with possible file upload
+    if request.content_type and 'multipart/form-data' in request.content_type:
+        display_name = request.form.get('displayName', '').strip()
+        bio = request.form.get('bio', '').strip()
+        
+        # Handle avatar upload
+        avatar_file = request.files.get('avatar')
+        avatar_url = None
+        
+        if avatar_file and avatar_file.filename:
+            # Validate file type
+            if not avatar_file.content_type.startswith('image/'):
+                return jsonify(error="Only image files are allowed"), 400
+            
+            # Read file bytes
+            image_bytes = avatar_file.read()
+            
+            # Validate image size (max 5MB)
+            if len(image_bytes) > 5 * 1024 * 1024:
+                return jsonify(error="Image size should be less than 5MB"), 400
+            
+            try:
+                # Upload to Firebase Storage
+                bucket = get_storage_bucket()
+                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                # Sanitize filename
+                safe_filename = re.sub(r'[^a-zA-Z0-9._-]', '', avatar_file.filename)
+                filename = f"avatars/{user_id}/{timestamp}_{safe_filename}"
+                blob = bucket.blob(filename)
+                
+                # Set content type
+                blob.upload_from_string(
+                    image_bytes, 
+                    content_type=avatar_file.content_type
+                )
+                
+                # Make publicly accessible
+                blob.make_public()
+                avatar_url = blob.public_url
+                
+            except Exception as e:
+                print(f"Avatar upload error: {e}")
+                return jsonify(error="Failed to upload avatar"), 500
+    else:
+        # JSON data (if no file upload)
+        data = request.get_json(silent=True) or {}
+        display_name = data.get('displayName', '').strip()
+        bio = data.get('bio', '').strip()
+        avatar_url = data.get('avatarUrl', '').strip()
+
+    # Prepare update data
+    update_data = {}
+    
+    if display_name:
+        update_data['name'] = display_name
+        update_data['displayName'] = display_name
+        # Auto-generate handle from display name
+        handle = f"@{display_name.lower().replace(' ', '')}"
+        update_data['handle'] = handle
+    
+    if bio is not None:  # Allow empty bio
+        update_data['bio'] = bio
+    
+    if avatar_url:
+        update_data['avatarUrl'] = avatar_url
+    
+    update_data['updatedAt'] = firestore.SERVER_TIMESTAMP
+
+    if not update_data:
+        return jsonify(error="No data to update"), 400
+
+    try:
+        # Update Firestore
+        user_ref = db.collection("users").document(user_id)
+        user_ref.set(update_data, merge=True)
+        
+        # Get updated user data
+        updated_doc = user_ref.get()
+        updated_data = updated_doc.to_dict() or {}
+        
+        return jsonify({
+            "ok": True,
+            "message": "Profile updated successfully",
+            "displayName": updated_data.get('name', updated_data.get('displayName', '')),
+            "bio": updated_data.get('bio', ''),
+            "avatarUrl": updated_data.get('avatarUrl', ''),
+            "email": updated_data.get('email', ''),
+            "handle": updated_data.get('handle', '')
+        })
+        
+    except Exception as e:
+        print(f"Profile update error: {e}")
+        return jsonify(error="Failed to update profile"), 500
+
+@app.get("/api/podcast/<podcast_id>")
+def api_get_podcast(podcast_id):
+    """Fetch full podcast data for editing"""
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    # Get podcast document
+    podcast_ref = db.collection("podcasts").document(podcast_id)
+    podcast_doc = podcast_ref.get()
+    
+    if not podcast_doc.exists:
+        return jsonify(error="Podcast not found"), 404
+
+    podcast_data = podcast_doc.to_dict() or {}
+    
+    # Verify ownership
+    if podcast_data.get("userId") != user_id:
+        return jsonify(error="Forbidden"), 403
+
+    # Get speakers from subcollection
+    speakers = []
+    speakers_query = podcast_ref.collection("speakers").stream()
+    for speaker_doc in speakers_query:
+        speaker_data = speaker_doc.to_dict() or {}
+        speakers.append({
+            "name": speaker_data.get("name", ""),
+            "gender": speaker_data.get("gender", "Male"),
+            "role": speaker_data.get("role", "host"),
+            "voiceId": speaker_data.get("providerVoiceId", ""),
+        })
+
+    # Get script from subcollection
+    script_doc = podcast_ref.collection("scripts").document("main").get()
+    script = ""
+    script_template = ""
+    if script_doc.exists:
+        script_data = script_doc.to_dict() or {}
+        script = script_data.get("finalScriptText", "")
+        script_template = script_data.get("sourceText", "")
+
+    # Return all data the edit page needs
+    return jsonify({
+        "id": podcast_id,
+        "script": script,
+        "scriptTemplate": script_template,
+        "showTitle": podcast_data.get("title", ""),
+        "title": podcast_data.get("title", ""),
+        "episodeTitle": podcast_data.get("title", ""),
+        "scriptStyle": podcast_data.get("style", ""),
+        "speakersCount": len(speakers),
+        "speakers": speakers,
+        "description": podcast_data.get("description", ""),
+        "introMusic": session.get("introMusic", ""),
+        "bodyMusic": session.get("bodyMusic", ""),
+        "outroMusic": session.get("outroMusic", ""),
+        "category": session.get("category", ""),
+        "language": podcast_data.get("language", "en"),
+    })
+    
 @app.post("/api/generate")
 def api_generate():
     data = request.get_json(force=True)
@@ -1469,11 +1729,6 @@ def api_generate():
 
 
     return jsonify(ok=True, script=script_template, title=title, show_title=show_title, podcastId=podcast_id)
-
-@app.get("/api/draft")
-def api_draft():
-    # React editor uses this to prefill the textarea
-    return jsonify(session.get("create_draft", {}))
 
 
 
@@ -1729,63 +1984,7 @@ def api_delete_episode(episode_id):
 
     return jsonify(ok=True, deletedId=episode_id)
 
-@app.post("/api/edit/save")
-def api_edit_save():
-    """
-    Save edited script (and optionally updated title).
-    - ط¯ط§ط¦ظ…ط§ظ‹ ظ†ط­ط¯ظ‘ط« session["create_draft"]
-    - ظˆط¥ط°ط§ ظپظٹظ‡ user_id ظپظٹ ط§ظ„ظ€ sessionطŒ ظ†ط®ط²ظ† ظ†ظپط³ ط§ظ„ط´ظٹط، ظپظٹ Firestore ط£ظٹط¶ط§ظ‹
-    """
-    data = request.get_json(silent=True) or {}
-    edited_script = (data.get("edited_script") or "").strip()
-    show_title = (data.get("show_title") or "").strip()
 
-    if not edited_script:
-        return jsonify({"ok": False, "error": "Edited script is empty"}), 400
-
-    # 1) ط­ط¯ظ‘ط« ط§ظ„ظ€ session draft
-    draft = session.get("create_draft") or {}
-    draft["script"] = edited_script
-
-    if show_title:
-        draft["show_title"] = show_title
-        draft["title"] = show_title
-
-    session["create_draft"] = draft
-    session.modified = True
-
-    # 2) ظ„ظˆ ط§ظ„ظ…ط³طھط®ط¯ظ… ظ…ط³ط¬ظ„ ط¯ط®ظˆظ„طŒ ط®ط²ظ‘ظ† ظ†ط³ط®ط© ظپظٹ Firestore
-    user_id = session.get("user_id")
-    if user_id:
-        draft_ref = db.collection("drafts").document(user_id)
-        draft_ref.set(
-            {
-                "script": edited_script,
-                "show_title": show_title,
-                "updated_at": firestore.SERVER_TIMESTAMP,
-            },
-            merge=True,
-        )
-
-    podcast_id = (session.get("create_draft") or {}).get("podcastId")
-    if user_id and podcast_id:
-        script_ref = db.collection("podcasts").document(podcast_id).collection("scripts").document("main")
-        script_ref.set({
-            "finalScriptText": edited_script,
-            "wordCount": len(edited_script.split()),
-            "lastEditedAt": firestore.SERVER_TIMESTAMP,
-        }, merge=True)
-
-        db.collection("podcasts").document(podcast_id).set({
-            "title": show_title or draft.get("title") or "Untitled Episode",
-            "lastEditedAt": firestore.SERVER_TIMESTAMP,
-        }, merge=True)
-
-    return jsonify({
-        "ok": True,
-        "show_title": draft.get("show_title", ""),
-        "title": draft.get("title", ""),
-    })
 
 
 
@@ -2015,10 +2214,10 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
 
 @app.post("/api/audio")
 def api_audio():
+    
     payload = request.get_json(silent=True) or {}
-
     script = (payload.get("scriptText") or request.form.get("scriptText") or "").strip()
-    podcast_id = (payload.get("podcastId") or "").strip()   # âœ… NEW
+    podcast_id = (payload.get("podcastId") or "").strip()
     ui_language = (payload.get("language") or "").strip().lower()
 
     print("DEBUG /api/audio script length:", len(script))
@@ -2343,14 +2542,17 @@ def signup():
 
     user_ref.set(
         {
-            "email": email,
-            "name": name or "",
-            "username_lower": (name or "").lower(),
-            "password_hash": password_hash,
-            "created_at": datetime.utcnow().isoformat(),
-            "role": "user",
-            "failed_attempts": 0,
-            "lock_until": None,
+             "email": email,
+        "name": name or "",
+        "displayName": name or "",
+        "bio": "",
+        "avatarUrl": "",
+        "username_lower": (name or "").lower(),
+        "password_hash": password_hash,
+        "created_at": datetime.utcnow().isoformat(),
+        "role": "user",
+        "failed_attempts": 0,
+        "lock_until": None,
         }
     )
 
@@ -2485,6 +2687,7 @@ def reset_password_direct():
 
     return jsonify(message="Password updated successfully. You can now log in."), 200
 
+
 @app.post("/api/social-login")
 def social_login():
     from firebase_admin import auth as fb_auth
@@ -2511,13 +2714,16 @@ def social_login():
         if not doc.exists:
             # Create new user
             user_ref.set({
-                "email": email,
-                "name": name,
-                "authProvider": auth_provider,
-                "created_at": datetime.utcnow().isoformat(),
-                "last_login": datetime.utcnow().isoformat(),
-                "role": "user",
-                "password_hash": None,
+          "email": email,
+        "name": name,
+        "displayName": name,
+        "bio": "",
+        "avatarUrl": "",
+        "authProvider": auth_provider,
+        "created_at": datetime.utcnow().isoformat(),
+        "last_login": datetime.utcnow().isoformat(),
+        "role": "user",
+        "password_hash": None,
             })
         else:
             user_ref.update({
@@ -2548,4 +2754,3 @@ def social_login():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
-

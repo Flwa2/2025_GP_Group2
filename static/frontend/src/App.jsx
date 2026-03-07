@@ -15,6 +15,7 @@ import EditScript from "./components/EditScript";
 import Create from "./components/CreatePro";
 import Preview from "./components/Preview";
 import Episodes from "./components/Episodes";
+import EditPodcast from "./components/editPodcast.jsx";
 import FinalizePublish from "./components/FinalizePublish";
 
 
@@ -44,6 +45,7 @@ export default function App() {
   const isPreview = hash.startsWith("#/preview");
   const isEpisodes = hash.startsWith("#/episodes");
   const isFinalize = hash.startsWith("#/finalize");
+  const isEditPodcast = hash.startsWith("#/edit-podcast");
 
   useEffect(() => {
     const sectionLinks = ['#about', '#episodes'];
@@ -77,14 +79,16 @@ export default function App() {
             }
 
             return <Create />;
-          })()
+           })()
+            ) : isEditPodcast ? ( 
+          <EditPodcast />
         ) : isEdit ? (
           <EditScript />
         ) : isEpisodes ? (
           <Episodes />
         ) : isFinalize ? (
           <FinalizePublish />
-        ) :isPreview ? (
+        ) : isPreview ? (
           <Preview />
         ) : (
           <>

@@ -194,20 +194,23 @@ export default function Episodes() {
   };
 
   const startEditEpisode = (ep) => {
-    const title = String(ep?.title || "").trim() || "Podcast Show";
-    const brief = String(ep?.brief || "").trim();
-    const draft = [title, "", brief].filter(Boolean).join("\n");
-    const existing = JSON.parse(sessionStorage.getItem("editData") || "{}");
-    const next = {
-      ...existing,
-      generatedScript: draft || existing.generatedScript || "",
-      scriptTemplate: draft || existing.scriptTemplate || "",
-      showTitle: title,
-      episodeTitle: title,
-      description: brief || existing.description || "",
-    };
-    sessionStorage.setItem("editData", JSON.stringify(next));
-    window.location.hash = "#/edit";
+      const editData = {
+    podcastId: ep.id,
+    script: ep.script || "",
+    scriptTemplate: ep.scriptTemplate || "",
+    showTitle: ep.title || "Podcast Show",
+    episodeTitle: ep.title || "Podcast Show",
+    scriptStyle: ep.scriptStyle || "",
+    speakersCount: ep.speakersCount || 0,
+    speakers: ep.speakers || [],
+    description: ep.description || "",
+    introMusic: ep.introMusic || "",
+    bodyMusic: ep.bodyMusic || "",
+    outroMusic: ep.outroMusic || "",
+    category: ep.category || "",
+  };
+  sessionStorage.setItem("editData", JSON.stringify(editData));
+  window.location.hash = "#/edit-podcast?id=" + encodeURIComponent(ep.id);
   };
 
   const formatClock = (value) => {
@@ -464,21 +467,6 @@ export default function Episodes() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setActiveFilter("playable")}
-                    className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold border transition ${
-                      activeFilter === "playable"
-                        ? "bg-purple-100 text-purple-900 border-purple-300 dark:bg-purple-500/25 dark:text-purple-100 dark:border-purple-400/40"
-                        : "bg-white/70 text-black/85 dark:bg-neutral-900/80 dark:text-white border-black/10 dark:border-white/10 hover:bg-white/90 dark:hover:bg-white/10"
-                    }`}
-                  >
-                    <List className="h-4 w-4" />
-                    {t("episodes.sidebar.playable")}
-                    <span className="ml-1 inline-flex min-w-5 items-center justify-center rounded-full border border-current/20 px-1.5 text-[11px] leading-5">
-                      {playableCount}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => setActiveFilter("deleted")}
                     className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold border transition ${
                       activeFilter === "deleted"
@@ -506,42 +494,7 @@ export default function Episodes() {
                     <Plus className="h-4 w-4" />
                     {t("episodes.sidebar.createNew")}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => selectedEpisode && startEditEpisode(selectedEpisode)}
-                    disabled={!selectedEpisode || activeFilter === "deleted"}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-black/10 dark:border-white/10 bg-white/50 dark:bg-neutral-900/50 px-4 py-2 text-sm font-semibold text-black/80 dark:text-white/85 hover:bg-white/80 dark:hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <Pencil className="h-4 w-4" />
-                    {t("episodes.card.edit")}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => selectedEpisode && togglePlayEpisode(selectedEpisode)}
-                    disabled={!selectedEpisode || !resolveAudioUrl(selectedEpisode.audioUrl) || activeFilter === "deleted"}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-black/10 dark:border-white/10 bg-white/50 dark:bg-neutral-900/50 px-4 py-2 text-sm font-semibold text-black/80 dark:text-white/85 hover:bg-white/80 dark:hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {selectedEpisode && activeAudioId === selectedEpisode.id && isPlaying ? (
-                      <>
-                        <Pause className="h-4 w-4" />
-                        {t("episodes.card.pause")}
-                      </>
-                    ) : (
-                      <>
-                        <Play className="h-4 w-4" />
-                        {t("episodes.card.play")}
-                      </>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => selectedEpisode && requestDeleteEpisode(selectedEpisode)}
-                    disabled={!selectedEpisode || activeFilter === "deleted"}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 dark:border-red-400/30 bg-white/70 dark:bg-neutral-900/80 px-4 py-2 text-sm font-semibold text-red-600 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    {t("episodes.deleteEpisode")}
-                  </button>
+            
                 </div>
                 <p className="mt-2 text-xs text-black/55 dark:text-white/60">
                   {selectedEpisode
@@ -762,6 +715,18 @@ export default function Episodes() {
                                   {activeAudioId === ep.id && isPlaying ? t("episodes.card.pause") : t("episodes.card.play")}
                                 </span>
                               </button>
+                              <button
+  type="button"
+  onClick={(e) => {
+    e.stopPropagation();
+    requestDeleteEpisode(ep);
+  }}
+  className="inline-flex h-9 items-center gap-1 rounded-lg border border-red-200 dark:border-red-400/30 px-3 text-sm font-semibold text-red-600 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20"
+  title={t("episodes.deleteEpisode")}
+>
+  <Trash2 className="h-4 w-4" />
+  <span className="hidden sm:inline">{t("episodes.deleteEpisode")}</span>
+</button>
                             </>
                           )}
                         </div>

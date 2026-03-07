@@ -394,5 +394,7 @@
     "preview.saveFailed":  "Save failed. Please try again.",
     "preview.saveMissingId":  "Missing episode id. Please reopen from your episodes.",
     "preview.saveTooltip":  "Save this episode to your library",
-    "preview.saveLoginRequired":  "Please sign up or log in to save this episode."
+    "preview.saveLoginRequired":  "Please sign up or log in to save this episode.",
+    "episodes.card.edit": "Edit",
+     "episodes.card.continueEditing": "Continue Editing"
 }

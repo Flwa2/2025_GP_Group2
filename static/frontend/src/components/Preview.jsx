@@ -554,15 +554,6 @@ export default function Preview() {
             >
               {t("preview.back")}
             </button>
-            <button
-              onClick={handleSaveAll}
-              disabled={isSaving}
-              className="px-4 py-2 rounded-xl bg-black text-white dark:bg-white dark:text-black hover:opacity-90 transition disabled:opacity-50 inline-flex items-center gap-2"
-              title={t("preview.saveTooltip")}
-            >
-              <Save className="w-4 h-4" />
-              {isSaving ? t("preview.saving") : t("preview.save")}
-            </button>
           </div>
         </div>
         {saveMessage && (
