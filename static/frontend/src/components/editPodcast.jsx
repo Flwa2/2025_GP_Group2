@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+﻿import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -26,7 +26,8 @@ import {
   FileText,
   Volume,
   Disc,
-  ChevronLeft
+  ChevronLeft,
+  ChevronDown
 } from "lucide-react";
 import WeCastAudioPlayer from "./WeCastAudioPlayer";
 import Modal from "../components/Modal";
@@ -34,6 +35,75 @@ import Modal from "../components/Modal";
 const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
   : "http://localhost:5000";
+
+const splitList = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((x) => String(x || "").trim().toLowerCase()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((x) => x.trim().toLowerCase())
+      .filter(Boolean);
+  }
+  return [];
+};
+
+const TONE_RULES = [
+  { tone: "professional", keys: ["professional", "broadcaster", "corporate", "formal", "authoritative", "احترافي", "رسمي"] },
+  { tone: "funny", keys: ["funny", "humorous", "comedic", "comic", "quirky", "playful", "مضحك", "كوميدي", "مرح"] },
+  { tone: "warm", keys: ["warm", "friendly", "comforting", "cozy", "welcoming", "دافئ", "حنون"] },
+  { tone: "calm", keys: ["calm", "relaxed", "soothing", "gentle", "smooth", "هادئ", "مريح"] },
+  { tone: "energetic", keys: ["energetic", "dynamic", "lively", "upbeat", "excited", "حيوي", "نشيط"] },
+  { tone: "conversational", keys: ["conversational", "natural", "casual", "chatty", "محادثة", "طبيعي"] },
+  { tone: "serious", keys: ["serious", "deep", "resonant", "mature", "confident", "جدي", "عميق"] },
+  { tone: "educational", keys: ["educational", "educator", "teacher", "instructive", "explainer", "تعليمي"] },
+  { tone: "storytelling", keys: ["storytelling", "narration", "narrator", "cinematic", "قصصي", "سرد"] },
+];
+
+const getVoiceToneTags = (voice) => {
+  const explicit = [
+    ...splitList(voice?.tone),
+    ...splitList(voice?.labels?.tone),
+  ];
+
+  const haystack = [
+    String(voice?.name || ""),
+    String(voice?.description || ""),
+    String(voice?.labels?.description || ""),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const inferred = TONE_RULES
+    .filter((rule) => rule.keys.some((k) => haystack.includes(k)))
+    .map((rule) => rule.tone);
+
+  return Array.from(new Set([...explicit, ...inferred]));
+};
+
+const PITCH_VALUES = ["low", "medium", "high"];
+const PITCH_RULES = [
+  { pitch: "low", keys: ["low", "deep", "resonant", "bass", "baritone", "grave"] },
+  { pitch: "high", keys: ["high", "bright", "light", "youthful", "soprano"] },
+  { pitch: "medium", keys: ["medium", "balanced", "neutral", "natural"] },
+];
+
+const getVoicePitchTag = (voice) => {
+  const raw = String(voice?.pitch || voice?.labels?.pitch || "").trim().toLowerCase();
+  if (PITCH_VALUES.includes(raw)) return raw;
+
+  const haystack = [
+    String(voice?.name || ""),
+    String(voice?.description || ""),
+    String(voice?.labels?.description || ""),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const inferred = PITCH_RULES.find((rule) => rule.keys.some((k) => haystack.includes(k)));
+  return inferred?.pitch || "";
+};
 
 /* -------------------- loading overlay -------------------- */
 function LoadingOverlay({ show, logoSrc = "/logo.png", message }) {
@@ -87,7 +157,7 @@ function Toast({ toast, onClose }) {
             onClick={onClose}
             className="ml-3 opacity-60 hover:opacity-90"
           >
-            ✕
+            x
           </button>
         </div>
       </div>
@@ -99,13 +169,55 @@ function Toast({ toast, onClose }) {
 function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speakerIndex }) {
   if (!isOpen) return null;
 
+  const toList = (value) => {
+    if (Array.isArray(value)) return value.map((x) => String(x).trim()).filter(Boolean);
+    if (typeof value === "string") {
+      return value
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean);
+    }
+    return [];
+  };
+
+  const normalize = (s) => String(s || "").trim().toLowerCase();
+  const isNeutralGender = (s) => {
+    const g = normalize(s);
+    return g.includes("neutral") || g.includes("netural");
+  };
+  const selectedGender = normalize(filters.gender || "");
+  const safeGenderFilter = (selectedGender === "__all__" || isNeutralGender(selectedGender))
+    ? "__all__"
+    : selectedGender;
+
+  const genderOptions = [...new Set(
+    voices
+      .map(v => normalize(v.gender || v.labels?.gender || ""))
+      .filter((g) => Boolean(g) && !isNeutralGender(g))
+  )].sort();
+
   const languageOptions = [...new Set(
-    voices.flatMap(v => v.languages || []).filter(Boolean)
+    voices
+      .flatMap(v => [...toList(v.languages), ...toList(v.labels?.languages)])
+      .map(normalize)
+      .filter(Boolean)
   )].sort();
 
   const toneOptions = [...new Set(
-    voices.flatMap(v => v.tone || []).filter(Boolean)
+    voices
+      .flatMap((v) => getVoiceToneTags(v))
+      .map(normalize)
+      .filter(Boolean)
   )].sort();
+
+  const activeChips = [
+    filters.q ? { key: "q", label: `Search: ${filters.q}` } : null,
+    (safeGenderFilter && safeGenderFilter !== "__all__")
+      ? { key: "gender", label: `Gender: ${safeGenderFilter}` }
+      : null,
+    filters.language ? { key: "language", label: `Language: ${filters.language}` } : null,
+    filters.tone ? { key: "tone", label: `Tone: ${filters.tone}` } : null,
+  ].filter(Boolean);
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
@@ -124,42 +236,85 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
               value={filters.q || ""}
               onChange={(e) => setFilters({ ...filters, q: e.target.value })}
               placeholder="Search by voice name..."
-              className="w-full px-3 py-2 border rounded-lg"
+              className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900 text-black dark:text-white placeholder:text-black/45 dark:placeholder:text-white/45 caret-black dark:caret-white border-neutral-300 dark:border-white/15"
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Gender</label>
+              <div className="relative">
+                <select
+                  value={safeGenderFilter}
+                  onChange={(e) => setFilters({ ...filters, gender: e.target.value })}
+                  className="w-full appearance-none pr-10 px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900 text-black dark:text-white border-neutral-300 dark:border-white/15 [color-scheme:light] dark:[color-scheme:dark]"
+                >
+                  <option value="__all__">All Genders</option>
+                  {genderOptions.map(g => (
+                    <option key={g} value={g}>{g}</option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
+              </div>
+            </div>
+
             <div>
               <label className="block text-sm font-medium mb-1">Language</label>
-              <select
-                value={filters.language || ""}
-                onChange={(e) => setFilters({ ...filters, language: e.target.value })}
-                className="w-full px-3 py-2 border rounded-lg"
-              >
-                <option value="">All Languages</option>
-                {languageOptions.map(lang => (
-                  <option key={lang} value={lang}>{lang}</option>
-                ))}
-              </select>
+              <div className="relative">
+                <select
+                  value={filters.language || ""}
+                  onChange={(e) => setFilters({ ...filters, language: e.target.value })}
+                  className="w-full appearance-none pr-10 px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900 text-black dark:text-white border-neutral-300 dark:border-white/15 [color-scheme:light] dark:[color-scheme:dark]"
+                >
+                  <option value="">All Languages</option>
+                  {languageOptions.map(lang => (
+                    <option key={lang} value={lang}>{lang}</option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
+              </div>
             </div>
 
             <div>
               <label className="block text-sm font-medium mb-1">Tone</label>
-              <select
-                value={filters.tone || ""}
-                onChange={(e) => setFilters({ ...filters, tone: e.target.value })}
-                className="w-full px-3 py-2 border rounded-lg"
-              >
-                <option value="">All Tones</option>
-                {toneOptions.map(tone => (
-                  <option key={tone} value={tone}>{tone}</option>
-                ))}
-              </select>
+              <div className="relative">
+                <select
+                  value={filters.tone || ""}
+                  onChange={(e) => setFilters({ ...filters, tone: e.target.value })}
+                  className="w-full appearance-none pr-10 px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900 text-black dark:text-white border-neutral-300 dark:border-white/15 [color-scheme:light] dark:[color-scheme:dark]"
+                >
+                  <option value="">All Tones</option>
+                  {toneOptions.map(tone => (
+                    <option key={tone} value={tone}>{tone}</option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
+              </div>
             </div>
           </div>
 
+          {activeChips.length > 0 && (
+            <div>
+              <p className="mb-2 text-xs font-semibold text-black/60 dark:text-white/60">Active filters</p>
+              <div className="flex flex-wrap gap-2">
+                {activeChips.map((chip) => (
+                  <button
+                    key={chip.key}
+                    type="button"
+                    onClick={() => setFilters({ ...filters, [chip.key]: chip.key === "gender" ? "__all__" : "" })}
+                    className="inline-flex items-center gap-1 rounded-full border border-purple-300/70 dark:border-purple-400/45 bg-purple-50 dark:bg-purple-900/25 px-2.5 py-1 text-xs text-purple-700 dark:text-purple-200"
+                    title="Remove filter"
+                  >
+                    <span>{chip.label}</span>
+                    <span>x</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <button
-            onClick={() => setFilters({ q: "", language: "", tone: "", pitch: "" })}
+            onClick={() => setFilters({ q: "", gender: "__all__", language: "", tone: "", pitch: "" })}
             className="text-sm text-purple-600 hover:text-purple-700"
           >
             Clear Filters
@@ -219,12 +374,17 @@ export default function EditPodcast() {
   const [voices, setVoices] = useState([]);
   const [loadingVoices, setLoadingVoices] = useState(true);
   const [speakerVoiceFilters, setSpeakerVoiceFilters] = useState({});
+  const [speakerVoiceVisibleCounts, setSpeakerVoiceVisibleCounts] = useState({});
   const [activeFilterSpeaker, setActiveFilterSpeaker] = useState(null);
+  const VOICE_PAGE_SIZE = 100;
 
   // Music related
   const [availableTracks, setAvailableTracks] = useState([]);
   const [musicPreview, setMusicPreview] = useState(null);
   const textareaRef = useRef(null);
+  const voicePreviewRef = useRef(null);
+  const voicePreviewCacheRef = useRef(new Map());
+  const [previewLoadingVoiceId, setPreviewLoadingVoiceId] = useState("");
 
   const [exporting, setExporting] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
@@ -365,7 +525,7 @@ useEffect(() => {
 
         const params = new URLSearchParams();
         params.set("provider", "ElevenLabs");
-        params.set("limit", "200");
+        params.set("limit", "500");
 
         const url = `${API_BASE}/api/voices?${params.toString()}`;
         const res = await fetch(url, { 
@@ -399,6 +559,31 @@ useEffect(() => {
   // Filter voices for a specific speaker (matching CreatePro)
   const getFilteredVoicesForSpeaker = (speakerIndex) => {
     const f = speakerVoiceFilters[speakerIndex] || { q: "", gender: "", language: "", tone: "", pitch: "" };
+    const isNeutralGender = (value) => {
+      const g = String(value || "").trim().toLowerCase();
+      return g.includes("neutral") || g.includes("netural");
+    };
+    const speakerGenderRaw = String(speakers?.[speakerIndex]?.gender || "").trim().toLowerCase();
+    const speakerGender = isNeutralGender(speakerGenderRaw) ? "" : speakerGenderRaw;
+    const selectedGender = String(f.gender || "").trim().toLowerCase();
+    const effectiveGender = (selectedGender === "__all__" || isNeutralGender(selectedGender))
+      ? ""
+      : String(selectedGender || speakerGender || "").trim().toLowerCase();
+    const toListLower = (value) => {
+      if (Array.isArray(value)) return value.map((x) => String(x).trim().toLowerCase()).filter(Boolean);
+      if (typeof value === "string") {
+        return value
+          .split(",")
+          .map((x) => x.trim().toLowerCase())
+          .filter(Boolean);
+      }
+      return [];
+    };
+    const matchFacet = (selected, candidates) => {
+      const s = String(selected || "").trim().toLowerCase();
+      if (!s) return true;
+      return candidates.some((c) => c === s);
+    };
 
     return voices.filter((v) => {
       const name = String(v.name || "").toLowerCase();
@@ -406,29 +591,43 @@ useEffect(() => {
       const q = String(f.q || "").trim().toLowerCase();
 
       const vGender = String(v.gender || v.labels?.gender || "").toLowerCase();
-      const vPitch = String(v.pitch || v.labels?.pitch || "").toLowerCase();
-      const vTones = Array.isArray(v.tone) ? v.tone.map((x) => String(x).toLowerCase())
-        : Array.isArray(v.labels?.tone) ? v.labels.tone.map((x) => String(x).toLowerCase())
-        : [];
-      const vLangs = Array.isArray(v.languages) ? v.languages.map((x) => String(x).toLowerCase())
-        : Array.isArray(v.labels?.languages) ? v.labels.languages.map((x) => String(x).toLowerCase())
-        : [];
+      const vPitch = getVoicePitchTag(v);
+      const vTones = getVoiceToneTags(v);
+      const vLangs = [...toListLower(v.languages), ...toListLower(v.labels?.languages)];
 
       if (q && !(name.includes(q) || desc.includes(q))) return false;
-      if (f.gender && vGender !== String(f.gender).toLowerCase()) return false;
+      if (effectiveGender && vGender !== effectiveGender) return false;
       if (f.pitch && vPitch !== String(f.pitch).toLowerCase()) return false;
-      if (f.tone && !vTones.includes(String(f.tone).toLowerCase())) return false;
-      if (f.language && !vLangs.includes(String(f.language).toLowerCase())) return false;
+      if (!matchFacet(f.tone, vTones)) return false;
+      if (!matchFacet(f.language, vLangs)) return false;
 
       return true;
     });
   };
 
   // Preview voice (matching CreatePro)
-  const previewVoice = async (voiceId) => {
-    if (!voiceId) return;
+  const previewVoice = async (voiceId, voiceName = "") => {
+    if (!voiceId) {
+      setToast({ type: "warning", message: "Please select a voice first" });
+      setTimeout(() => setToast(null), 2500);
+      return;
+    }
 
     try {
+      setPreviewLoadingVoiceId(voiceId);
+      if (voicePreviewRef.current) {
+        voicePreviewRef.current.pause();
+      }
+
+      const cachedUrl = voicePreviewCacheRef.current.get(voiceId);
+      if (cachedUrl) {
+        const cachedAudio = new Audio(cachedUrl);
+        voicePreviewRef.current = cachedAudio;
+        await cachedAudio.play();
+        setPreviewLoadingVoiceId("");
+        return;
+      }
+
       const res = await fetch(`${API_BASE}/api/voices/preview`, {
         method: "POST",
         credentials: "include",
@@ -438,23 +637,30 @@ useEffect(() => {
         },
         body: JSON.stringify({
           voiceId,
-          text: "Hello, this is a WeCast voice preview.",
+          voiceName,
+          text: "This is a WeCast preview.",
         }),
       });
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        alert(err?.error || "Preview failed");
+        setToast({ type: "error", message: err?.error || "Preview failed" });
+        setTimeout(() => setToast(null), 3000);
         return;
       }
 
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
+      voicePreviewRef.current = audio;
+      voicePreviewCacheRef.current.set(voiceId, url);
       await audio.play();
     } catch (e) {
       console.error(e);
-      alert("Preview failed");
+      setToast({ type: "error", message: "Preview failed" });
+      setTimeout(() => setToast(null), 3000);
+    } finally {
+      setPreviewLoadingVoiceId("");
     }
   };
 // Track unsaved changes
@@ -468,7 +674,7 @@ useEffect(() => {
   
   setHasUnsavedChanges(hasChanges);
 }, [script, speakers, introMusic, bodyMusic, outroMusic, originalScript, originalSpeakers, originalIntroMusic, originalBodyMusic, originalOutroMusic]);
-// Before unload warning
+  // Before unload warning
   useEffect(() => {
     const handleBeforeUnload = (e) => {
       if (hasUnsavedChanges) {
@@ -479,6 +685,33 @@ useEffect(() => {
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [hasUnsavedChanges]);
+
+  useEffect(() => {
+    return () => {
+      if (voicePreviewRef.current) {
+        voicePreviewRef.current.pause();
+        voicePreviewRef.current = null;
+      }
+      for (const url of voicePreviewCacheRef.current.values()) {
+        URL.revokeObjectURL(url);
+      }
+      voicePreviewCacheRef.current.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    setSpeakerVoiceVisibleCounts((prev) => {
+      const next = { ...prev };
+      speakers.forEach((_, i) => {
+        if (!next[i]) next[i] = VOICE_PAGE_SIZE;
+      });
+      Object.keys(next).forEach((k) => {
+        const idx = Number(k);
+        if (idx >= speakers.length) delete next[k];
+      });
+      return next;
+    });
+  }, [speakers.length]);
 
   const handleNavigation = (path) => {
     if (hasUnsavedChanges) {
@@ -496,57 +729,58 @@ useEffect(() => {
     }
   };
 
-// Update the saveChanges function to handle speaker name changes properly:
-// Update the saveChanges function to handle speaker name changes properly:
+const applySpeakerLabelRenames = (inputScript, oldSpeakers, newSpeakers) => {
+  const changes = [];
+
+  (newSpeakers || []).forEach((sp, idx) => {
+    const oldName = String(oldSpeakers?.[idx]?.name || "").trim();
+    const newName = String(sp?.name || "").trim();
+    if (!oldName || !newName || oldName === newName) return;
+    changes.push({ oldName, newName, oldKey: oldName.toLowerCase() });
+  });
+
+  if (!changes.length) return inputScript;
+
+  const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const sortedChanges = [...changes].sort((a, b) => b.oldName.length - a.oldName.length);
+  const nameLookup = new Map(sortedChanges.map((c) => [c.oldName.toLowerCase(), c.newName]));
+  const namesAlternation = sortedChanges.map((c) => escapeRegex(c.oldName)).join("|");
+  const mentionPattern = namesAlternation
+    ? new RegExp(`(^|[^A-Za-z0-9_])(${namesAlternation})(?=$|[^A-Za-z0-9_])`, "gi")
+    : null;
+
+  const replaceMentions = (text) => {
+    if (!mentionPattern) return text;
+    return String(text || "").replace(mentionPattern, (_, lead, matchedName) => {
+      const replacement = nameLookup.get(String(matchedName || "").toLowerCase());
+      return `${lead}${replacement || matchedName}`;
+    });
+  };
+
+  const lines = String(inputScript || "").split("\n");
+  const updatedLines = lines.map((line) => {
+    // Keep speaker labels at line start in sync: "Speaker Name: ..."
+    const match = line.match(/^(\s*)([^:\n]+?)(\s*:\s*.*)$/);
+    if (!match) return replaceMentions(line);
+
+    const [, leading, rawLabel, rest] = match;
+    const normalizedLabel = rawLabel.trim().toLowerCase();
+    const labelChange = sortedChanges.find((c) => c.oldKey === normalizedLabel);
+    const nextLabel = labelChange ? labelChange.newName : rawLabel.trim();
+    const nextRest = replaceMentions(rest);
+
+    return `${leading}${nextLabel}${nextRest}`;
+  });
+
+  return updatedLines.join("\n");
+};
+
 const saveChanges = async () => {
   if (!podcastId) return;
 
   setSaving(true);
   try {
-    // Start with the current script
-    let updatedScript = script;
-    
-    // Check if any speaker names have changed
-    const hasSpeakerNameChanges = JSON.stringify(speakers) !== JSON.stringify(originalSpeakers);
-    
-    if (hasSpeakerNameChanges) {
-      console.log("Speaker names changed, updating script...");
-      console.log("Original speakers:", originalSpeakers);
-      console.log("New speakers:", speakers);
-      
-      // Create a mapping of old names to new names
-      const nameChanges = {};
-      speakers.forEach((speaker, index) => {
-        const oldSpeaker = originalSpeakers[index];
-        if (oldSpeaker && oldSpeaker.name !== speaker.name) {
-          nameChanges[oldSpeaker.name] = speaker.name;
-          console.log(`Mapping: "${oldSpeaker.name}" -> "${speaker.name}"`);
-        }
-      });
-      
-      // Apply all name changes to the script
-      let tempScript = script;
-      Object.entries(nameChanges).forEach(([oldName, newName]) => {
-        // Split into lines and process each line
-        const lines = tempScript.split('\n');
-        const updatedLines = lines.map(line => {
-          // Check if line starts with oldName followed by colon (with optional spaces)
-          // This handles cases like "John: Hello" or "John : Hello"
-          const regex = new RegExp(`^${oldName}\\s*:`);
-          if (regex.test(line)) {
-            // Replace just the speaker name part
-            return line.replace(new RegExp(`^${oldName}`), newName);
-          }
-          return line;
-        });
-        tempScript = updatedLines.join('\n');
-      });
-      updatedScript = tempScript;
-      
-      console.log("Script updated with new speaker names");
-      console.log("Original script preview:", script.substring(0, 200));
-      console.log("Updated script preview:", updatedScript.substring(0, 200));
-    }
+    const updatedScript = applySpeakerLabelRenames(script, originalSpeakers, speakers);
 
     // Save to API with the updated script
     console.log("Saving to API:", {
@@ -755,32 +989,32 @@ const exportScriptAsPDF = async () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+      <div className="min-h-screen bg-cream dark:bg-[#0a0a1a] flex items-center justify-center">
         <LoadingOverlay show={true} message="Loading podcast..." />
       </div>
     );
   }
 
  return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-cream dark:bg-[#0a0a1a] text-black dark:text-white">
       {/* Header */}
       <LoadingOverlay 
   show={generatingAudio} 
   message="Generating your podcast audio..." 
 />
-      <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 sticky top-0 z-10">
+      <div className="bg-white/75 dark:bg-neutral-900/45 border-b border-black/10 dark:border-white/10 backdrop-blur-sm sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <button
                 onClick={() => handleNavigation("#/episodes")}
-                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+                className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg"
               >
                 <ChevronLeft className="w-5 h-5" />
               </button>
               <div>
-                <h1 className="text-xl font-bold text-gray-900 dark:text-white">Edit Episode</h1>
-                <p className="text-sm text-gray-500 dark:text-gray-400">
+                <h1 className="text-xl font-bold text-black dark:text-white">Edit Episode</h1>
+                <p className="text-sm text-black/60 dark:text-white/60">
                   Make changes to your script, voices, and music
                 </p>
               </div>
@@ -800,17 +1034,17 @@ const exportScriptAsPDF = async () => {
 
       {/* Title Card */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <div className="bg-gradient-to-r from-purple-50 to-pink-50 dark:from-gray-800 dark:to-gray-800 rounded-xl p-6 border border-purple-100 dark:border-gray-700">
+        <div className="bg-gradient-to-r from-purple-50 to-pink-50 dark:from-neutral-900/70 dark:to-neutral-800/60 rounded-xl p-6 border border-purple-100 dark:border-white/10">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 bg-purple-100 dark:bg-purple-900/30 rounded-full flex items-center justify-center">
                 <Mic2 className="w-6 h-6 text-purple-600 dark:text-purple-400" />
               </div>
               <div>
-                <p className="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Episode Title</p>
+                <p className="text-xs uppercase tracking-wider text-black/55 dark:text-white/55">Episode Title</p>
                 {!isEditingTitle ? (
                   <div className="flex items-center gap-3">
-                    <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+                    <h2 className="text-xl font-semibold text-black dark:text-white">
                       {showTitle || "Untitled Episode"}
                     </h2>
                     <button
@@ -818,7 +1052,7 @@ const exportScriptAsPDF = async () => {
                         setDraftTitle(showTitle);
                         setIsEditingTitle(true);
                       }}
-                      className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                      className="p-1 hover:bg-black/5 dark:hover:bg-white/10 rounded"
                     >
                       <Pencil className="w-4 h-4 text-gray-500" />
                     </button>
@@ -845,7 +1079,7 @@ const exportScriptAsPDF = async () => {
                     </button>
                     <button
                       onClick={() => setIsEditingTitle(false)}
-                      className="px-3 py-1 border rounded-lg text-sm hover:bg-gray-50"
+                      className="px-3 py-1 border border-black/10 dark:border-white/15 rounded-lg text-sm hover:bg-black/5 dark:hover:bg-white/10"
                     >
                       Cancel
                     </button>
@@ -853,8 +1087,8 @@ const exportScriptAsPDF = async () => {
                 )}
               </div>
             </div>
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <span className="px-3 py-1 bg-gray-100 dark:bg-gray-700 rounded-full">
+            <div className="flex items-center gap-2 text-sm text-black/60 dark:text-white/60">
+              <span className="px-3 py-1 bg-black/5 dark:bg-white/10 rounded-full">
                 {scriptStyle || "No style selected"}
               </span>
             </div>
@@ -864,7 +1098,7 @@ const exportScriptAsPDF = async () => {
 
       {/* Tabs and Save Button */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between border-b border-gray-200 dark:border-gray-700">
+        <div className="flex items-center justify-between border-b border-black/10 dark:border-white/10">
           <nav className="flex gap-6">
             {tabs.map((tab) => (
               <button
@@ -873,7 +1107,7 @@ const exportScriptAsPDF = async () => {
                 className={`flex items-center gap-2 px-1 py-4 text-sm font-medium border-b-2 transition ${
                   activeTab === tab.id
                     ? "border-purple-600 text-purple-600"
-                    : "border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400"
+                    : "border-transparent text-black/55 hover:text-black/75 dark:text-white/60 dark:hover:text-white"
                 }`}
               >
                 {tab.icon}
@@ -896,7 +1130,7 @@ const exportScriptAsPDF = async () => {
   className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition ${
     hasUnsavedChanges
       ? "bg-purple-600 text-white hover:bg-purple-700"
-      : "bg-gray-100 text-gray-400 cursor-not-allowed dark:bg-gray-700 dark:text-gray-500"
+      : "bg-black/5 text-black/35 cursor-not-allowed dark:bg-white/10 dark:text-white/40"
   }`}
 >
   <Save className="w-4 h-4" />
@@ -936,7 +1170,7 @@ const exportScriptAsPDF = async () => {
     value={script}
     onChange={(e) => setScript(e.target.value)}
     onKeyDown={onKeyDownGuard}
-    className="w-full px-4 py-3 border rounded-lg font-mono text-sm leading-relaxed bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+    className="w-full px-4 py-3 border rounded-lg font-mono text-sm leading-relaxed bg-white dark:bg-neutral-900/70 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-white/15 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
     style={{ minHeight: "400px" }}
     placeholder="Start typing your script..."
     dir={isRTL ? "rtl" : "ltr"}
@@ -955,7 +1189,7 @@ const exportScriptAsPDF = async () => {
     exportScriptAsPDF();
   }}
   disabled={!script.trim()}
-  className="flex items-center gap-2 px-4 py-2 border border-purple-500 text-purple-600 rounded-lg hover:bg-purple-50 disabled:opacity-50"
+  className="flex items-center gap-2 px-4 py-2 border border-purple-500 text-purple-600 dark:text-purple-300 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50"
   title="Export script as PDF"
 >
   <Download className="w-4 h-4" />
@@ -978,7 +1212,7 @@ const exportScriptAsPDF = async () => {
     }
   }}
   disabled={generatingAudio}
-  className="flex items-center gap-2 px-6 py-2 border border-purple-500 text-purple-600 rounded-lg hover:bg-purple-50 disabled:opacity-50 font-semibold"
+  className="flex items-center gap-2 px-6 py-2 border border-purple-500 text-purple-600 dark:text-purple-300 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50 font-semibold"
 >
   <Check className="w-4 h-4" />
   Done
@@ -995,14 +1229,17 @@ const exportScriptAsPDF = async () => {
               const poolIds = new Set(pool.map(getVoiceId));
               const currentId = speaker.voiceId || "";
               const safeValue = poolIds.has(currentId) ? currentId : "";
+              const visibleCount = speakerVoiceVisibleCounts[index] || VOICE_PAGE_SIZE;
+              const visiblePool = pool.slice(0, visibleCount);
+              const hasMoreVoices = pool.length > visibleCount;
 
               return (
-                <div key={index} className="bg-white dark:bg-gray-800 rounded-lg border p-6">
+                <div key={index} className="bg-white dark:bg-neutral-900/70 rounded-lg border border-black/10 dark:border-white/10 p-6">
                   <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
                     <Users className="w-5 h-5 text-purple-600" />
                     Speaker {index + 1}: {speaker.name || "Unnamed"}
-                    <span className="text-sm font-normal text-gray-500 ml-2">
-                      ({speaker.role} · {speaker.gender})
+                    <span className="text-sm font-normal text-black/55 dark:text-white/55 ml-2">
+                      ({speaker.role} آ· {speaker.gender})
                     </span>
                   </h3>
 
@@ -1021,7 +1258,7 @@ const exportScriptAsPDF = async () => {
     setSpeakers(newSpeakers);
     // Script will be updated when Save Changes is clicked
   }}
-  className="w-full px-3 py-2 border rounded-lg max-w-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+  className="w-full px-3 py-2 border rounded-lg max-w-md bg-white dark:bg-neutral-900/70 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-white/15 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
   placeholder="Enter speaker name"
 />
 </div>
@@ -1029,62 +1266,85 @@ const exportScriptAsPDF = async () => {
                     <div>
                       <label className="block text-sm font-medium mb-2">Voice Selection</label>
                       {loadingVoices ? (
-                        <p className="text-sm text-gray-500">Loading voices...</p>
+                        <p className="text-sm text-black/55 dark:text-white/55">Loading voices...</p>
                       ) : voices.length === 0 ? (
                         <p className="text-sm text-red-500">No voices found. Check ElevenLabs config.</p>
                       ) : (
-                        <div className="flex items-center gap-3">
-                          <button
-                            onClick={() => setActiveFilterSpeaker(index)}
-                            className="relative inline-flex items-center justify-center h-[44px] w-[44px] rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 hover:bg-gray-50"
-                          >
-                            <SlidersHorizontal className="w-5 h-5" />
-                            {Object.values(speakerVoiceFilters[index] || {}).some(Boolean) && (
-                              <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-purple-600 ring-2 ring-white" />
-                            )}
-                          </button>
+                        <div className="w-full">
+                          <div className="flex items-center gap-3">
+                            <button
+                              onClick={() => setActiveFilterSpeaker(index)}
+                              className="relative inline-flex items-center justify-center h-[44px] w-[44px] rounded-xl border border-gray-300 dark:border-white/15 bg-white dark:bg-neutral-900 hover:bg-gray-50 dark:hover:bg-white/10"
+                            >
+                              <SlidersHorizontal className="w-5 h-5" />
+                              {Object.values(speakerVoiceFilters[index] || {}).some(Boolean) && (
+                                <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-purple-600 ring-2 ring-white" />
+                              )}
+                            </button>
 
-                          <select
-  value={safeValue}
-  onChange={(e) => {
-    const newVoice = e.target.value;
-    const alreadyUsed = speakers.some(
-      (s, idx) => s.voiceId === newVoice && idx !== index
-    );
-    if (alreadyUsed) {
-      alert("This voice is already used by another speaker");
-      return;
-    }
-    const newSpeakers = [...speakers];
-    newSpeakers[index] = {
-      ...newSpeakers[index],
-      voiceId: newVoice,
-    };
-    setSpeakers(newSpeakers);
-  }}
-  className="flex-1 px-3 py-2 border rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
->
-  <option value="">Select a voice</option>
-  {pool.map((v) => {
-    const vid = getVoiceId(v);
-    const isTaken = speakers.some(
-      (s, idx) => s.voiceId === vid && idx !== index
-    );
-    return (
-      <option key={vid} value={vid} disabled={isTaken}>
-        {v.name} {isTaken ? "(used)" : ""} ({v.gender})
-      </option>
-    );
-  })}
-</select>
+                            <div className="relative flex-1">
+                              <select
+                                value={safeValue}
+                                onChange={(e) => {
+                                  const newVoice = e.target.value;
+                                  const alreadyUsed = speakers.some(
+                                    (s, idx) => s.voiceId === newVoice && idx !== index
+                                  );
+                                  if (alreadyUsed) {
+                                    alert("This voice is already used by another speaker");
+                                    return;
+                                  }
+                                  const newSpeakers = [...speakers];
+                                  newSpeakers[index] = {
+                                    ...newSpeakers[index],
+                                    voiceId: newVoice,
+                                  };
+                                  setSpeakers(newSpeakers);
+                                }}
+                                className="w-full appearance-none pr-10 px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900/70 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-white/15 focus:ring-2 focus:ring-purple-500 focus:border-transparent [color-scheme:light] dark:[color-scheme:dark]"
+                              >
+                                <option value="">Select a voice</option>
+                                {visiblePool.map((v) => {
+                                  const vid = getVoiceId(v);
+                                  const isTaken = speakers.some(
+                                    (s, idx) => s.voiceId === vid && idx !== index
+                                  );
+                                  return (
+                                    <option key={vid} value={vid} disabled={isTaken}>
+                                      {v.name} {isTaken ? "(used)" : ""}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
+                            </div>
 
-                          <button
-                            onClick={() => previewVoice(currentId)}
-                            disabled={!currentId}
-                            className="px-4 py-2 border border-purple-500 text-purple-600 rounded-lg hover:bg-purple-50 disabled:opacity-50"
-                          >
-                            <Play className="w-5 h-5" />
-                          </button>
+                            <button
+                              onClick={() => {
+                                const selected = pool.find((v) => getVoiceId(v) === currentId);
+                                previewVoice(currentId, selected?.name || "");
+                              }}
+                              disabled={!currentId || previewLoadingVoiceId === currentId}
+                              className="px-4 py-2 border border-purple-500 text-purple-600 dark:text-purple-300 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50"
+                              title={previewLoadingVoiceId === currentId ? "Generating preview..." : "Preview voice"}
+                            >
+                              <Play className={`w-5 h-5 ${previewLoadingVoiceId === currentId ? "animate-pulse" : ""}`} />
+                            </button>
+                          </div>
+                          {hasMoreVoices && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSpeakerVoiceVisibleCounts((prev) => ({
+                                  ...prev,
+                                  [index]: Math.min(pool.length, (prev[index] || VOICE_PAGE_SIZE) + VOICE_PAGE_SIZE),
+                                }))
+                              }
+                              className="mt-2 text-xs font-semibold text-purple-600 dark:text-purple-300 hover:underline"
+                            >
+                              Load more voices ({visiblePool.length}/{pool.length})
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1110,10 +1370,10 @@ const exportScriptAsPDF = async () => {
           className={`p-4 rounded-lg border text-center transition ${
             category === key
               ? "border-purple-500 bg-purple-50 dark:bg-purple-900/20"
-              : "border-gray-200 hover:border-gray-300"
+              : "border-gray-200 dark:border-white/10 hover:border-gray-300 dark:hover:border-white/20"
           }`}
         >
-          <Disc className="w-8 h-8 mx-auto mb-2 text-gray-600" />
+          <Disc className="w-8 h-8 mx-auto mb-2 text-gray-600 dark:text-white/70" />
           <span className="font-medium capitalize">{key}</span>
         </button>
       ))}
@@ -1126,13 +1386,13 @@ const exportScriptAsPDF = async () => {
           { label: "Body Music", value: bodyMusic, setter: setBodyMusic },
           { label: "Outro Music", value: outroMusic, setter: setOutroMusic },
         ].map((item) => (
-          <div key={item.label} className="flex items-center justify-between p-4 border rounded-lg">
+          <div key={item.label} className="flex items-center justify-between p-4 border border-black/10 dark:border-white/10 rounded-lg">
             <span className="font-medium">{item.label}</span>
             <div className="flex gap-2">
               <select
                 value={item.value}
                 onChange={(e) => item.setter(e.target.value)}
-                className="px-3 py-2 border rounded-lg min-w-[200px] bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                className="px-3 py-2 border rounded-lg min-w-[200px] bg-white dark:bg-neutral-900/70 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-white/15 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
               >
                 <option value="">Select track</option>
                 {availableTracks.map((track) => (
@@ -1161,7 +1421,7 @@ const exportScriptAsPDF = async () => {
                   }
                 }}
                 disabled={!item.value}
-                className="px-3 py-2 border border-purple-500 text-purple-600 rounded-lg hover:bg-purple-50 disabled:opacity-50"
+                className="px-3 py-2 border border-purple-500 text-purple-600 dark:text-purple-300 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50"
                 title={`Preview ${item.label}`}
               >
                 <Play className="w-5 h-5" />
@@ -1187,14 +1447,14 @@ const exportScriptAsPDF = async () => {
         {/* Done! Confirmation Modal */}
 {showDoneConfirmation && (
   <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-    <div className="w-[min(92vw,400px)] bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6">
+    <div className="w-[min(92vw,400px)] bg-white dark:bg-neutral-900 rounded-xl shadow-2xl p-6">
       <div className="flex items-center gap-3 mb-4">
         <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
           <Check className="w-5 h-5 text-green-600" />
         </div>
         <h2 className="text-lg font-bold">Complete Edit</h2>
       </div>
-      <p className="text-gray-600 dark:text-gray-300 mb-6">
+      <p className="text-gray-600 dark:text-white/70 mb-6">
         Are you sure you're done with your podcast edit? (Script + Voices + Music)
       </p>
       <div className="flex justify-end gap-3">
@@ -1221,20 +1481,20 @@ const exportScriptAsPDF = async () => {
 {/* Audio Generation Options Modal */}
 {showAudioGenerationOptions && (
   <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-    <div className="w-[min(92vw,400px)] bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6">
+    <div className="w-[min(92vw,400px)] bg-white dark:bg-neutral-900 rounded-xl shadow-2xl p-6">
       <div className="flex items-center gap-3 mb-4">
         <div className="w-10 h-10 bg-purple-100 rounded-full flex items-center justify-center">
           <Sparkles className="w-5 h-5 text-purple-600" />
         </div>
         <h2 className="text-lg font-bold">Generate Audio</h2>
       </div>
-      <p className="text-gray-600 dark:text-gray-300 mb-6">
+      <p className="text-gray-600 dark:text-white/70 mb-6">
         Would you like to generate the audio for your podcast now?
       </p>
       <div className="flex justify-end gap-3">
         <button
           onClick={() => setShowAudioGenerationOptions(false)}
-          className="px-4 py-2 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50 font-medium"
+          className="px-4 py-2 border border-gray-300 dark:border-white/15 text-gray-600 dark:text-white/70 rounded-lg hover:bg-gray-50 dark:hover:bg-white/10 font-medium"
         >
           Wait!
         </button>
@@ -1264,6 +1524,10 @@ const exportScriptAsPDF = async () => {
               ...speakerVoiceFilters,
               [activeFilterSpeaker]: newFilters,
             });
+            setSpeakerVoiceVisibleCounts((prev) => ({
+              ...prev,
+              [activeFilterSpeaker]: VOICE_PAGE_SIZE,
+            }));
           }}
           voices={voices}
           speakerIndex={activeFilterSpeaker}
@@ -1273,20 +1537,20 @@ const exportScriptAsPDF = async () => {
       {/* Exit Warning Modal */}
       {showExitWarning && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-[min(92vw,400px)] bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6">
+          <div className="w-[min(92vw,400px)] bg-white dark:bg-neutral-900 rounded-xl shadow-2xl p-6">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 bg-yellow-100 rounded-full flex items-center justify-center">
                 <AlertTriangle className="w-5 h-5 text-yellow-600" />
               </div>
               <h2 className="text-lg font-bold">Unsaved Changes</h2>
             </div>
-            <p className="text-gray-600 dark:text-gray-300 mb-6">
+            <p className="text-gray-600 dark:text-white/70 mb-6">
               You have unsaved changes. What would you like to do?
             </p>
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setShowExitWarning(false)}
-                className="px-4 py-2 border rounded-lg hover:bg-gray-50"
+                className="px-4 py-2 border border-gray-300 dark:border-white/15 rounded-lg hover:bg-gray-50 dark:hover:bg-white/10"
               >
                 Cancel
               </button>
@@ -1318,3 +1582,4 @@ const exportScriptAsPDF = async () => {
     </div>
   );
 }
+

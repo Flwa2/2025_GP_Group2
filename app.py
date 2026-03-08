@@ -815,6 +815,69 @@ def health():
 
 @app.get("/api/voices")
 def api_voices():
+    provider_q = (request.args.get("provider") or "").strip().lower()
+    gender_q = (request.args.get("gender") or "").strip().lower()
+    try:
+        limit = int(request.args.get("limit") or "0")
+    except Exception:
+        limit = 0
+    # Safety cap: allow larger lists but prevent overly heavy responses.
+    limit = max(0, min(limit, 1000))
+
+    def _gender_matches(value: str):
+        if not gender_q:
+            return True
+        v = (value or "").strip().lower()
+        if not v:
+            return False
+        return v == gender_q
+
+    def _normalize_eleven_voice(v: dict):
+        voice_id = v.get("voice_id") or v.get("voiceId") or v.get("id") or ""
+        labels = v.get("labels") or {}
+        gender = v.get("gender") or labels.get("gender") or ""
+        return {
+            "docId": voice_id,
+            "id": voice_id,
+            "providerVoiceId": voice_id,
+            "provider": "ElevenLabs",
+            "name": v.get("name") or "",
+            "gender": gender,
+            "description": v.get("description") or "",
+            "pitch": labels.get("pitch") or "",
+            "languages": labels.get("languages") or [],
+            "tone": labels.get("tone") or [],
+            "labels": {"gender": gender},
+            "preview_url": v.get("preview_url") or "",
+        }
+
+    # If caller explicitly requests ElevenLabs, fetch live list directly.
+    if provider_q == "elevenlabs":
+        if not ELEVENLABS_API_KEY:
+            return jsonify(count=0, items=[], error="Missing ELEVENLABS_API_KEY"), 500
+        try:
+            r = requests.get(
+                "https://api.elevenlabs.io/v1/voices",
+                headers={"xi-api-key": ELEVENLABS_API_KEY},
+                timeout=30,
+            )
+            if not r.ok:
+                return jsonify(
+                    count=0,
+                    items=[],
+                    error=f"ElevenLabs voices error {r.status_code}: {r.text[:300]}",
+                ), 502
+            voices = (r.json() or {}).get("voices") or []
+            items = [_normalize_eleven_voice(v) for v in voices if (v.get("voice_id") or v.get("id"))]
+            if gender_q:
+                items = [x for x in items if _gender_matches(x.get("gender"))]
+            if limit > 0:
+                items = items[:limit]
+            return jsonify(count=len(items), items=items)
+        except Exception as e:
+            print("ElevenLabs /api/voices direct ERROR:", e)
+            return jsonify(error=str(e), count=0, items=[]), 500
+
     try:
         docs = db.collection("voices").stream()
 
@@ -854,8 +917,8 @@ def api_voices():
                 "labels": {"gender": gender},  
                 "preview_url": v.get("preview_url") or "",     
             }
-
-            items.append(out)
+            if _gender_matches(gender):
+                items.append(out)
 
         if items:
             return jsonify(count=len(items), items=items)
@@ -896,7 +959,8 @@ def api_voices():
                     "tone": labels.get("tone") or [],
                     "labels": {"gender": gender},
                 }
-                items.append(out)
+                if _gender_matches(gender):
+                    items.append(out)
 
             return jsonify(count=len(items), items=items)
         except Exception as e:
@@ -911,65 +975,97 @@ def api_voices():
 def api_voice_preview():
     data = request.get_json(force=True) or {}
     incoming = (data.get("voiceId") or "").strip()
-    text = (data.get("text") or "Hello, this is a WeCast voice preview.").strip()
+    incoming_name = (data.get("voiceName") or "").strip()
+    text = (data.get("text") or "Hello, this is a WeCast preview.").strip()
+    if len(text) > 120:
+        text = text[:120].strip()
+
+    if not ELEVENLABS_API_KEY:
+        return jsonify(error="Missing ELEVENLABS_API_KEY"), 500
 
     if not incoming:
         return jsonify(error="Missing voiceId"), 400
 
-    voice_id = incoming
-    try:
-        looks_like_id = len(voice_id) >= 10 and (" " not in voice_id)
-        if not looks_like_id:
-            suggest_name = voice_id.lower()
-            vr = requests.get(
-                "https://api.elevenlabs.io/v1/voices",
-                headers={"xi-api-key": ELEVENLABS_API_KEY},
-                timeout=30,
-            )
-            if vr.ok:
-                voices = (vr.json() or {}).get("voices") or []
-                match = next(
-                    (v for v in voices if (v.get("name") or "").strip().lower() == suggest_name),
-                    None
-                )
-                if match and match.get("voice_id"):
-                    voice_id = match["voice_id"]
-                else:
-                    return jsonify(
-                        error="Voice name not found in ElevenLabs account",
-                        received=incoming,
-                    ), 404
-            else:
-                return jsonify(
-                    error=f"ElevenLabs voices list failed {vr.status_code}",
-                    details=vr.text[:400],
-                ), 502
-    except Exception as e:
-        return jsonify(error="Failed to resolve voice", details=str(e)), 500
-
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
     headers = {
         "xi-api-key": ELEVENLABS_API_KEY,
         "Accept": "audio/mpeg",
         "Content-Type": "application/json",
     }
-    payload = {
-        "text": text,
-        "model_id": "eleven_multilingual_v2",
-        "output_format": "mp3_44100_128",
-    }
 
-    r = requests.post(url, headers=headers, json=payload, timeout=60)
+    def _synthesize_preview(candidate_voice_id: str):
+        url = (
+            f"https://api.elevenlabs.io/v1/text-to-speech/{candidate_voice_id}/stream"
+            "?optimize_streaming_latency=4"
+        )
+        payload = {
+            "text": text,
+            "model_id": "eleven_turbo_v2_5",
+            "output_format": "mp3_44100_64",
+        }
+        return requests.post(url, headers=headers, json=payload, timeout=40)
 
-    print("PREVIEW status:", r.status_code)
-    print("PREVIEW body:", r.text[:800])
+    # Fast path: synthesize directly using the incoming ID.
+    voice_id = incoming
+    r = _synthesize_preview(voice_id)
+    if r.ok:
+        return Response(r.content, mimetype="audio/mpeg")
 
+    # Fallback: resolve by id/name from account voices, then retry once.
     if r.status_code == 404:
-        return jsonify(error="Voice not found on ElevenLabs", voice_id=voice_id, details=r.text[:400]), 404
-    if not r.ok:
-        return jsonify(error=f"ElevenLabs error {r.status_code}", voice_id=voice_id, details=r.text[:800]), 502
+        try:
+            vr = requests.get(
+                "https://api.elevenlabs.io/v1/voices",
+                headers={"xi-api-key": ELEVENLABS_API_KEY},
+                timeout=20,
+            )
+            if not vr.ok:
+                return jsonify(
+                    error=f"ElevenLabs voices list failed {vr.status_code}",
+                    details=vr.text[:400],
+                ), 502
 
-    return Response(r.content, mimetype="audio/mpeg")
+            voices = (vr.json() or {}).get("voices") or []
+            by_id = {str(v.get("voice_id") or v.get("id") or "").strip(): v for v in voices}
+            by_name = {
+                (v.get("name") or "").strip().lower(): v
+                for v in voices
+                if (v.get("name") or "").strip()
+            }
+
+            if voice_id not in by_id:
+                suggest_name = (incoming_name or incoming).strip().lower()
+                match = by_name.get(suggest_name)
+                if match and (match.get("voice_id") or match.get("id")):
+                    voice_id = (match.get("voice_id") or match.get("id")).strip()
+                else:
+                    return jsonify(
+                        error="Voice not found in ElevenLabs account",
+                        received=incoming,
+                        receivedName=incoming_name,
+                    ), 404
+
+            retry = _synthesize_preview(voice_id)
+            if retry.ok:
+                return Response(retry.content, mimetype="audio/mpeg")
+            if retry.status_code == 404:
+                return jsonify(
+                    error="Voice not found on ElevenLabs",
+                    voice_id=voice_id,
+                    details=retry.text[:400],
+                ), 404
+            return jsonify(
+                error=f"ElevenLabs error {retry.status_code}",
+                voice_id=voice_id,
+                details=retry.text[:800],
+            ), 502
+        except Exception as e:
+            return jsonify(error="Failed to resolve voice", details=str(e)), 500
+
+    return jsonify(
+        error=f"ElevenLabs error {r.status_code}",
+        voice_id=voice_id,
+        details=r.text[:800],
+    ), 502
 
 def _require_login_user():
     user_id = session.get("user_id") or get_current_user_email()
@@ -1874,6 +1970,8 @@ def api_episodes_list():
             "title": title or "Untitled Episode",
             "brief": _short_brief(brief),
             "audioUrl": data.get("audioUrl") or "",
+            "style": data.get("style") or "",
+            "scriptStyle": data.get("style") or "",
             "coverUrl": data.get("coverUrl") or "",
             "coverThumbB64": data.get("coverThumbB64") or "",
             "createdAt": data.get("createdAt"),

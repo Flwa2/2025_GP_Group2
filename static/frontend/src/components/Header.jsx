@@ -74,7 +74,7 @@ export default function Header() {
                 href="#/episodes"
                 className="transition-colors duration-200 hover:text-purple-600"
               >
-                {t("Episodes")}
+                {t("episodes.sidebar.library")}
               </a>
             </li>
           )}

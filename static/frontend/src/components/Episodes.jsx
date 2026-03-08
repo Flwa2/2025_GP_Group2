@@ -1,9 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  BookOpenText,
   Check,
   ExternalLink,
+  GraduationCap,
   LayoutDashboard,
   List,
+  MessageCircle,
+  Mic,
   Pause,
   Pencil,
   Play,
@@ -18,6 +22,30 @@ import { useTranslation } from "react-i18next";
 const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
   : "http://localhost:5000";
+
+const STYLE_FILTER_ORDER = ["interview", "educational", "storytelling", "conversational"];
+
+const STYLE_ICON_BY_KEY = {
+  interview: Mic,
+  educational: GraduationCap,
+  storytelling: BookOpenText,
+  conversational: MessageCircle,
+  unknown: List,
+};
+
+function getEpisodeStyleRaw(ep) {
+  return String(ep?.scriptStyle || ep?.style || ep?.script_style || "").trim();
+}
+
+function normalizeStyleKey(rawStyle) {
+  const source = String(rawStyle || "").trim().toLowerCase();
+  if (!source) return "unknown";
+  if (source.includes("interview") || source.includes("مقاب")) return "interview";
+  if (source.includes("educat") || source.includes("تعليم")) return "educational";
+  if (source.includes("story") || source.includes("سرد")) return "storytelling";
+  if (source.includes("convers") || source.includes("حوار")) return "conversational";
+  return source.replace(/\s+/g, "_");
+}
 
 function EpisodeCover({ title, coverUrl, coverThumbB64 }) {
   const initials = String(title || "EP")
@@ -133,6 +161,49 @@ export default function Episodes() {
     return `${API_BASE}${src}`;
   };
 
+  const styleCounts = useMemo(() => {
+    const counts = new Map();
+    const labels = new Map();
+    for (const ep of episodes) {
+      const rawStyle = getEpisodeStyleRaw(ep);
+      const key = normalizeStyleKey(rawStyle);
+      counts.set(key, (counts.get(key) || 0) + 1);
+      if (rawStyle && !labels.has(key)) labels.set(key, rawStyle);
+    }
+    return { counts, labels };
+  }, [episodes]);
+
+  const styleFilters = useMemo(() => {
+    const known = STYLE_FILTER_ORDER.map((key) => {
+      const labelByKey = {
+        interview: t("create.styles.interview.title"),
+        educational: t("create.styles.educational.title"),
+        storytelling: t("create.styles.storytelling.title"),
+        conversational: t("create.styles.conversational.title"),
+      };
+      const rawLabel = styleCounts.labels.get(key);
+      return {
+        key,
+        label: labelByKey[key] || rawLabel || key,
+        count: styleCounts.counts.get(key) || 0,
+      };
+    });
+
+    const custom = [...styleCounts.counts.entries()]
+      .filter(([key]) => !STYLE_FILTER_ORDER.includes(key))
+      .map(([key, count]) => ({
+        key,
+        label:
+          key === "unknown"
+            ? t("episodes.styles.unknown", "Other")
+            : (styleCounts.labels.get(key) || key.replace(/_/g, " ")),
+        count,
+      }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+
+    return [...known, ...custom];
+  }, [styleCounts, t]);
+
   const filtered = useMemo(() => {
     if (activeFilter === "deleted") {
       const query = q.trim().toLowerCase();
@@ -142,21 +213,20 @@ export default function Episodes() {
         String(e.brief || "").toLowerCase().includes(query)
       );
     }
+
     const query = q.trim().toLowerCase();
     let base = episodes;
-    if (activeFilter === "playable") {
-      base = base.filter((e) => !!resolveAudioUrl(e.audioUrl));
+    if (activeFilter.startsWith("style:")) {
+      const filterStyle = activeFilter.slice(6);
+      base = base.filter((e) => normalizeStyleKey(getEpisodeStyleRaw(e)) === filterStyle);
     }
+
     if (!query) return base;
     return base.filter((e) =>
       String(e.title || "").toLowerCase().includes(query) ||
       String(e.brief || "").toLowerCase().includes(query)
     );
   }, [q, episodes, activeFilter, recycleBin]);
-  const playableCount = useMemo(
-    () => episodes.filter((e) => !!resolveAudioUrl(e.audioUrl)).length,
-    [episodes]
-  );
 
   const visibleEpisodes = filtered;
   const selectedEpisode = useMemo(
@@ -442,7 +512,7 @@ export default function Episodes() {
   };
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-cream dark:bg-[#0a0a1a] text-black dark:text-white flex flex-col">
+    <div className="relative h-full min-h-0 overflow-hidden bg-cream dark:bg-[#0a0a1a] text-black dark:text-white flex flex-col">
       <main className="w-full flex-1 min-h-0 pt-0 pb-0">
         <div className="mx-auto w-full h-full min-h-0 overflow-hidden border-b border-black/10 dark:border-white/10 bg-white/70 dark:bg-neutral-900/45 shadow-[0_10px_30px_rgba(0,0,0,0.08)] backdrop-blur-sm">
           <div className="h-full min-h-0 md:flex md:items-stretch">
@@ -480,6 +550,38 @@ export default function Episodes() {
                       {recycleBin.length}
                     </span>
                   </button>
+
+                  <div className="mt-2 border-t border-black/10 dark:border-white/10 pt-2">
+                    <p className="mb-2 text-[11px] uppercase tracking-[0.16em] text-black/50 dark:text-white/55">
+                      {t("create.step4.style")}
+                    </p>
+                    <div className="grid gap-2">
+                      {styleFilters.map((styleItem) => {
+                        const filterKey = `style:${styleItem.key}`;
+                        const StyleIcon = STYLE_ICON_BY_KEY[styleItem.key] || List;
+                        return (
+                          <button
+                            key={styleItem.key}
+                            type="button"
+                            onClick={() => setActiveFilter(filterKey)}
+                            className={`inline-flex items-center justify-between gap-2 rounded-xl px-3 py-2 text-sm font-semibold border transition ${
+                              activeFilter === filterKey
+                                ? "bg-purple-100 text-purple-900 border-purple-300 dark:bg-purple-500/25 dark:text-purple-100 dark:border-purple-400/40"
+                                : "bg-white/70 text-black/85 dark:bg-neutral-900/80 dark:text-white border-black/10 dark:border-white/10 hover:bg-white/90 dark:hover:bg-white/10"
+                            }`}
+                          >
+                            <span className="inline-flex items-center gap-2">
+                              <StyleIcon className="h-4 w-4" />
+                              {styleItem.label}
+                            </span>
+                            <span className="inline-flex min-w-5 items-center justify-center rounded-full border border-current/20 px-1.5 text-[11px] leading-5">
+                              {styleItem.count}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -495,34 +597,6 @@ export default function Episodes() {
                     {t("episodes.sidebar.createNew")}
                   </button>
             
-                </div>
-                <p className="mt-2 text-xs text-black/55 dark:text-white/60">
-                  {selectedEpisode
-                    ? `${selectedEpisode.title || "Untitled Episode"}`
-                    : t("episodes.sidebar.selectHint")}
-                  {selectedEpisode && !resolveAudioUrl(selectedEpisode.audioUrl)
-                    ? ` - ${t("episodes.sidebar.audioMissingSuffix")}`
-                    : ""}
-                </p>
-                <p className="mt-1 text-[11px] text-black/45 dark:text-white/45">
-                  {t("episodes.sidebar.tip")}
-                </p>
-              </div>
-
-              <div className="mt-4 grid grid-cols-2 xl:grid-cols-1 gap-2">
-                <div className="rounded-xl border border-white/60 dark:border-white/10 bg-white/55 dark:bg-neutral-900/60 backdrop-blur-md p-3">
-                  <div className="text-xs text-black/55 dark:text-white/60">{t("episodes.stats.created")}</div>
-                  <div className="mt-1 text-xl font-semibold">{episodes.length}</div>
-                </div>
-                <div className="rounded-xl border border-white/60 dark:border-white/10 bg-white/55 dark:bg-neutral-900/60 backdrop-blur-md p-3">
-                  <div className="text-xs text-black/55 dark:text-white/60">{t("episodes.stats.playable")}</div>
-                  <div className="mt-1 text-xl font-semibold">{playableCount}</div>
-                </div>
-                <div className="col-span-2 rounded-xl border border-white/60 dark:border-white/10 bg-white/55 dark:bg-neutral-900/60 backdrop-blur-md p-3 xl:col-span-1">
-                  <div className="text-xs text-black/55 dark:text-white/60">
-                    {t("episodes.stats.deleted")}
-                  </div>
-                  <div className="mt-1 text-xl font-semibold">{recycleBin.length}</div>
                 </div>
               </div>
 
@@ -586,9 +660,7 @@ export default function Episodes() {
                   <div className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">{loadError}</div>
                 ) : filtered.length === 0 ? (
                   <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white/90 dark:bg-neutral-900/70 p-5 text-sm text-black/70 dark:text-white/70">
-                    {activeFilter === "playable"
-                      ? t("episodes.noPlayable")
-                      : activeFilter === "deleted"
+                    {activeFilter === "deleted"
                         ? t("episodes.recycle.empty")
                       : t("episodes.empty")}
                   </div>
