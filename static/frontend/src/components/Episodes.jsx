@@ -468,7 +468,7 @@ export default function Episodes() {
       }
       if (!res.ok) throw new Error(data?.error || "Failed to delete episode");
       setRecycleBin((prev) => prev.filter((x) => x.id !== id));
-      setActionInfo(t("episodes.recycle.singleDeleted", { title: ep?.title || t("episodes.thisEpisode") }));
+      setActionInfo(t("Episode deleted successfully", { title: ep?.title || t("episodes.thisEpisode") }));
     } catch {
       setActionError(t("episodes.deleteError"));
     }

@@ -1353,6 +1353,7 @@ const exportScriptAsPDF = async () => {
                 </div>
               );
             })}
+            
           </div>
         )}
 
@@ -1555,16 +1556,20 @@ const exportScriptAsPDF = async () => {
                 Cancel
               </button>
               <button
-                onClick={saveChanges}
-                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
-              >
-                Save & Exit
-              </button>
+  onClick={async () => {
+    await saveChanges();
+    setShowExitWarning(false);
+    window.location.hash = pendingNavigation || "#/episodes";
+  }}
+  className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+>
+  Save & Exit
+</button>
               <button
                 onClick={confirmNavigation}
                 className="px-4 py-2 border border-yellow-300 text-yellow-700 rounded-lg hover:bg-yellow-50"
               >
-                Discard
+                Discard Changes
               </button>
             </div>
           </div>
