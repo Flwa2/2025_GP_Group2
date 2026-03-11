@@ -5,6 +5,7 @@ import {
     Mic2,
     Users,
     NotebookPen,
+    ChevronLeft,
     ChevronRight,
     Check,
     Info,
@@ -109,6 +110,7 @@ const STYLE_LIMITS = {
 /* -------------------- overlay: rotating logo -------------------- */
 function LoadingOverlay({ show, logoSrc = "/logo.png", title, subtitle, logoAlt = "WeCast logo" }) {
     if (!show) return null;
+    const safeTitle = String(title || "").replace(/[?؟]/g, "");
     return (
         <div
             className="fixed inset-0 z-[9999] grid place-items-center bg-black/70 backdrop-blur-sm"
@@ -124,7 +126,7 @@ function LoadingOverlay({ show, logoSrc = "/logo.png", title, subtitle, logoAlt 
                     />
                     <div>
                         <p className="font-extrabold text-black dark:text-white">
-                            {title}
+                            {safeTitle}
                         </p>
                         <p className="text-sm text-neutral-600 dark:text-neutral-400">
                             {subtitle}
@@ -176,6 +178,17 @@ export default function CreatePro() {
     const { t, i18n } = useTranslation();
     const isRTL = i18n.language === "ar";
     const [step, setStep] = useState(1);
+    const [isFromStudioEntry, setIsFromStudioEntry] = useState(() =>
+        (window.location.hash || "").includes("from=studio")
+    );
+
+    useEffect(() => {
+        const onHashChange = () => {
+            setIsFromStudioEntry((window.location.hash || "").includes("from=studio"));
+        };
+        window.addEventListener("hashchange", onHashChange);
+        return () => window.removeEventListener("hashchange", onHashChange);
+    }, []);
 
     useEffect(() => {
         sessionStorage.setItem("currentStep", step);
@@ -506,6 +519,21 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
             setScriptTemplate(editData.scriptTemplate);
         }
     }, [t]);
+
+    useEffect(() => {
+        const draft = JSON.parse(sessionStorage.getItem("studioCreateDraft") || "{}");
+        if (!draft || !draft.fromStudioCreate) return;
+
+        if (draft.showTitle) {
+            setShowTitle(draft.showTitle);
+            setEpisodeTitle(draft.showTitle);
+        }
+        if (draft.scriptStyle) setScriptStyle(draft.scriptStyle);
+        if (draft.speakersCount) setSpeakersCount(Number(draft.speakersCount));
+        if (draft.description) setDescription(String(draft.description));
+
+        sessionStorage.removeItem("studioCreateDraft");
+    }, []);
 
 
     //  ElevenLabs voices
@@ -1033,6 +1061,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
                 showTitle: backendTitle,
                 episodeTitle: backendTitle,
                 generatedScript: rendered,
+                language: i18n.language,
             };
             sessionStorage.setItem("editData", JSON.stringify(editData));
             sessionStorage.removeItem("guestEditDraft");
@@ -1061,6 +1090,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
         // 🔽 ADD THIS BLOCK HERE
         let editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
         let podcastId = editData.podcastId;
+        const scriptLanguage = editData.language || i18n.language;
 
         if (!podcastId) {
             try {
@@ -1103,7 +1133,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
                 podcastId,          // ✅ IMPORTANT
                 script_style: scriptStyle,
                 speakers_info: speakers,
-                language: i18n.language,
+                language: scriptLanguage,
             }),
             });
 
@@ -1121,6 +1151,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
             url: baseAudioUrl,
             words: data.words || [],
             title: audioTitle,
+            language: scriptLanguage,
             };
             sessionStorage.setItem("wecast_preview", JSON.stringify(previewPayload));
 
@@ -1327,29 +1358,59 @@ const exportScriptAsPDF = async () => {
                 : t("create.defaults.podcastEpisode")),
         [showTitle, episodeTitle, scriptStyle, speakersCount, styleLabelMap, t]
     );
+    const studioGlassPanelClass = "border border-black/10 bg-white/45 backdrop-blur-sm shadow-[0_10px_30px_rgba(0,0,0,0.08)]";
+    const studioTopPanelClass = "border border-black/10 bg-white/70 backdrop-blur-sm shadow-[0_10px_30px_rgba(0,0,0,0.08)]";
+    const studioCardClass = isFromStudioEntry ? `ui-card ${studioGlassPanelClass}` : "ui-card";
 
 
 
     return (
-        <div className="min-h-screen bg-cream dark:bg-[#0a0a0a]">
-            <div className="h-2 bg-purple-gradient" />
-            <main className="w-full max-w-[1400px] mx-auto px-6 py-10">
+        <div className={`min-h-screen ${isFromStudioEntry ? "bg-cream dark:bg-[#0a0a1a]" : "bg-cream dark:bg-[#0a0a0a]"}`}>
+            {!isFromStudioEntry && <div className="h-2 bg-purple-gradient" />}
+            <main className={`w-full ${isFromStudioEntry ? "max-w-full border-b border-black/10 bg-white/70 dark:bg-neutral-900/45 shadow-[0_10px_30px_rgba(0,0,0,0.08)] backdrop-blur-sm" : "mx-auto max-w-[1400px] px-6 py-10"}`}>
+                <div className={isFromStudioEntry ? "mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-6 bg-white/35 dark:bg-neutral-900/20" : ""}>
                 {/* Title */}
-                <header className="mb-6 text-center">
-                    <h1 className="text-3xl md:text-4xl font-extrabold text-black dark:text-white">
-                        {stepTitles[step]}
-                    </h1>
+                {isFromStudioEntry ? (
+                    <header className="-mx-4 sm:-mx-6 lg:-mx-8 mb-6 bg-white/75 dark:bg-neutral-900/45 border-b border-black/10 dark:border-white/10 backdrop-blur-sm">
+                        <div className="px-4 sm:px-6 lg:px-8 py-4">
+                            <div className="flex items-center gap-4">
+                            <button
+                                type="button"
+                                onClick={() => { window.location.hash = "#/episodes"; }}
+                                className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg"
+                                aria-label="Back to Cast Studio"
+                                title="Back to Cast Studio"
+                            >
+                                <ChevronLeft className="w-5 h-5" />
+                            </button>
+                            <div>
+                                <h1 className="text-2xl font-bold text-black dark:text-white">Create New Episode</h1>
+                                <p className="mt-1 text-sm text-black/60 dark:text-white/60">{stepTitles[step]} - {stepDescriptions[step]}</p>
+                            </div>
+                        </div>
+                            </div>
+                    </header>
+                ) : (
+                    <header className="mb-6 text-center">
+                        <h1 className="text-3xl md:text-4xl font-extrabold text-black dark:text-white">
+                            {stepTitles[step]}
+                        </h1>
 
-                    <p className="mt-2 text-black/70 dark:text-white/70">
-                        {stepDescriptions[step]}
-                    </p>
-                </header>
+                        <p className="mt-2 text-black/70 dark:text-white/70">
+                            {stepDescriptions[step]}
+                        </p>
+                    </header>
+                )}
 
 
 
                 {/* Stepper */}
                 {step > 0 && (
-                    <div className="w-full max-w-[1400px] mx-auto rounded-2xl bg-white/60 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 p-4 mb-8">
+                    <div className={`w-full max-w-[1400px] mx-auto rounded-2xl border p-4 mb-8 ${
+                        isFromStudioEntry
+                            ? `${studioTopPanelClass} dark:bg-neutral-900/45 dark:border-white/10`
+                            : "bg-white/60 dark:bg-neutral-900/60 border-neutral-200 dark:border-neutral-800"
+                    }`}>
                         <div className="flex items-center gap-2">
                             <StepDot n={1} label={stepperLabels[0]} />
                             <StepLine on={step > 1} />
@@ -1379,7 +1440,7 @@ const exportScriptAsPDF = async () => {
                 <div className="max-w-5xl mx-auto">
                     {/* STEP 1: STYLE */}
                     {step === 1 && (
-                        <section className="ui-card">
+                        <section className={studioCardClass}>
                             <h2 className="ui-card-title flex items-center gap-2 justify-center">
                                 <Mic2 className="w-4 h-4" /> {t("create.sections.podcastStyle")}
                             </h2>
@@ -1390,7 +1451,15 @@ const exportScriptAsPDF = async () => {
                                         onClick={() => setScriptStyle(s.key)}
                                         onMouseEnter={() => setHoverKey(s.key)}
                                         onMouseLeave={() => setHoverKey((k) => (k === s.key ? null : k))}
-                                        className={`group relative w-full max-w-xl p-4 rounded-xl border transition cursor-pointer ${scriptStyle === s.key ? "border-purple-400/60 bg-purple-500/10" : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"}`}
+                                        className={`group relative w-full max-w-xl p-4 rounded-xl border transition cursor-pointer ${
+                                            isFromStudioEntry
+                                                ? scriptStyle === s.key
+                                                    ? "border-purple-500/80 bg-white text-black dark:bg-neutral-900 dark:text-white dark:border-purple-400/70"
+                                                    : "border-purple-200/90 bg-white text-black hover:border-purple-300/95 hover:bg-white dark:bg-neutral-900 dark:text-white dark:border-white/15 dark:hover:border-purple-400/70 dark:hover:bg-neutral-900"
+                                                : scriptStyle === s.key
+                                                    ? "border-purple-400/60 bg-purple-500/10"
+                                                    : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
+                                        }`}
                                     >
                                         <div className="flex items-start gap-3">
                                             <input type="radio" checked={scriptStyle === s.key} readOnly className="accent-purple-600 mt-1" />
@@ -1403,9 +1472,18 @@ const exportScriptAsPDF = async () => {
                                                         </span>
                                                     )}
                                                 </div>
-                                                <p className="text-sm mt-1">{s.caption}</p>
+                                                <p className="text-sm mt-1 text-black/80 dark:text-white/80">{s.caption}</p>
                                                 <ul className="flex flex-wrap gap-2 mt-2 text-xs text-black/70 dark:text-white/70">
-                                                    {s.bullets.map((b, i) => <li key={i} className="px-2 py-1 rounded bg-black/5 dark:bg-white/5">{b}</li>)}
+                                                    {s.bullets.map((b, i) => (
+                                                        <li
+                                                            key={i}
+                                                            className={`px-2 py-1 rounded ${
+                                                                isFromStudioEntry ? "bg-purple-50 text-purple-900/85 border border-purple-100 dark:bg-purple-900/25 dark:text-purple-200 dark:border-purple-400/30" : "bg-black/5 dark:bg-white/5"
+                                                            }`}
+                                                        >
+                                                            {b}
+                                                        </li>
+                                                    ))}
                                                 </ul>
                                                 <p className="text-xs text-purple-500 mt-2">
                                                     {t("create.common.valid")}: {s.valid}
@@ -1443,7 +1521,7 @@ const exportScriptAsPDF = async () => {
 
                     {/* STEP 2: SPEAKERS */}
                     {step === 2 && (
-                        <section className="ui-card">
+                        <section className={studioCardClass}>
                             <h2 className="ui-card-title flex items-center gap-2 justify-center"><Users className="w-4 h-4" /> {t("create.sections.speakers")}</h2>
                             {scriptStyle && (
                                 <div className="flex items-center gap-2 flex-wrap mt-3 justify-center">
@@ -1974,7 +2052,7 @@ const exportScriptAsPDF = async () => {
 
                     {/* STEP 3: ENTER TEXT */}
                     {step === 3 && (
-                        <section className="ui-card">
+                        <section className={studioCardClass}>
                             <h2 className="ui-card-title flex items-center gap-2">
                                 <NotebookPen className="w-4 h-4" />
                                 {t("create.step3.enterTextTitle")}
@@ -2060,7 +2138,7 @@ const exportScriptAsPDF = async () => {
 
                     {/* STEP 4: REVIEW & EDIT */}
                     {step === 4 && generatedScript && (
-                        <section className="ui-card">
+                        <section className={studioCardClass}>
                             {/* Header with title and export button on opposite sides */}
         <div className="flex items-center justify-between mb-4">
             <h2 className="ui-card-title flex items-center gap-2">
@@ -2157,7 +2235,7 @@ const exportScriptAsPDF = async () => {
                     )}
                     {/* STEP 5: TRANSITION MUSIC */}
                     {step === 5 && (
-                        <section className="ui-card">
+                        <section className={studioCardClass}>
                             <h2 className="ui-card-title flex items-center gap-2 justify-center">
                                 <span className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-purple-100 text-purple-600 dark:bg-purple-900/40">
                                     <Headphones className="w-4 h-4" />
@@ -2210,11 +2288,15 @@ const exportScriptAsPDF = async () => {
                                                     setMusicPreview(null);
                                                 }
                                             }}
-                                            className={`cursor-pointer group relative w-full p-5 rounded-2xl border transition 
-                                          ${isActive
-                                                    ? "border-purple-500 bg-purple-50 dark:bg-purple-900/20 shadow-sm"
-                                                    : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
-                                                }`}
+                                            className={`cursor-pointer group relative w-full p-5 rounded-2xl border transition ${
+                                                isFromStudioEntry
+                                                    ? isActive
+                                                        ? "border-purple-500/80 bg-white/95 text-black backdrop-blur-sm shadow-[0_16px_32px_rgba(124,58,237,0.12)] dark:bg-neutral-900 dark:text-white dark:border-purple-400/70"
+                                                        : "border-purple-200/90 bg-white/82 text-black backdrop-blur-sm shadow-[0_10px_24px_rgba(15,23,42,0.08)] hover:border-purple-300/95 hover:bg-white/92 dark:bg-neutral-900 dark:text-white dark:border-white/15 dark:hover:border-purple-400/70 dark:hover:bg-neutral-900"
+                                                    : isActive
+                                                        ? "border-purple-500 bg-purple-50 dark:bg-purple-900/20 shadow-sm"
+                                                        : "border-neutral-300 dark:border-neutral-800 hover:bg-black/5 dark:hover:bg-white/5"
+                                            }`}
                                         >
                                             <div className="flex items-start gap-3">
                                                 <input
@@ -2378,7 +2460,7 @@ const exportScriptAsPDF = async () => {
 
                     {/* STEP 6: AUDIO */}
                     {step === 6 && (
-                        <section className="ui-card">
+                        <section className={studioCardClass}>
                             <h2 className="ui-card-title flex items-center gap-2 justify-center"><Mic2 className="w-4 h-4" /> {t("create.step6.generateAudioTitle")}</h2>
 
                             {!generatedAudio ? (
@@ -2457,8 +2539,9 @@ const exportScriptAsPDF = async () => {
                                                 onClick={() => {
         let editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
         let podcastId = editData.podcastId;
-                                                sessionStorage.setItem("preview_from", "create");
-                                                window.location.hash = podcastId ? `#/preview?id=${podcastId}&from=create` : "#/preview?from=create";
+                                                const previewSource = isFromStudioEntry ? "studio_create" : "create";
+                                                sessionStorage.setItem("preview_from", previewSource);
+                                                window.location.hash = podcastId ? `#/preview?id=${podcastId}&from=${previewSource}` : `#/preview?from=${previewSource}`;
                                                 }}
 
                                                 className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
@@ -2536,6 +2619,7 @@ const exportScriptAsPDF = async () => {
                     onClose={() => setToast(null)}
                     closeLabel={t("create.common.close")}
                 />
+                </div>
             </main >
         </div >
     );

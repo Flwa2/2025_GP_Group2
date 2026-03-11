@@ -1,7 +1,7 @@
 // Preview.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Save } from "lucide-react";
+import { ChevronLeft, Save } from "lucide-react";
 import WeCastAudioPlayer from "./WeCastAudioPlayer";
 
 const API_BASE = import.meta.env.PROD
@@ -130,6 +130,12 @@ export default function Preview() {
   const params = new URLSearchParams(window.location.hash.split("?")[1] || "");
   const episodeId = params.get("id");
   const fromSource = params.get("from") || sessionStorage.getItem("preview_from") || "";
+  const isFromDashboardPreview = fromSource === "episodes";
+  const isFromStudioCreatePreview = fromSource === "studio_create";
+  const useDashboardGlassTone = isFromDashboardPreview || isFromStudioCreatePreview;
+  const dashboardShellClass = "w-full border-b border-black/10 bg-white/70 dark:bg-neutral-900/45 shadow-[0_10px_30px_rgba(0,0,0,0.08)] backdrop-blur-sm";
+  const dashboardContentClass = "mx-auto w-full max-w-[1400px] px-6 pt-4 pb-10 bg-white/35 dark:bg-neutral-900/20 space-y-6";
+  const dashboardCardClass = "rounded-3xl border border-purple-200/90 dark:border-purple-400/30 bg-white/55 dark:bg-neutral-900/60 backdrop-blur-md shadow-sm";
   const [externalSeek, setExternalSeek] = useState(null);
   const displayTitle = title || t("preview.title");
 
@@ -144,6 +150,7 @@ export default function Preview() {
         if (Array.isArray(p?.words)) setWords(p.words);
         if (p?.title) setTitle(p.title);
         if (p?.summary) setSummary(p.summary);
+        if (p?.language) setPodcastLanguage(p.language);
       } catch {}
     }
 
@@ -490,8 +497,18 @@ export default function Preview() {
   };
 
   const handleBack = () => {
+    // Preferred behavior: return exactly one navigation step back.
+    if (window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+
     if (fromSource === "episodes") {
       window.location.hash = "#/episodes";
+      return;
+    }
+    if (fromSource === "studio_create") {
+      window.location.hash = "#/create?from=studio";
       return;
     }
 
@@ -510,15 +527,29 @@ export default function Preview() {
   return (
     <div
       className={[
-        "min-h-screen bg-cream dark:bg-[#0a0a1a] text-black dark:text-white px-6 py-10 transition-colors duration-500",
+        "min-h-screen bg-cream dark:bg-[#0a0a1a] text-black dark:text-white transition-colors duration-500",
         i18n.language === "ar" ? "text-right" : "text-left",
       ].join(" ")}
     >
-      <div className="max-w-[1400px] mx-auto space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
+      <div
+        className={useDashboardGlassTone ? dashboardShellClass : ""}
+      >
+      <div
+        className={useDashboardGlassTone
+          ? dashboardContentClass
+          : "max-w-[1400px] mx-auto px-6 py-10 space-y-6"}
+      >
+        <div>
           <div className="flex flex-wrap items-center gap-3 justify-between">
             <div className="flex items-center gap-4">
+              <button
+                onClick={handleBack}
+                className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition"
+                aria-label={t("preview.back")}
+                title={t("preview.back")}
+              >
+                <ChevronLeft className={`w-5 h-5 ${i18n.language === "ar" ? "rotate-180" : ""}`} />
+              </button>
               {coverSrc ? (
                 <img
                   src={coverSrc}
@@ -544,16 +575,6 @@ export default function Preview() {
                 </span>
               </span>
             ) : null}
-          </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleBack}
-              className="px-4 py-2 rounded-xl border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/10 transition"
-            >
-              {t("preview.back")}
-            </button>
           </div>
         </div>
         {saveMessage && (
@@ -587,7 +608,7 @@ export default function Preview() {
             {/* Transcript */}
             <div
               ref={transcriptCardRef}
-              className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white/95 dark:bg-neutral-900/95 p-5 shadow-lg w-full min-h-[260px]"
+              className={`${useDashboardGlassTone ? dashboardCardClass : "rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-[#faf7f1]/96 dark:bg-neutral-900/95"} p-5 shadow-lg w-full min-h-[260px]`}
               style={transcriptCardHeight ? { minHeight: transcriptCardHeight } : undefined}
             >
               <div ref={transcriptHeaderRef} className="flex items-center justify-between mb-3">
@@ -664,7 +685,7 @@ export default function Preview() {
           <div ref={rightColRef} className="lg:col-span-5 w-full">
             <div className="w-full lg:sticky lg:top-24 lg:-mt-3 space-y-4">
               {/* Chapters card */}
-              <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 shadow-lg overflow-hidden">
+              <div className={`${useDashboardGlassTone ? dashboardCardClass : "rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-[#faf7f1]/94 dark:bg-neutral-900/90"} shadow-lg overflow-hidden`}>
                 <button
                   type="button"
                   onClick={() => {
@@ -711,7 +732,7 @@ export default function Preview() {
               </div>
 
               {/* Summary card */}
-              <div className="rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 shadow-lg overflow-hidden">
+              <div className={`${useDashboardGlassTone ? dashboardCardClass : "rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-[#faf7f1]/94 dark:bg-neutral-900/90"} shadow-lg overflow-hidden`}>
                 <button
                   type="button"
                   onClick={() => {
@@ -758,6 +779,7 @@ export default function Preview() {
             </div>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

@@ -260,7 +260,7 @@ export default function Episodes() {
   };
 
   const startCreate = () => {
-    window.location.hash = "#/create";
+    window.location.hash = "#/create?from=studio";
   };
 
   const startEditEpisode = (ep) => {

@@ -311,16 +311,21 @@ def save_generated_podcast_to_firestore(user_id: str, title: str, script_style: 
 
     return podcast_id
 
-def generate_podcast_script(description: str, speakers_info: list, script_style: str):
+def generate_podcast_script(description: str, speakers_info: list, script_style: str, language: str = ""):
     """Generate a structured podcast script where ALL speakers talk,
     and remove only headings and bracket lines without touching the real script content.
     """
 
-    # Detect Arabic
-    arabic_instruction = (
-        "Please write the script in Arabic." if is_arabic(description) else ""
+    lang = (language or "").strip().lower()
+    if lang not in ("en", "ar"):
+        lang = detect_language(description)
+
+    is_ar = lang == "ar"
+    language_instruction = (
+        "Please write the script in Arabic."
+        if is_ar
+        else "Please write the script in English."
     )
-    is_ar = is_arabic(description)
 
     if is_ar:
             intro_block = """
@@ -472,7 +477,7 @@ TRANSITION SPEECH RULES (VERY IMPORTANT):
 - DO NOT be robotic or repetitive. 
 - Tone must feel intentional, confident, and designed for audio.
 
-{arabic_instruction}
+{language_instruction}
 
 Transform the following text into a structured podcast script:
 
@@ -1778,7 +1783,7 @@ def api_generate():
         return jsonify(ok=False, error="Your text must be at least 500 words."), 400
 
     try:
-        script = generate_podcast_script(description, speakers_info, script_style)
+        script = generate_podcast_script(description, speakers_info, script_style, language=ui_language)
     except Exception as e:
         print("api_generate script error:", e)
         return jsonify(ok=False, error=f"Script generation failed: {str(e)}"), 500

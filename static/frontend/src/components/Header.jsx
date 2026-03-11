@@ -5,7 +5,13 @@ import { Globe2 } from "lucide-react";
 
 export default function Header() {
   const [loggedIn, setLoggedIn] = useState(false);
+  const [hash, setHash] = useState(window.location.hash || "#/");
   const { i18n, t } = useTranslation();
+  const isStudioSurface =
+    hash.startsWith("#/episodes") ||
+    hash.startsWith("#/create") ||
+    hash.startsWith("#/preview") ||
+    hash.startsWith("#/edit-podcast");
 
   const setLanguage = (newLang) => {
     if (i18n.language === newLang) return;
@@ -28,8 +34,13 @@ export default function Header() {
         setLoggedIn(!!e.newValue);
       }
     };
+    const handleHashChange = () => setHash(window.location.hash || "#/");
     window.addEventListener("storage", handleStorage);
-    return () => window.removeEventListener("storage", handleStorage);
+    window.addEventListener("hashchange", handleHashChange);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("hashchange", handleHashChange);
+    };
   }, []);
 
   const scrollToTop = () => {
@@ -38,7 +49,11 @@ export default function Header() {
   };
 
   return (
-    <header className="fixed top-0 inset-x-0 z-50 bg-white/20 dark:bg-black/40 backdrop-blur-md border-b border-black/10 dark:border-white/10 text-black dark:text-white">
+    <header className={`fixed top-0 inset-x-0 z-50 backdrop-blur-md border-b text-black dark:text-white ${
+      isStudioSurface
+        ? "bg-[#efe4c8]/88 border-black/10 dark:bg-neutral-950/70 dark:border-white/10"
+        : "bg-white/20 border-black/10 dark:bg-black/40 dark:border-white/10"
+    }`}>
       <nav className="section-shell h-16 grid grid-cols-[1fr_auto_1fr] items-center gap-3">
         <div className="flex min-w-0 items-center gap-2 justify-self-start">
           <button onClick={scrollToTop} className="shrink-0" aria-label="Go to home">

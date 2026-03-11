@@ -139,7 +139,7 @@ export default function WeCastAudioPlayer({
   }, [src]);
 
   return (
-    <div className="w-full rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-900/90 px-5 py-4 shadow-md flex flex-col gap-3">
+    <div className="w-full rounded-3xl border border-purple-200/90 dark:border-purple-400/30 bg-white/55 dark:bg-neutral-900/60 backdrop-blur-md px-5 py-4 flex flex-col gap-3">
       <audio
         ref={audioRef}
         src={src}

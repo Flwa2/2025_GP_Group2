@@ -41,11 +41,15 @@ export default function App() {
   const isSignup = hash.startsWith('#/signup');
   const isLogin = hash.startsWith('#/login');
   const isCreate = hash.startsWith("#/create") && (hash.includes("guest=true") || isAuthenticated());
+  const isCreateFromStudio = hash.startsWith("#/create") && hash.includes("from=studio");
   const isEdit = hash.startsWith('#/edit');
   const isPreview = hash.startsWith("#/preview");
   const isEpisodes = hash.startsWith("#/episodes");
   const isFinalize = hash.startsWith("#/finalize");
   const isEditPodcast = hash.startsWith("#/edit-podcast");
+  const isPreviewFromStudioSurface =
+    hash.startsWith("#/preview") &&
+    (hash.includes("from=episodes") || hash.includes("from=studio_create"));
 
   useEffect(() => {
     const sectionLinks = ['#about', '#episodes'];
@@ -54,11 +58,13 @@ export default function App() {
     }
   }, [hash]);
   return (
-    <div className="min-h-screen flex flex-col bg-cream dark:bg-[#0a0a1a] text-black dark:text-white transition-colors duration-500">
+    <div className={`min-h-screen flex flex-col text-black dark:text-white transition-colors duration-500 ${
+      isCreateFromStudio ? "bg-cream dark:bg-[#0a0a1a]" : "bg-cream dark:bg-[#0a0a1a]"
+    }`}>
       <div className="h-2 bg-purple-gradient"></div>
       <Header />
 
-      <main className={isEpisodes ? "app-main pt-14 flex-1" : "app-main pt-16 flex-1"}>
+      <main className={(isEpisodes || isCreateFromStudio || isPreviewFromStudioSurface || isEditPodcast) ? "app-main pt-14 flex-1" : "app-main pt-16 flex-1"}>
         {isAccount ? (
           <Account />
         ) : isSignup ? (

@@ -108,6 +108,7 @@ const getVoicePitchTag = (voice) => {
 /* -------------------- loading overlay -------------------- */
 function LoadingOverlay({ show, logoSrc = "/logo.png", message }) {
   if (!show) return null;
+  const safeMessage = String(message || "").replace(/[?؟]/g, "");
   return (
     <div className="fixed inset-0 z-[9999] grid place-items-center bg-black/70 backdrop-blur-sm">
       <div className="w-[min(92vw,480px)] rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xl p-6">
@@ -118,7 +119,7 @@ function LoadingOverlay({ show, logoSrc = "/logo.png", message }) {
             className="w-12 h-12 rounded-full animate-spin"
           />
           <div>
-            <p className="font-extrabold text-black dark:text-white">{message}</p>
+            <p className="font-extrabold text-black dark:text-white">{safeMessage}</p>
             <p className="text-sm text-neutral-600 dark:text-neutral-400">Please wait a moment</p>
           </div>
         </div>
@@ -345,6 +346,7 @@ export default function EditPodcast() {
   const [scriptTemplate, setScriptTemplate] = useState("");
   const [showTitle, setShowTitle] = useState("");
   const [scriptStyle, setScriptStyle] = useState("");
+  const [podcastLanguage, setPodcastLanguage] = useState("en");
   const [speakers, setSpeakers] = useState([]);
   const [introMusic, setIntroMusic] = useState("");
   const [bodyMusic, setBodyMusic] = useState("");
@@ -460,6 +462,7 @@ export default function EditPodcast() {
         setScriptTemplate(data.scriptTemplate || "");
         setShowTitle(data.showTitle || data.title || "Untitled Episode");
         setScriptStyle(data.scriptStyle || "");
+        setPodcastLanguage(data.language || "en");
         setSpeakers(data.speakers || []);
         setOriginalSpeakers(data.speakers || []);
         setIntroMusic(data.introMusic || "");
@@ -853,7 +856,7 @@ const saveChanges = async () => {
           podcastId,
           script_style: scriptStyle,
           speakers_info: speakers,
-          language: i18n.language,
+          language: podcastLanguage || "en",
         }),
       });
 
@@ -987,6 +990,10 @@ const exportScriptAsPDF = async () => {
     { id: "music", label: "Music", icon: <Music2 className="w-4 h-4" /> },
   ];
 
+  const studioGlassPanelClass = "border border-purple-200/90 dark:border-purple-400/30 bg-white/78 dark:bg-neutral-900/45 backdrop-blur-sm shadow-[0_10px_30px_rgba(0,0,0,0.08)]";
+  const studioGlassCardClass = "rounded-[28px] border border-purple-200/90 dark:border-purple-400/30 bg-white/74 dark:bg-neutral-900/42 backdrop-blur-md shadow-[0_12px_36px_rgba(15,23,42,0.10)]";
+  const studioFieldClass = "border border-neutral-300/80 dark:border-white/15 bg-white/82 dark:bg-neutral-900/72 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent";
+
   if (loading) {
     return (
       <div className="min-h-screen bg-cream dark:bg-[#0a0a1a] flex items-center justify-center">
@@ -996,14 +1003,15 @@ const exportScriptAsPDF = async () => {
   }
 
  return (
-    <div className="min-h-screen bg-cream dark:bg-[#0a0a1a] text-black dark:text-white">
+    <div className="min-h-screen bg-white/35 dark:bg-neutral-900/20 text-black dark:text-white">
       {/* Header */}
       <LoadingOverlay 
   show={generatingAudio} 
   message="Generating your podcast audio..." 
 />
-      <div className="bg-white/75 dark:bg-neutral-900/45 border-b border-black/10 dark:border-white/10 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+      <main className="w-full max-w-full border-b border-purple-200/90 dark:border-purple-400/30 bg-white/35 dark:bg-neutral-900/20">
+      <div className="w-full border-b border-purple-200/90 dark:border-purple-400/30 bg-white/35 dark:bg-neutral-900/20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <button
@@ -1032,12 +1040,13 @@ const exportScriptAsPDF = async () => {
         </div>
       </div>
 
+      <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 pt-6 pb-10 bg-white/35 dark:bg-neutral-900/20">
       {/* Title Card */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <div className="bg-gradient-to-r from-purple-50 to-pink-50 dark:from-neutral-900/70 dark:to-neutral-800/60 rounded-xl p-6 border border-purple-100 dark:border-white/10">
+      <div className="pt-2 pb-6">
+        <div className={`${studioGlassCardClass} p-6`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <div className="w-12 h-12 bg-purple-100 dark:bg-purple-900/30 rounded-full flex items-center justify-center">
+              <div className="w-12 h-12 bg-white/70 dark:bg-purple-900/30 rounded-full flex items-center justify-center border border-black/5 dark:border-white/10">
                 <Mic2 className="w-6 h-6 text-purple-600 dark:text-purple-400" />
               </div>
               <div>
@@ -1063,7 +1072,7 @@ const exportScriptAsPDF = async () => {
                       type="text"
                       value={draftTitle}
                       onChange={(e) => setDraftTitle(e.target.value)}
-                      className="px-3 py-1 border rounded-lg text-lg"
+                      className={`px-3 py-1 rounded-lg text-lg ${studioFieldClass}`}
                       autoFocus
                     />
                     <button
@@ -1088,7 +1097,7 @@ const exportScriptAsPDF = async () => {
               </div>
             </div>
             <div className="flex items-center gap-2 text-sm text-black/60 dark:text-white/60">
-              <span className="px-3 py-1 bg-black/5 dark:bg-white/10 rounded-full">
+              <span className="px-3 py-1 bg-white/70 dark:bg-white/10 rounded-full border border-black/5 dark:border-white/10">
                 {scriptStyle || "No style selected"}
               </span>
             </div>
@@ -1097,8 +1106,8 @@ const exportScriptAsPDF = async () => {
       </div>
 
       {/* Tabs and Save Button */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between border-b border-black/10 dark:border-white/10">
+      <div>
+        <div className={`${studioGlassPanelClass} rounded-[24px] px-5 sm:px-6 py-1 flex items-center justify-between`}>
           <nav className="flex gap-6">
             {tabs.map((tab) => (
               <button
@@ -1142,11 +1151,11 @@ const exportScriptAsPDF = async () => {
       {/* Rest of your component... */}
 
       {/* Tab Content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <div className="py-6">
              {/* Script Tab */}
         {activeTab === "script" && (
           <div className="space-y-6">
-            <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 border border-blue-100 dark:border-blue-800">
+            <div className="rounded-[28px] border border-purple-200/90 dark:border-purple-400/25 bg-purple-50/70 dark:bg-purple-900/10 backdrop-blur-md shadow-[0_12px_36px_rgba(15,23,42,0.08)] p-4">
               <h3 className="font-medium flex items-center gap-2 text-blue-800 dark:text-blue-300">
                 <Info className="w-4 h-4" />
                 Editing Guidelines
@@ -1158,7 +1167,7 @@ const exportScriptAsPDF = async () => {
               </ul>
             </div>
 
-           <div>
+           <div className={`${studioGlassCardClass} p-5`}>
   <div className="flex items-center justify-between mb-2">
     <label className="font-medium text-gray-700 dark:text-gray-300">Script Content</label>
     <span className="text-sm text-gray-500 dark:text-gray-400">
@@ -1170,7 +1179,7 @@ const exportScriptAsPDF = async () => {
     value={script}
     onChange={(e) => setScript(e.target.value)}
     onKeyDown={onKeyDownGuard}
-    className="w-full px-4 py-3 border rounded-lg font-mono text-sm leading-relaxed bg-white dark:bg-neutral-900/70 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-white/15 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+    className={`w-full px-4 py-3 rounded-lg font-mono text-sm leading-relaxed ${studioFieldClass} !bg-white/82 !border-neutral-300/80 !text-black dark:!bg-[#121129] dark:!text-white dark:!placeholder:text-white/35 dark:!caret-white dark:!border-purple-400/20`}
     style={{ minHeight: "400px" }}
     placeholder="Start typing your script..."
     dir={isRTL ? "rtl" : "ltr"}
@@ -1234,7 +1243,7 @@ const exportScriptAsPDF = async () => {
               const hasMoreVoices = pool.length > visibleCount;
 
               return (
-                <div key={index} className="bg-white dark:bg-neutral-900/70 rounded-lg border border-black/10 dark:border-white/10 p-6">
+                <div key={index} className={`${studioGlassCardClass} p-6`}>
                   <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
                     <Users className="w-5 h-5 text-purple-600" />
                     Speaker {index + 1}: {speaker.name || "Unnamed"}
@@ -1258,7 +1267,7 @@ const exportScriptAsPDF = async () => {
     setSpeakers(newSpeakers);
     // Script will be updated when Save Changes is clicked
   }}
-  className="w-full px-3 py-2 border rounded-lg max-w-md bg-white dark:bg-neutral-900/70 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-white/15 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+  className={`w-full px-3 py-2 rounded-lg max-w-md ${studioFieldClass}`}
   placeholder="Enter speaker name"
 />
 </div>
@@ -1274,7 +1283,7 @@ const exportScriptAsPDF = async () => {
                           <div className="flex items-center gap-3">
                             <button
                               onClick={() => setActiveFilterSpeaker(index)}
-                              className="relative inline-flex items-center justify-center h-[44px] w-[44px] rounded-xl border border-gray-300 dark:border-white/15 bg-white dark:bg-neutral-900 hover:bg-gray-50 dark:hover:bg-white/10"
+                              className="relative inline-flex items-center justify-center h-[44px] w-[44px] rounded-xl border border-neutral-300/80 dark:border-white/15 bg-white/82 dark:bg-neutral-900/72 hover:bg-white dark:hover:bg-white/10"
                             >
                               <SlidersHorizontal className="w-5 h-5" />
                               {Object.values(speakerVoiceFilters[index] || {}).some(Boolean) && (
@@ -1301,7 +1310,7 @@ const exportScriptAsPDF = async () => {
                                   };
                                   setSpeakers(newSpeakers);
                                 }}
-                                className="w-full appearance-none pr-10 px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900/70 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-white/15 focus:ring-2 focus:ring-purple-500 focus:border-transparent [color-scheme:light] dark:[color-scheme:dark]"
+                                className={`w-full appearance-none pr-10 px-3 py-2 rounded-lg ${studioFieldClass} [color-scheme:light] dark:[color-scheme:dark]`}
                               >
                                 <option value="">Select a voice</option>
                                 {visiblePool.map((v) => {
@@ -1359,7 +1368,7 @@ const exportScriptAsPDF = async () => {
 
         {/* Music Tab */}
 {activeTab === "music" && (
-  <div className="space-y-6">
+          <div className={`${studioGlassCardClass} p-5 sm:p-6 space-y-6`}>
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
       {Object.entries(MUSIC_CATEGORIES).map(([key, tracks]) => (
         <button
@@ -1371,7 +1380,7 @@ const exportScriptAsPDF = async () => {
           className={`p-4 rounded-lg border text-center transition ${
             category === key
               ? "border-purple-500 bg-purple-50 dark:bg-purple-900/20"
-              : "border-gray-200 dark:border-white/10 hover:border-gray-300 dark:hover:border-white/20"
+              : "border-purple-200/90 dark:border-purple-400/25 bg-white/70 dark:bg-neutral-900/55 hover:border-purple-300 dark:hover:border-purple-400/40"
           }`}
         >
           <Disc className="w-8 h-8 mx-auto mb-2 text-gray-600 dark:text-white/70" />
@@ -1387,13 +1396,13 @@ const exportScriptAsPDF = async () => {
           { label: "Body Music", value: bodyMusic, setter: setBodyMusic },
           { label: "Outro Music", value: outroMusic, setter: setOutroMusic },
         ].map((item) => (
-          <div key={item.label} className="flex items-center justify-between p-4 border border-black/10 dark:border-white/10 rounded-lg">
+          <div key={item.label} className={`${studioGlassCardClass} p-4 sm:p-5 flex items-center justify-between gap-4`}>
             <span className="font-medium">{item.label}</span>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2 justify-end">
               <select
                 value={item.value}
                 onChange={(e) => item.setter(e.target.value)}
-                className="px-3 py-2 border rounded-lg min-w-[200px] bg-white dark:bg-neutral-900/70 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-white/15 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                className={`px-3 py-2 rounded-lg min-w-[200px] ${studioFieldClass}`}
               >
                 <option value="">Select track</option>
                 {availableTracks.map((track) => (
@@ -1437,7 +1446,7 @@ const exportScriptAsPDF = async () => {
 
         {/* Generated Audio */}
         {generatedAudio && (
-          <div className="mt-8 p-6 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200">
+          <div className={`${studioGlassCardClass} mt-8 p-6`}>
             <h3 className="text-lg font-semibold text-green-800 dark:text-green-300 mb-4 flex items-center gap-2">
               <Check className="w-5 h-5" />
               Generated Audio
@@ -1513,6 +1522,8 @@ const exportScriptAsPDF = async () => {
   </div>
 )}
       </div>
+      </div>
+      </main>
 
       {/* Voice Filter Modal */}
       {activeFilterSpeaker !== null && (
