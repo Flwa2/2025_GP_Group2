@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -359,6 +359,7 @@ export default function EditPodcast() {
   const [originalIntroMusic, setOriginalIntroMusic] = useState("");
   const [originalBodyMusic, setOriginalBodyMusic] = useState("");
   const [originalOutroMusic, setOriginalOutroMusic] = useState("");
+  
 
   // UI states
   const [loading, setLoading] = useState(true);
@@ -1075,17 +1076,80 @@ const exportScriptAsPDF = async () => {
                       className={`px-3 py-1 rounded-lg text-lg ${studioFieldClass}`}
                       autoFocus
                     />
-                    <button
-                      onClick={() => {
-                        if (draftTitle.trim()) {
-                          setShowTitle(draftTitle.trim());
-                          setIsEditingTitle(false);
-                        }
-                      }}
-                      className="px-3 py-1 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700"
-                    >
-                      Save
-                    </button>
+                       <button
+  onClick={async () => {
+    if (draftTitle.trim()) {
+      const oldTitle = showTitle; 
+      const newTitle = draftTitle.trim();
+      
+      // Create the new script content
+      const escapedOldTitle = oldTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const newScript = script.replace(new RegExp(escapedOldTitle, 'g'), newTitle);
+      
+      // Update ALL states at once
+      setShowTitle(newTitle);
+      setScript(newScript);
+      setIsEditingTitle(false);
+      
+      // Save using the NEW script we just created, not the old script state
+      // We need to use the newScript variable directly because setScript hasn't updated yet
+      
+      setSaving(true);
+      try {
+        const updatedScript = applySpeakerLabelRenames(newScript, originalSpeakers, speakers);
+        
+        const res = await fetch(`${API_BASE}/api/podcast/${podcastId}/update`, {
+          method: "POST",
+          credentials: "include",
+          headers: { 
+            "Content-Type": "application/json",
+            'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
+          },
+          body: JSON.stringify({
+            script: updatedScript,
+            speakers,
+            introMusic,
+            bodyMusic,
+            outroMusic,
+            category,
+            showTitle: newTitle, // Use the new title
+            scriptStyle,
+            description: "",
+          }),
+        });
+
+
+        const responseData = await res.json();
+
+
+        if (!res.ok) {
+          throw new Error(responseData.error || "Failed to save changes");
+        }
+
+
+        // Update original values
+        setOriginalScript(updatedScript);
+        setOriginalSpeakers(speakers);
+        setOriginalIntroMusic(introMusic);
+        setOriginalBodyMusic(bodyMusic);
+        setOriginalOutroMusic(outroMusic);
+        setHasUnsavedChanges(false);
+        
+        setToast({ type: "success", message: "Changes saved successfully!" });
+        setTimeout(() => setToast(null), 3000);
+      } catch (error) {
+        console.error("Save error:", error);
+        setToast({ type: "error", message: error.message || "Failed to save changes" });
+      } finally {
+        setSaving(false);
+      }
+    }
+  }}
+  className="px-3 py-1 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700"
+>
+  Save
+</button>
+
                     <button
                       onClick={() => setIsEditingTitle(false)}
                       className="px-3 py-1 border border-black/10 dark:border-white/15 rounded-lg text-sm hover:bg-black/5 dark:hover:bg-white/10"
@@ -1148,7 +1212,6 @@ const exportScriptAsPDF = async () => {
         </div>
       </div>
 
-      {/* Rest of your component... */}
 
       {/* Tab Content */}
       <div className="py-6">
@@ -1362,86 +1425,131 @@ const exportScriptAsPDF = async () => {
                 </div>
               );
             })}
-            
+             <div className="flex justify-end gap-3">
+  {/* Done Button */}
+<button
+  onClick={() => {
+    if (isEditingTitle) {
+      setToast({ type: "warning", message: "Please save your title edit before continuing" });
+      setTimeout(() => setToast(null), 3000);
+      return;
+    }
+    if (hasUnsavedChanges) {
+      setToast({ type: "warning", message: "Please save your changes before completing the edit" });
+      setTimeout(() => setToast(null), 3000);
+    } else {
+      setShowDoneConfirmation(true);
+    }
+  }}
+  disabled={generatingAudio}
+  className="flex items-center gap-2 px-6 py-2 border border-purple-500 text-purple-600 dark:text-purple-300 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50 font-semibold"
+>
+  <Check className="w-4 h-4" />
+  Done
+</button>
+</div>
           </div>
         )}
 
         {/* Music Tab */}
 {activeTab === "music" && (
-          <div className={`${studioGlassCardClass} p-5 sm:p-6 space-y-6`}>
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-      {Object.entries(MUSIC_CATEGORIES).map(([key, tracks]) => (
-        <button
-          key={key}
-          onClick={() => {
-            setCategory(key);
-            setAvailableTracks(tracks);
-          }}
-          className={`p-4 rounded-lg border text-center transition ${
-            category === key
-              ? "border-purple-500 bg-purple-50 dark:bg-purple-900/20"
-              : "border-purple-200/90 dark:border-purple-400/25 bg-white/70 dark:bg-neutral-900/55 hover:border-purple-300 dark:hover:border-purple-400/40"
-          }`}
-        >
-          <Disc className="w-8 h-8 mx-auto mb-2 text-gray-600 dark:text-white/70" />
-          <span className="font-medium capitalize">{key}</span>
-        </button>
-      ))}
-    </div>
+          <><div className={`${studioGlassCardClass} p-5 sm:p-6 space-y-6`}>
+               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                 {Object.entries(MUSIC_CATEGORIES).map(([key, tracks]) => (
+                   <button
+                     key={key}
+                     onClick={() => {
+                       setCategory(key);
+                       setAvailableTracks(tracks);
+                     } }
+                     className={`p-4 rounded-lg border text-center transition ${category === key
+                         ? "border-purple-500 bg-purple-50 dark:bg-purple-900/20"
+                         : "border-purple-200/90 dark:border-purple-400/25 bg-white/70 dark:bg-neutral-900/55 hover:border-purple-300 dark:hover:border-purple-400/40"}`}
+                   >
+                     <Disc className="w-8 h-8 mx-auto mb-2 text-gray-600 dark:text-white/70" />
+                     <span className="font-medium capitalize">{key}</span>
+                   </button>
+                 ))}
+               </div>
 
-    {category && (
-      <div className="space-y-4">
-        {[
-          { label: "Intro Music", value: introMusic, setter: setIntroMusic },
-          { label: "Body Music", value: bodyMusic, setter: setBodyMusic },
-          { label: "Outro Music", value: outroMusic, setter: setOutroMusic },
-        ].map((item) => (
-          <div key={item.label} className={`${studioGlassCardClass} p-4 sm:p-5 flex items-center justify-between gap-4`}>
-            <span className="font-medium">{item.label}</span>
-            <div className="flex flex-wrap gap-2 justify-end">
-              <select
-                value={item.value}
-                onChange={(e) => item.setter(e.target.value)}
-                className={`px-3 py-2 rounded-lg min-w-[200px] ${studioFieldClass}`}
-              >
-                <option value="">Select track</option>
-                {availableTracks.map((track) => (
-                  <option key={track.file} value={track.file}>
-                    {track.name}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={() => {
-                  if (item.value) {
-                    // Stop current audio if playing
-                    if (window.currentAudio) {
-                      window.currentAudio.pause();
-                      window.currentAudio.currentTime = 0;
-                    }
-                    
-                    // Create and play new audio
-                    const audio = new Audio(`${API_BASE}/static/music/${item.value}`);
-                    window.currentAudio = audio;
-                    audio.play().catch(e => console.error("Playback failed:", e));
-                    
-                    // Show toast
-                    setToast({ type: "success", message: `Playing ${item.label}` });
-                    setTimeout(() => setToast(null), 2000);
-                  }
-                }}
-                disabled={!item.value}
-                className="px-3 py-2 border border-purple-500 text-purple-600 dark:text-purple-300 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50"
-                title={`Preview ${item.label}`}
-              >
-                <Play className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-    )}
-  </div>
+               {category && (
+                 <div className="space-y-4">
+                   {[
+                     { label: "Intro Music", value: introMusic, setter: setIntroMusic },
+                     { label: "Body Music", value: bodyMusic, setter: setBodyMusic },
+                     { label: "Outro Music", value: outroMusic, setter: setOutroMusic },
+                   ].map((item) => (
+                     <div key={item.label} className={`${studioGlassCardClass} p-4 sm:p-5 flex items-center justify-between gap-4`}>
+                       <span className="font-medium">{item.label}</span>
+                       <div className="flex flex-wrap gap-2 justify-end">
+                         <select
+                           value={item.value}
+                           onChange={(e) => item.setter(e.target.value)}
+                           className={`px-3 py-2 rounded-lg min-w-[200px] ${studioFieldClass}`}
+                         >
+                           <option value="">Select track</option>
+                           {availableTracks.map((track) => (
+                             <option key={track.file} value={track.file}>
+                               {track.name}
+                             </option>
+                           ))}
+                         </select>
+                         <button
+                           onClick={() => {
+                             if (item.value) {
+                               // Stop current audio if playing
+                               if (window.currentAudio) {
+                                 window.currentAudio.pause();
+                                 window.currentAudio.currentTime = 0;
+                               }
+
+                               // Create and play new audio
+                               const audio = new Audio(`${API_BASE}/static/music/${item.value}`);
+                               window.currentAudio = audio;
+                               audio.play().catch(e => console.error("Playback failed:", e));
+
+                               // Show toast
+                               setToast({ type: "success", message: `Playing ${item.label}` });
+                               setTimeout(() => setToast(null), 2000);
+                             }
+                           } }
+                           disabled={!item.value}
+                           className="px-3 py-2 border border-purple-500 text-purple-600 dark:text-purple-300 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50"
+                           title={`Preview ${item.label}`}
+                         >
+                           <Play className="w-5 h-5" />
+                         </button>
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+               )}
+             </div>
+              <div className="flex justify-end gap-3 mt-6">
+      <button
+        onClick={() => {
+          if (isEditingTitle) {
+            setToast({ type: "warning", message: "Please save your title edit before continuing" });
+            setTimeout(() => setToast(null), 3000);
+            return;
+          }
+          if (hasUnsavedChanges) {
+            setToast({ type: "warning", message: "Please save your changes before completing the edit" });
+            setTimeout(() => setToast(null), 3000);
+          } else {
+            setShowDoneConfirmation(true);
+          }
+        }}
+        disabled={generatingAudio}
+        className="flex items-center gap-2 px-6 py-2 border border-purple-500 text-purple-600 dark:text-purple-300 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50 font-semibold"
+      >
+        <Check className="w-4 h-4" />
+        Done
+      </button>
+    </div>
+               </>
+  
+  
 )}
 
         {/* Generated Audio */}
@@ -1598,4 +1706,5 @@ const exportScriptAsPDF = async () => {
     </div>
   );
 }
+
 
