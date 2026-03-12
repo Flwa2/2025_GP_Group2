@@ -682,8 +682,14 @@ export default function Episodes() {
                           </div>
                           <div className="flex min-w-0 flex-1 flex-col justify-center p-3.5 sm:p-4">
                             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/50 dark:text-white/50">{t("episodes.itemLabel")}</p>
+                            {ep.hasEditDraft && (
+                              <div className={`mt-1 inline-flex w-fit items-center gap-2 rounded-full border border-amber-300/70 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800 dark:border-amber-400/30 dark:bg-amber-900/15 dark:text-amber-200 ${isRTL ? "self-end" : ""}`}>
+                                <span className="h-2 w-2 rounded-full bg-amber-500" />
+                                Continue editing available
+                              </div>
+                            )}
                             <div
-                              className="text-base font-semibold leading-snug"
+                              className="text-base font-semibold leading-snug mt-1"
                               style={{
                                 display: "-webkit-box",
                                 WebkitBoxOrient: "vertical",
@@ -763,10 +769,10 @@ export default function Episodes() {
                                   startEditEpisode(ep);
                                 }}
                                 className="inline-flex h-9 items-center gap-1 rounded-lg border border-black/10 dark:border-white/15 px-3 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/10"
-                                title={t("episodes.card.edit")}
+                                title={ep.hasEditDraft ? "Continue Editing" : t("episodes.card.edit")}
                               >
                                 <Pencil className="h-4 w-4" />
-                                <span className="hidden sm:inline">{t("episodes.card.edit")}</span>
+                                <span className="hidden sm:inline">{ep.hasEditDraft ? "Continue Editing" : t("episodes.card.edit")}</span>
                               </button>
                               <button
                                 type="button"

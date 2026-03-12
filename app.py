@@ -32,6 +32,61 @@ import json
 print("DEBUG in app.py:", db)
 
 SHOW_TITLE_PLACEHOLDER = "{{SHOW_TITLE}}"
+ARABIC_SECTION_HEADERS = {
+    "INTRO": "مقدمة",
+    "BODY": "الحوار",
+    "OUTRO": "الخاتمة",
+}
+ARABIC_MUSIC_TAG = "[فاصل موسيقي]"
+
+def is_music_tag(text: str) -> bool:
+    stripped = str(text or "").strip().lower()
+    return stripped in {"[music]", "[موسيقى]", "[فاصل موسيقي]"}
+
+def is_section_header(text: str) -> bool:
+    stripped = str(text or "").strip()
+    return bool(re.match(r"^(INTRO|BODY|OUTRO|مقدمة|الحوار|الخاتمة)\s*:?$", stripped, re.IGNORECASE))
+
+def localize_script_structure(script: str, language: str) -> str:
+    if not script:
+        return script
+
+    lang = (language or "").strip().lower()
+    localized_lines = []
+    for raw_line in str(script).splitlines():
+        stripped = raw_line.strip()
+
+        if lang == "ar":
+            if re.match(r"^INTRO\s*:?$", stripped, re.IGNORECASE):
+                localized_lines.append(ARABIC_SECTION_HEADERS["INTRO"])
+                continue
+            if re.match(r"^BODY\s*:?$", stripped, re.IGNORECASE):
+                localized_lines.append(ARABIC_SECTION_HEADERS["BODY"])
+                continue
+            if re.match(r"^OUTRO\s*:?$", stripped, re.IGNORECASE):
+                localized_lines.append(ARABIC_SECTION_HEADERS["OUTRO"])
+                continue
+            if is_music_tag(stripped):
+                localized_lines.append(ARABIC_MUSIC_TAG)
+                continue
+        else:
+            if re.match(r"^مقدمة\s*:?$", stripped):
+                localized_lines.append("INTRO")
+                continue
+            if re.match(r"^الحوار\s*:?$", stripped):
+                localized_lines.append("BODY")
+                continue
+            if re.match(r"^الخاتمة\s*:?$", stripped):
+                localized_lines.append("OUTRO")
+                continue
+            if is_music_tag(stripped):
+                localized_lines.append("[music]")
+                continue
+
+        localized_lines.append(raw_line)
+
+    return "\n".join(localized_lines)
+
 # ------------------------------------------------------------
 # App + Config
 # ------------------------------------------------------------
@@ -328,9 +383,9 @@ def generate_podcast_script(description: str, speakers_info: list, script_style:
     )
 
     if is_ar:
-            intro_block = """
+            intro_block = f"""
             --------------------
-            INTRO
+            {ARABIC_SECTION_HEADERS["INTRO"]}
             --------------------
             - يجب أن تكون أول جملة منطوقة في المقدمة من المقدم الرئيسي (أول متحدث في القائمة).
     - يجب أن تحتوي هذه الجملة على {{SHOW_TITLE}} حرفيًا داخل علامات اقتباس، مثال:
@@ -405,14 +460,14 @@ Follow these requirements:
 {intro_block}
 
 --------------------
-BODY
+{"الحوار" if is_ar else "BODY"}
 --------------------
 - Natural dialogue.
 - All speakers MUST speak multiple times.
 - Turn-taking is REQUIRED.
 
 --------------------
-OUTRO
+{"الخاتمة" if is_ar else "OUTRO"}
 --------------------
 - Summary or closing thoughts.
 
@@ -422,22 +477,22 @@ RULES
 - The script MUST contain three sections in this exact format:
 
 --------------------
-INTRO
+{"مقدمة" if is_ar else "INTRO"}
 --------------------
-[music]
+{ARABIC_MUSIC_TAG if is_ar else "[music]"}
 [script content here]
-[music]
+{ARABIC_MUSIC_TAG if is_ar else "[music]"}
 
 --------------------
-BODY
+{"الحوار" if is_ar else "BODY"}
 --------------------
 [script content here]
 --------------------
-OUTRO
+{"الخاتمة" if is_ar else "OUTRO"}
 --------------------
-[music]
+{ARABIC_MUSIC_TAG if is_ar else "[music]"}
 [script content here]
-[music]
+{ARABIC_MUSIC_TAG if is_ar else "[music]"}
 
 - Do NOT add any extra music tags.
 - Do NOT put music in the middle of dialogue.
@@ -458,7 +513,7 @@ SPEAKER RULES (MANDATORY â€” DO NOT VIOLATE):
 
 TRANSITION SPEECH RULES (VERY IMPORTANT):
 
-- The sentence immediately BEFORE a [music] tag must sound like a natural ending, conclusion, or pause. 
+- The sentence immediately BEFORE a {"[music]" if not is_ar else ARABIC_MUSIC_TAG} tag must sound like a natural ending, conclusion, or pause. 
 - Do NOT end abruptly. End with tone markers such as:
   â€¢ a reflective closing thought
   â€¢ a conversational wrap-up
@@ -467,7 +522,7 @@ TRANSITION SPEECH RULES (VERY IMPORTANT):
       "More on that in a moment."
       "Let's pause for a second."
 
-- The FIRST sentence after a [music] tag must feel like a fresh beginning or a smooth re-entry. 
+- The FIRST sentence after a {"[music]" if not is_ar else ARABIC_MUSIC_TAG} tag must feel like a fresh beginning or a smooth re-entry. 
 - Use natural re-entry language like:
       "Welcome backâ€”"
       "Now letâ€™s continueâ€”"
@@ -535,17 +590,15 @@ Transform the following text into a structured podcast script:
         if re.match(r"^#{1,6}\s+\w+", stripped):
             continue
 
-        # remove bracket-only lines EXCEPT [music]
+        # remove bracket-only lines EXCEPT music tags
         if re.fullmatch(r"\[[^\]]+\]", stripped):
-            if stripped.lower() != "[music]":
+            if not is_music_tag(stripped):
                 continue
 
         cleaned_lines.append(ln)
 
     cleaned_raw = "\n".join(cleaned_lines)
-
-
-    final_script = cleaned_raw
+    final_script = localize_script_structure(cleaned_raw, lang)
 
     return final_script
 
@@ -1110,6 +1163,40 @@ def _set_draft_for(podcast_id: str, updates: dict):
     session.modified = True
 
 
+def _edit_draft_ref(podcast_id: str):
+    return db.collection("podcasts").document(podcast_id).collection("edits").document("draft")
+
+
+def _serialize_edit_draft(doc):
+    if not doc.exists:
+        return None
+
+    data = doc.to_dict() or {}
+    def _iso(value):
+        if not value:
+            return ""
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if hasattr(value, "isoformat"):
+            try:
+                return value.isoformat()
+            except Exception:
+                return ""
+        return str(value)
+
+    return {
+        "showTitle": data.get("showTitle", ""),
+        "script": data.get("script", ""),
+        "speakers": data.get("speakers", []),
+        "introMusic": data.get("introMusic", ""),
+        "bodyMusic": data.get("bodyMusic", ""),
+        "outroMusic": data.get("outroMusic", ""),
+        "category": data.get("category", ""),
+        "savedAt": _iso(data.get("savedAt")),
+        "updatedAt": _iso(data.get("updatedAt")),
+    }
+
+
 def _validate_image_bytes(image_bytes: bytes, min_size: int = 512):
     try:
         img = Image.open(BytesIO(image_bytes))
@@ -1348,7 +1435,7 @@ def api_cover_generate(podcast_id):
 
 @app.post("/api/podcast/<podcast_id>/update")
 def api_update_podcast(podcast_id):
-    """Save all changes to podcast (script, speakers, music)"""
+    """Save edit draft or finalize podcast changes."""
     user_id = session.get("user_id") or get_current_user_email()
     if not user_id:
         return jsonify(error="Not logged in"), 401
@@ -1370,24 +1457,60 @@ def api_update_podcast(podcast_id):
     if podcast_data.get("userId") != user_id:
         return jsonify(error="Forbidden"), 403
 
+    mode = str(data.get("mode") or "final").strip().lower()
+    allowed_modes = {"draft", "final", "discard_draft"}
+    if mode not in allowed_modes:
+        return jsonify(error="Invalid update mode"), 400
+
+    podcast_ref = db.collection("podcasts").document(podcast_id)
+    draft_ref = _edit_draft_ref(podcast_id)
+
+    if mode == "discard_draft":
+        draft_ref.delete()
+        return jsonify(ok=True, mode=mode, message="Draft discarded", podcastId=podcast_id)
+
+    payload = {
+        "showTitle": data.get("showTitle", podcast_data.get("title", "")),
+        "script": data.get("script", ""),
+        "speakers": data.get("speakers", []),
+        "introMusic": data.get("introMusic", ""),
+        "bodyMusic": data.get("bodyMusic", ""),
+        "outroMusic": data.get("outroMusic", ""),
+        "category": data.get("category", ""),
+        "description": data.get("description", ""),
+        "scriptStyle": data.get("scriptStyle", podcast_data.get("style", "")),
+        "savedAt": firestore.SERVER_TIMESTAMP,
+        "updatedAt": firestore.SERVER_TIMESTAMP,
+    }
+
+    if mode == "draft":
+        draft_ref.set(payload, merge=True)
+        return jsonify(
+            ok=True,
+            mode=mode,
+            message="Draft saved successfully",
+            podcastId=podcast_id,
+            draft=_serialize_edit_draft(draft_ref.get()),
+        )
+
     # Update main podcast document
     updates = {
-        "title": data.get("showTitle", podcast_data.get("title", "")),
+        "title": payload["showTitle"],
         "lastEditedAt": firestore.SERVER_TIMESTAMP,
+        "category": payload["category"],
+        "introMusic": payload["introMusic"],
+        "bodyMusic": payload["bodyMusic"],
+        "outroMusic": payload["outroMusic"],
     }
     
-    if data.get("description"):
-        updates["description"] = data.get("description")
-    
-    if data.get("category"):
-        updates["category"] = data.get("category")
-        session["category"] = data.get("category")
+    if payload["description"]:
+        updates["description"] = payload["description"]
     
     podcast_ref.set(updates, merge=True)
     print(f"Updated main podcast document")
 
     # IMPORTANT: Get the script that the frontend sent (already has updated speaker names)
-    script_to_save = data.get("script", "")
+    script_to_save = payload["script"]
     print(f"DEBUG: Saving script with length: {len(script_to_save)}")
     print(f"DEBUG: Script preview: {script_to_save[:200]}")
     
@@ -1404,15 +1527,15 @@ def api_update_podcast(podcast_id):
         print(f"DEBUG: No script to save")
 
     # Update speakers - delete old ones and add new ones
-    if data.get("speakers"):
-        print(f"DEBUG: Saving {len(data.get('speakers'))} speakers")
+    if payload["speakers"]:
+        print(f"DEBUG: Saving {len(payload['speakers'])} speakers")
         
         # Delete existing speakers
         for speaker_doc in podcast_ref.collection("speakers").stream():
             speaker_doc.reference.delete()
         
         # Add new speakers
-        for speaker in data.get("speakers", []):
+        for speaker in payload["speakers"]:
             podcast_ref.collection("speakers").document().set({
                 "name": speaker.get("name", ""),
                 "gender": speaker.get("gender", "Male"),
@@ -1422,18 +1545,11 @@ def api_update_podcast(podcast_id):
             })
         print(f"DEBUG: Speakers saved")
 
-    # Save music selections to session
-    if data.get("introMusic") is not None:
-        session["introMusic"] = data.get("introMusic")
-    if data.get("bodyMusic") is not None:
-        session["bodyMusic"] = data.get("bodyMusic")
-    if data.get("outroMusic") is not None:
-        session["outroMusic"] = data.get("outroMusic")
-    
-    session.modified = True
+    draft_ref.delete()
 
     return jsonify({
         "ok": True,
+        "mode": mode,
         "message": "Podcast updated successfully",
         "podcastId": podcast_id,
         "updatedScript": script_to_save  # Return the updated script to frontend
@@ -1744,6 +1860,8 @@ def api_get_podcast(podcast_id):
         script = script_data.get("finalScriptText", "")
         script_template = script_data.get("sourceText", "")
 
+    edit_draft = _serialize_edit_draft(_edit_draft_ref(podcast_id).get())
+
     # Return all data the edit page needs
     return jsonify({
         "id": podcast_id,
@@ -1756,11 +1874,13 @@ def api_get_podcast(podcast_id):
         "speakersCount": len(speakers),
         "speakers": speakers,
         "description": podcast_data.get("description", ""),
-        "introMusic": session.get("introMusic", ""),
-        "bodyMusic": session.get("bodyMusic", ""),
-        "outroMusic": session.get("outroMusic", ""),
-        "category": session.get("category", ""),
+        "introMusic": podcast_data.get("introMusic", ""),
+        "bodyMusic": podcast_data.get("bodyMusic", ""),
+        "outroMusic": podcast_data.get("outroMusic", ""),
+        "category": podcast_data.get("category", ""),
         "language": podcast_data.get("language", "en"),
+        "audioUrl": podcast_data.get("audioUrl", ""),
+        "editDraft": edit_draft,
     })
     
 @app.post("/api/generate")
@@ -1849,9 +1969,11 @@ def api_episodes_list():
             if not line:
                 continue
             # Ignore section headers and stage directions.
-            if re.match(r"^(INTRO|BODY|OUTRO)\s*:?$", line, re.IGNORECASE):
+            if is_section_header(line):
                 continue
             if re.match(r"^[\[\(].*[\]\)]$", line):
+                if is_music_tag(line):
+                    continue
                 continue
 
             # Convert "Speaker: text" to just "text" for a clean synopsis.
@@ -1982,6 +2104,13 @@ def api_episodes_list():
             "createdAt": data.get("createdAt"),
         }
 
+        draft_data = _serialize_edit_draft(_edit_draft_ref(doc.id).get())
+        if draft_data:
+            payload["hasEditDraft"] = True
+            payload["editDraftUpdatedAt"] = draft_data.get("updatedAt") or draft_data.get("savedAt") or ""
+        else:
+            payload["hasEditDraft"] = False
+
         if deleted_at:
             payload["deletedAt"] = deleted_at.isoformat()
             payload["deleteAfter"] = (
@@ -2110,14 +2239,14 @@ def clean_script_for_tts(script: str) -> str:
         if line.startswith("#"):
             continue
 
-        if re.fullmatch(r"(intro|body|outro)[:ï¼ڑ]?\s*$", line, re.IGNORECASE):
+        if is_section_header(line):
             continue
 
-        if re.match(r"^([^:ï¼ڑ]+)[:ï¼ڑ]\s*(intro|body|outro)\s*$", line, re.IGNORECASE):
+        if re.match(r"^([^:ï¼ڑ]+)[:ï¼ڑ]\s*(intro|body|outro|مقدمة|الحوار|الخاتمة)\s*$", line, re.IGNORECASE):
             continue
 
         if re.fullmatch(r"\[[^\]]+\]", line):
-            if line.lower() != "[music]":
+            if not is_music_tag(line):
                 continue
 
         line = re.sub(r"\[[^\]]*]", "", line)
@@ -2181,7 +2310,7 @@ def parse_script_into_segments(script: str):
         if not stripped:
             continue
 
-        if stripped.lower() == "[music]":
+        if is_music_tag(stripped):
             segments.append(("__music__", None))
             continue
 

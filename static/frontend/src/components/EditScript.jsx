@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, Mic2, Download } from "lucide-react";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
+import { ChevronRight, Mic2, Download, ChevronDown } from "lucide-react";
+import { exportScriptPdf } from "../utils/exportScriptPdf";
+import { exportScriptTxt } from "../utils/exportScriptTxt";
 
 const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
@@ -80,6 +80,7 @@ export default function EditScript() {
   const [titleJustUpdated, setTitleJustUpdated] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
+  const [showExportMenu, setShowExportMenu] = useState(false);
   const [lastSavedScript, setLastSavedScript] = useState("");
   const [lastSavedTitle, setLastSavedTitle] = useState(""); // Track last saved title
   const [scriptStyle, setScriptStyle] = useState("");
@@ -102,7 +103,7 @@ export default function EditScript() {
     return script.trim() !== lastSavedScript.trim() || showTitle !== lastSavedTitle;
   }, [script, lastSavedScript, showTitle, lastSavedTitle]);
 
-  const exportScriptAsPDF = async () => {
+  const exportScript = async (format = "pdf") => {
     try {
       // Check for unsaved changes first
       if (hasUnsavedChanges) {
@@ -142,48 +143,16 @@ export default function EditScript() {
         return;
       }
 
-      const doc = new jsPDF();
-      
-      doc.setFontSize(20);
-      doc.setTextColor(40, 40, 40);
-      doc.text(title, 20, 20);
-      
-      doc.setFontSize(10);
-      doc.setTextColor(100, 100, 100);
-      doc.text(`Exported on: ${new Date().toLocaleString()}`, 20, 30);
-      doc.text(`WeCast Podcast Script - ${scriptStyle || "Standard"} Style`, 20, 35);
-      
-      const lines = scriptContent.split(/\r?\n/).filter(line => line.trim());
-      
-      const tableData = [];
-      lines.forEach(line => {
-        const colonIndex = line.indexOf(":");
-        if (colonIndex > 0) {
-          const speaker = line.substring(0, colonIndex).trim();
-          const text = line.substring(colonIndex + 1).trim();
-          tableData.push([speaker, text]);
-        } else {
-          tableData.push(["", line]);
-        }
+      const exportHandler = format === "txt" ? exportScriptTxt : exportScriptPdf;
+
+      await exportHandler({
+        scriptContent,
+        title,
+        scriptStyle,
+        fileNameBase: title,
       });
       
-      autoTable(doc, {
-        head: [["Speaker", "Dialogue"]],
-        body: tableData,
-        startY: 45,
-        styles: { fontSize: 10, cellPadding: 3 },
-        headStyles: { fillColor: [147, 51, 234], textColor: 255 },
-        alternateRowStyles: { fillColor: [245, 245, 245] },
-        columnStyles: {
-          0: { fontStyle: 'bold', cellWidth: 40 },
-          1: { cellWidth: 'auto' }
-        }
-      });
-      
-      const fileName = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_script.pdf`;
-      doc.save(fileName);
-      
-      setToastMsg("Script exported successfully!");
+      setToastMsg(`Script exported as ${format.toUpperCase()} successfully!`);
       setTimeout(() => setToastMsg(""), 3000);
       
     } catch (error) {
@@ -679,20 +648,47 @@ export default function EditScript() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="ui-card-title mb-0">Your Script</h2>
               
-              <button
-                onClick={exportScriptAsPDF}
-                disabled={exporting || !script.trim() || hasUnsavedChanges}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200 text-sm font-medium
-                         shadow-sm hover:shadow disabled:opacity-50 disabled:cursor-not-allowed
-                         ${hasUnsavedChanges 
-                           ? 'bg-gray-300 dark:bg-gray-700 text-gray-600 dark:text-gray-400 cursor-not-allowed' 
-                           : 'bg-purple-600 hover:bg-purple-700 text-white'
-                         }`}
-                title={hasUnsavedChanges ? "Please save your changes before exporting" : "Export script as PDF"}
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>{exporting ? "Exporting..." : hasUnsavedChanges ? "Save to enable export" : "Export as PDF"}</span>
-              </button>
+              <div className="relative">
+                <button
+                  onClick={() => setShowExportMenu((prev) => !prev)}
+                  disabled={exporting || !script.trim() || hasUnsavedChanges}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200 text-sm font-medium
+                           shadow-sm hover:shadow disabled:opacity-50 disabled:cursor-not-allowed
+                           ${hasUnsavedChanges 
+                             ? 'bg-gray-300 dark:bg-gray-700 text-gray-600 dark:text-gray-400 cursor-not-allowed' 
+                             : 'bg-purple-600 hover:bg-purple-700 text-white'
+                           }`}
+                  title={hasUnsavedChanges ? "Please save your changes before exporting" : "Export script"}
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>{exporting ? "Exporting..." : hasUnsavedChanges ? "Save to enable export" : "Export"}</span>
+                  {!hasUnsavedChanges && <ChevronDown className={`w-4 h-4 transition-transform ${showExportMenu ? "rotate-180" : ""}`} />}
+                </button>
+                {showExportMenu && !exporting && script.trim() && !hasUnsavedChanges && (
+                  <div className="absolute right-0 top-full z-20 mt-2 w-44 overflow-hidden rounded-2xl border border-black/10 bg-white/96 p-1.5 shadow-[0_16px_40px_rgba(15,23,42,0.12)] backdrop-blur-sm dark:border-white/10 dark:bg-neutral-900/96">
+                    <button
+                      onClick={() => {
+                        setShowExportMenu(false);
+                        exportScript("pdf");
+                      }}
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-black/80 transition hover:bg-purple-50 hover:text-purple-700 dark:text-white/80 dark:hover:bg-purple-900/20 dark:hover:text-purple-200"
+                    >
+                      <Download className="w-4 h-4" />
+                      Export as PDF
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowExportMenu(false);
+                        exportScript("txt");
+                      }}
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-black/80 transition hover:bg-black/5 dark:text-white/80 dark:hover:bg-white/10"
+                    >
+                      <Download className="w-4 h-4" />
+                      Export as TXT
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
             {loadingDraft ? (

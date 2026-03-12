@@ -25,6 +25,8 @@ import {
 } from "lucide-react";
 import WeCastAudioPlayer from "./WeCastAudioPlayer";
 import Modal from "../components/Modal";
+import { exportScriptPdf } from "../utils/exportScriptPdf";
+import { exportScriptTxt } from "../utils/exportScriptTxt";
 
 const API_BASE = import.meta.env.PROD
     ? "https://wecast.onrender.com"
@@ -384,6 +386,7 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
     const [errors, setErrors] = useState({});
     const [submitting, setSubmitting] = useState(false);
     const [toast, setToast] = useState(null);
+    const [showExportMenu, setShowExportMenu] = useState(false);
     const [hoverKey, setHoverKey] = useState(null);
     const [musicPreview, setMusicPreview] = useState(null);
     const voicePreviewRef = useRef(null);
@@ -542,6 +545,9 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
     const MAX = 2500;
     const countWords = (text) => String(text || "").trim().split(/\s+/).filter(Boolean).length;
     const isArabicText = (text) => /[\u0600-\u06FF]/.test(String(text || ""));
+    const resolveContentLanguage = (text) => (
+        isArabicText(text) ? "ar" : (i18n.language === "ar" ? "ar" : "en")
+    );
 
     const EN_SAMPLE_TEXT = `Qiddiya: Saudi Arabia's Emerging Global Capital of Entertainment, Sports, and Culture
 Qiddiya stands as one of the boldest and most imaginative components of Saudi Arabia's Vision 2030. Located just 40 kilometers southwest of Riyadh, the project is designed to transform the Kingdom's entertainment and cultural landscape, offering world-class experiences that appeal to residents, tourists, and global enthusiasts alike. Stretching across more than 360 square kilometers, Qiddiya is not simply a recreational zone. It is an entire city built around the idea that entertainment, creativity, and human connection can reshape how people live, learn, and spend their time.
@@ -1005,6 +1011,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
 
     const handleGenerate = async () => {
         const words = description.trim().split(/\s+/).filter(Boolean).length;
+        const requestedLanguage = resolveContentLanguage(description);
         if (words < MIN) {
             setErrors({ description: t("create.errors.minWords", { min: MIN }) });
             return;
@@ -1027,7 +1034,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
                     speakers: Number(speakersCount),
                     speakers_info: speakers,
                     description,
-                    language: i18n.language,
+                    language: requestedLanguage,
                 }),
             });
 
@@ -1061,7 +1068,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
                 showTitle: backendTitle,
                 episodeTitle: backendTitle,
                 generatedScript: rendered,
-                language: i18n.language,
+                language: requestedLanguage,
             };
             sessionStorage.setItem("editData", JSON.stringify(editData));
             sessionStorage.removeItem("guestEditDraft");
@@ -1090,7 +1097,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
         // 🔽 ADD THIS BLOCK HERE
         let editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
         let podcastId = editData.podcastId;
-        const scriptLanguage = editData.language || i18n.language;
+        const scriptLanguage = editData.language || resolveContentLanguage(generatedScript || description);
 
         if (!podcastId) {
             try {
@@ -1218,7 +1225,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
     };
 
 // Add this function before the return statement
-const exportScriptAsPDF = async () => {
+const exportScript = async (format = "pdf") => {
   try {
     if (!generatedScript) {
       setToast({ type: "error", message: "No script content to export!" });
@@ -1226,57 +1233,16 @@ const exportScriptAsPDF = async () => {
       return;
     }
 
-    // Dynamically import jsPDF and autoTable
-    const jsPDF = (await import("jspdf")).default;
-    const autoTable = (await import("jspdf-autotable")).default;
-    
-    const doc = new jsPDF();
-    
-    // Title
-    doc.setFontSize(20);
-    doc.setTextColor(40, 40, 40);
-    doc.text(showTitle || "Podcast Script", 20, 20);
-    
-    // Metadata
-    doc.setFontSize(10);
-    doc.setTextColor(100, 100, 100);
-    doc.text(`Exported on: ${new Date().toLocaleString()}`, 20, 30);
-    doc.text(`WeCast Podcast Script - ${scriptStyle || "Standard"} Style`, 20, 35);
-    
-    // Parse script lines
-    const lines = generatedScript.split(/\r?\n/).filter(line => line.trim());
-    
-    const tableData = [];
-    lines.forEach(line => {
-      const colonIndex = line.indexOf(":");
-      if (colonIndex > 0) {
-        const speaker = line.substring(0, colonIndex).trim();
-        const text = line.substring(colonIndex + 1).trim();
-        tableData.push([speaker, text]);
-      } else {
-        tableData.push(["", line]);
-      }
+    const exportHandler = format === "txt" ? exportScriptTxt : exportScriptPdf;
+
+    await exportHandler({
+      scriptContent: generatedScript,
+      title: showTitle || "Podcast Script",
+      scriptStyle,
+      fileNameBase: showTitle || "podcast_script",
     });
     
-    // Create table
-    autoTable(doc, {
-      head: [["Speaker", "Dialogue"]],
-      body: tableData,
-      startY: 45,
-      styles: { fontSize: 10, cellPadding: 3 },
-      headStyles: { fillColor: [147, 51, 234], textColor: 255 },
-      alternateRowStyles: { fillColor: [245, 245, 245] },
-      columnStyles: {
-        0: { fontStyle: 'bold', cellWidth: 40 },
-        1: { cellWidth: 'auto' }
-      }
-    });
-    
-    // Save the PDF
-    const fileName = `${(showTitle || "podcast_script").replace(/[^a-z0-9]/gi, '_').toLowerCase()}_script.pdf`;
-    doc.save(fileName);
-    
-    setToast({ type: "success", message: "Script exported successfully!" });
+    setToast({ type: "success", message: `Script exported as ${format.toUpperCase()} successfully!` });
     setTimeout(() => setToast(null), 3000);
     
   } catch (error) {
@@ -2146,16 +2112,42 @@ const exportScriptAsPDF = async () => {
                 {t("create.step4.reviewTitle")}
             </h2>
             
-            {/* Export PDF Button */}
-            <button
-                onClick={exportScriptAsPDF}
-                disabled={!generatedScript}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200 text-sm font-medium shadow-sm hover:shadow disabled:opacity-50 disabled:cursor-not-allowed bg-purple-600 hover:bg-purple-700 text-white"
-                title="Export script as PDF"
-            >
-                <Download className="w-3.5 h-3.5" />
-                <span>Export as PDF</span>
-            </button>
+            <div className="relative">
+                <button
+                    onClick={() => setShowExportMenu((prev) => !prev)}
+                    disabled={!generatedScript}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200 text-sm font-medium shadow-sm hover:shadow disabled:opacity-50 disabled:cursor-not-allowed bg-purple-600 hover:bg-purple-700 text-white"
+                    title="Export script"
+                >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Export</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${showExportMenu ? "rotate-180" : ""}`} />
+                </button>
+                {showExportMenu && generatedScript && (
+                    <div className="absolute right-0 top-full z-20 mt-2 w-44 overflow-hidden rounded-2xl border border-black/10 bg-white/96 p-1.5 shadow-[0_16px_40px_rgba(15,23,42,0.12)] backdrop-blur-sm dark:border-white/10 dark:bg-neutral-900/96">
+                        <button
+                            onClick={() => {
+                                setShowExportMenu(false);
+                                exportScript("pdf");
+                            }}
+                            className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-black/80 transition hover:bg-purple-50 hover:text-purple-700 dark:text-white/80 dark:hover:bg-purple-900/20 dark:hover:text-purple-200"
+                        >
+                            <Download className="w-4 h-4" />
+                            Export as PDF
+                        </button>
+                        <button
+                            onClick={() => {
+                                setShowExportMenu(false);
+                                exportScript("txt");
+                            }}
+                            className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-black/80 transition hover:bg-black/5 dark:text-white/80 dark:hover:bg-white/10"
+                        >
+                            <Download className="w-4 h-4" />
+                            Export as TXT
+                        </button>
+                    </div>
+                )}
+            </div>
         </div>
 
                             <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800 mb-6">

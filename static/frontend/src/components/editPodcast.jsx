@@ -1,7 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
 import {
   Mic2,
   Users,
@@ -10,7 +8,6 @@ import {
   Info,
   AlertCircle,
   Play,
-  Edit,
   Pause,
   Download,
   Headphones,
@@ -20,7 +17,6 @@ import {
   X,
   Trash2,
   Pencil,
-  Sparkles,
   Volume2,
   AlertTriangle,
   FileText,
@@ -29,8 +25,9 @@ import {
   ChevronLeft,
   ChevronDown
 } from "lucide-react";
-import WeCastAudioPlayer from "./WeCastAudioPlayer";
 import Modal from "../components/Modal";
+import { exportScriptPdf } from "../utils/exportScriptPdf";
+import { exportScriptTxt } from "../utils/exportScriptTxt";
 
 const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
@@ -345,6 +342,7 @@ export default function EditPodcast() {
   const [originalScript, setOriginalScript] = useState("");
   const [scriptTemplate, setScriptTemplate] = useState("");
   const [showTitle, setShowTitle] = useState("");
+  const [originalShowTitle, setOriginalShowTitle] = useState("");
   const [scriptStyle, setScriptStyle] = useState("");
   const [podcastLanguage, setPodcastLanguage] = useState("en");
   const [speakers, setSpeakers] = useState([]);
@@ -352,13 +350,14 @@ export default function EditPodcast() {
   const [bodyMusic, setBodyMusic] = useState("");
   const [outroMusic, setOutroMusic] = useState("");
   const [category, setCategory] = useState("");
-  const [generatedAudio, setGeneratedAudio] = useState(null);
   
   // Original values for tracking changes
   const [originalSpeakers, setOriginalSpeakers] = useState([]);
   const [originalIntroMusic, setOriginalIntroMusic] = useState("");
   const [originalBodyMusic, setOriginalBodyMusic] = useState("");
   const [originalOutroMusic, setOriginalOutroMusic] = useState("");
+  const [originalCategory, setOriginalCategory] = useState("");
+  const [draftBaseline, setDraftBaseline] = useState(null);
   
 
   // UI states
@@ -372,6 +371,8 @@ export default function EditPodcast() {
   const [pendingNavigation, setPendingNavigation] = useState(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
+  const [draftRestored, setDraftRestored] = useState(false);
+  const [draftSavedAt, setDraftSavedAt] = useState("");
 
   // Voice related - matching CreatePro
   const [voices, setVoices] = useState([]);
@@ -391,11 +392,16 @@ export default function EditPodcast() {
 
   const [exporting, setExporting] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
-  const [showDoneConfirmation, setShowDoneConfirmation] = useState(false);
-  const [showAudioGenerationOptions, setShowAudioGenerationOptions] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
   const isAuthenticated = () => {
   return !!(localStorage.getItem("token") || sessionStorage.getItem("token"));
 };
+  const formatDraftTime = (iso) => {
+    if (!iso) return "";
+    const value = new Date(iso);
+    if (Number.isNaN(value.getTime())) return "";
+    return value.toLocaleString();
+  };
   const MUSIC_CATEGORIES = {
     dramatic: [
       { file: "Music dramatic 1.mp3", name: t("create.music.tracks.dramatic1") },
@@ -421,6 +427,26 @@ export default function EditPodcast() {
 
   // Helper function to get voice ID (matching CreatePro)
   const getVoiceId = (v) => v?.providerVoiceId || v?.id || v?.docId || "";
+  const buildEditableSnapshot = ({
+    nextShowTitle = showTitle,
+    nextScript = script,
+    nextSpeakers = speakers,
+    nextIntroMusic = introMusic,
+    nextBodyMusic = bodyMusic,
+    nextOutroMusic = outroMusic,
+    nextCategory = category,
+  } = {}) => ({
+    showTitle: String(nextShowTitle || ""),
+    script: String(nextScript || ""),
+    speakers: Array.isArray(nextSpeakers) ? nextSpeakers : [],
+    introMusic: String(nextIntroMusic || ""),
+    bodyMusic: String(nextBodyMusic || ""),
+    outroMusic: String(nextOutroMusic || ""),
+    category: String(nextCategory || ""),
+  });
+
+  const applyShowTitleToScript = (inputScript, nextShowTitle) =>
+    String(inputScript || "").replace(/\{\{SHOW_TITLE\}\}/g, String(nextShowTitle || "").trim());
 
   // Load podcast data from API (NO MOCK DATA)
   useEffect(() => {
@@ -457,27 +483,56 @@ export default function EditPodcast() {
         const data = await res.json();
         console.log("Loaded podcast data:", data);
 
-        // Set all data from the API response
-        setScript(data.script || "");
-        setOriginalScript(data.script || "");
+        const resolvedBaseTitle = data.showTitle || data.title || "Untitled Episode";
+        const baseState = {
+          script: applyShowTitleToScript(data.script || "", resolvedBaseTitle),
+          showTitle: data.showTitle || data.title || "Untitled Episode",
+          speakers: data.speakers || [],
+          introMusic: data.introMusic || "",
+          bodyMusic: data.bodyMusic || "",
+          outroMusic: data.outroMusic || "",
+          category: data.category || "",
+        };
+        const draftState = data.editDraft
+          ? {
+              ...data.editDraft,
+              script: applyShowTitleToScript(
+                data.editDraft.script || "",
+                data.editDraft.showTitle || resolvedBaseTitle
+              ),
+            }
+          : null;
+        const nextState = draftState ? { ...baseState, ...draftState } : baseState;
+
+        setScript(nextState.script);
+        setOriginalScript(baseState.script);
         setScriptTemplate(data.scriptTemplate || "");
-        setShowTitle(data.showTitle || data.title || "Untitled Episode");
+        setShowTitle(nextState.showTitle);
+        setOriginalShowTitle(baseState.showTitle);
         setScriptStyle(data.scriptStyle || "");
         setPodcastLanguage(data.language || "en");
-        setSpeakers(data.speakers || []);
-        setOriginalSpeakers(data.speakers || []);
-        setIntroMusic(data.introMusic || "");
-        setOriginalIntroMusic(data.introMusic || "");
-        setBodyMusic(data.bodyMusic || "");
-        setOriginalBodyMusic(data.bodyMusic || "");
-        setOutroMusic(data.outroMusic || "");
-        setOriginalOutroMusic(data.outroMusic || "");
-        
-        if (data.category) {
-          setCategory(data.category);
-          setAvailableTracks(MUSIC_CATEGORIES[data.category] || []);
-        }
-
+        setSpeakers(nextState.speakers);
+        setOriginalSpeakers(baseState.speakers);
+        setIntroMusic(nextState.introMusic);
+        setOriginalIntroMusic(baseState.introMusic);
+        setBodyMusic(nextState.bodyMusic);
+        setOriginalBodyMusic(baseState.bodyMusic);
+        setOutroMusic(nextState.outroMusic);
+        setOriginalOutroMusic(baseState.outroMusic);
+        setCategory(nextState.category);
+        setOriginalCategory(baseState.category);
+        setAvailableTracks(MUSIC_CATEGORIES[nextState.category] || []);
+        setDraftRestored(Boolean(draftState));
+        setDraftSavedAt(draftState?.savedAt || "");
+        setDraftBaseline(buildEditableSnapshot({
+          nextShowTitle: nextState.showTitle,
+          nextScript: nextState.script,
+          nextSpeakers: nextState.speakers,
+          nextIntroMusic: nextState.introMusic,
+          nextBodyMusic: nextState.bodyMusic,
+          nextOutroMusic: nextState.outroMusic,
+          nextCategory: nextState.category,
+        }));
         setHasUnsavedChanges(false);
       } catch (error) {
         console.error("Error loading podcast:", error);
@@ -669,15 +724,27 @@ useEffect(() => {
   };
 // Track unsaved changes
 useEffect(() => {
-  const hasChanges = 
-    script !== originalScript ||
-    JSON.stringify(speakers) !== JSON.stringify(originalSpeakers) ||
-    introMusic !== originalIntroMusic ||
-    bodyMusic !== originalBodyMusic ||
-    outroMusic !== originalOutroMusic;
+  const baseline = draftBaseline || buildEditableSnapshot({
+    nextShowTitle: originalShowTitle,
+    nextScript: originalScript,
+    nextSpeakers: originalSpeakers,
+    nextIntroMusic: originalIntroMusic,
+    nextBodyMusic: originalBodyMusic,
+    nextOutroMusic: originalOutroMusic,
+    nextCategory: originalCategory,
+  });
+  const current = buildEditableSnapshot();
+  const hasChanges =
+    current.showTitle !== baseline.showTitle ||
+    current.script !== baseline.script ||
+    JSON.stringify(current.speakers) !== JSON.stringify(baseline.speakers) ||
+    current.category !== baseline.category ||
+    current.introMusic !== baseline.introMusic ||
+    current.bodyMusic !== baseline.bodyMusic ||
+    current.outroMusic !== baseline.outroMusic;
   
   setHasUnsavedChanges(hasChanges);
-}, [script, speakers, introMusic, bodyMusic, outroMusic, originalScript, originalSpeakers, originalIntroMusic, originalBodyMusic, originalOutroMusic]);
+}, [showTitle, script, speakers, category, introMusic, bodyMusic, outroMusic, draftBaseline, originalShowTitle, originalScript, originalSpeakers, originalCategory, originalIntroMusic, originalBodyMusic, originalOutroMusic]);
   // Before unload warning
   useEffect(() => {
     const handleBeforeUnload = (e) => {
@@ -726,11 +793,140 @@ useEffect(() => {
     }
   };
 
-  const confirmNavigation = () => {
+  const confirmNavigation = async () => {
+    const targetPath = pendingNavigation || "#/create?from=studio";
     setShowExitWarning(false);
-    if (pendingNavigation) {
-      window.location.hash = pendingNavigation;
+    if (podcastId && (draftRestored || hasUnsavedChanges)) {
+      try {
+        await fetch(`${API_BASE}/api/podcast/${podcastId}/update`, {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
+          },
+          body: JSON.stringify({ mode: "discard_draft" }),
+        });
+      } catch (error) {
+        console.error("Failed to discard draft:", error);
+      }
     }
+    setDraftRestored(false);
+    setDraftSavedAt("");
+    setPendingNavigation(null);
+    window.location.hash = targetPath;
+  };
+
+  const saveDraftLocally = async ({ navigateTo } = {}) => {
+    if (!podcastId) return;
+
+    try {
+      setSaving(true);
+      const updatedScript = applyShowTitleToScript(
+        applySpeakerLabelRenames(script, originalSpeakers, speakers),
+        showTitle
+      );
+      const res = await fetch(`${API_BASE}/api/podcast/${podcastId}/update`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
+        },
+        body: JSON.stringify({
+          mode: "draft",
+          script: updatedScript,
+          speakers,
+          introMusic,
+          bodyMusic,
+          outroMusic,
+          category,
+          showTitle,
+          scriptStyle,
+          description: "",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to save draft");
+      }
+
+      const savedSnapshot = buildEditableSnapshot({
+        nextShowTitle: showTitle,
+        nextScript: updatedScript,
+        nextSpeakers: speakers,
+        nextIntroMusic: introMusic,
+        nextBodyMusic: bodyMusic,
+        nextOutroMusic: outroMusic,
+        nextCategory: category,
+      });
+      setScript(updatedScript);
+      setDraftBaseline(savedSnapshot);
+      setDraftRestored(true);
+      setDraftSavedAt(data?.draft?.savedAt || data?.draft?.updatedAt || new Date().toISOString());
+      setToast({
+        type: "success",
+        message: navigateTo
+          ? "Draft saved to your account. You can continue editing later."
+          : "Draft saved to your account. The original episode is still unchanged.",
+      });
+      setTimeout(() => setToast(null), 3000);
+
+      if (navigateTo) {
+        setShowExitWarning(false);
+        setPendingNavigation(null);
+        window.location.hash = navigateTo;
+      }
+    } catch (error) {
+      setToast({ type: "error", message: error.message || "Failed to save draft" });
+      setTimeout(() => setToast(null), 3000);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const restoreOriginalVersion = async () => {
+    setShowTitle(originalShowTitle);
+    setScript(originalScript);
+    setSpeakers(originalSpeakers);
+    setIntroMusic(originalIntroMusic);
+    setBodyMusic(originalBodyMusic);
+    setOutroMusic(originalOutroMusic);
+    setCategory(originalCategory);
+    setAvailableTracks(MUSIC_CATEGORIES[originalCategory] || []);
+    setIsEditingTitle(false);
+    setDraftTitle(originalShowTitle);
+    if (podcastId) {
+      try {
+        await fetch(`${API_BASE}/api/podcast/${podcastId}/update`, {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
+          },
+          body: JSON.stringify({ mode: "discard_draft" }),
+        });
+      } catch (error) {
+        console.error("Failed to discard draft:", error);
+      }
+    }
+    setDraftRestored(false);
+    setDraftSavedAt("");
+    setDraftBaseline(buildEditableSnapshot({
+      nextShowTitle: originalShowTitle,
+      nextScript: originalScript,
+      nextSpeakers: originalSpeakers,
+      nextIntroMusic: originalIntroMusic,
+      nextBodyMusic: originalBodyMusic,
+      nextOutroMusic: originalOutroMusic,
+      nextCategory: originalCategory,
+    }));
+    setToast({
+      type: "success",
+      message: "Restored the original version. Draft edits were removed.",
+    });
+    setTimeout(() => setToast(null), 3000);
   };
 
 const applySpeakerLabelRenames = (inputScript, oldSpeakers, newSpeakers) => {
@@ -779,21 +975,18 @@ const applySpeakerLabelRenames = (inputScript, oldSpeakers, newSpeakers) => {
   return updatedLines.join("\n");
 };
 
-const saveChanges = async () => {
-  if (!podcastId) return;
+const persistChanges = async ({
+  nextScript,
+  nextSpeakers,
+  nextShowTitle = showTitle,
+  nextCategory = category,
+  successMessage = "Final changes saved successfully!",
+  regenerateAfterSave = true,
+}) => {
+  const resolvedScript = String(nextScript || "");
+  const resolvedSpeakers = Array.isArray(nextSpeakers) ? nextSpeakers : speakers;
 
-  setSaving(true);
-  try {
-    const updatedScript = applySpeakerLabelRenames(script, originalSpeakers, speakers);
-
-    // Save to API with the updated script
-    console.log("Saving to API:", {
-      podcastId,
-      scriptLength: updatedScript.length,
-      speakersCount: speakers.length
-    });
-
-    const res = await fetch(`${API_BASE}/api/podcast/${podcastId}/update`, {
+  const res = await fetch(`${API_BASE}/api/podcast/${podcastId}/update`, {
       method: "POST",
       credentials: "include",
       headers: { 
@@ -801,13 +994,14 @@ const saveChanges = async () => {
         'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
       },
       body: JSON.stringify({
-        script: updatedScript,  // Use the updated script with new speaker names
-        speakers,
+        mode: "final",
+        script: resolvedScript,
+        speakers: resolvedSpeakers,
         introMusic,
         bodyMusic,
         outroMusic,
-        category,
-        showTitle,
+        category: nextCategory,
+        showTitle: nextShowTitle,
         scriptStyle,
         description: "",
       }),
@@ -817,31 +1011,85 @@ const saveChanges = async () => {
     console.log("Save response:", responseData);
 
     if (!res.ok) {
-      throw new Error(responseData.error || "Failed to save changes");
+      throw new Error(responseData.error || "Failed to save final changes");
     }
 
-    // IMPORTANT: Update the original values to match what we just saved
-    setOriginalScript(updatedScript);
-    setScript(updatedScript);  // Update the displayed script with new speaker names
-    setOriginalSpeakers(speakers);
+    setOriginalScript(resolvedScript);
+    setScript(resolvedScript);
+    setOriginalShowTitle(nextShowTitle);
+    setShowTitle(nextShowTitle);
+    setOriginalSpeakers(resolvedSpeakers);
     setOriginalIntroMusic(introMusic);
     setOriginalBodyMusic(bodyMusic);
     setOriginalOutroMusic(outroMusic);
+    setOriginalCategory(nextCategory);
+    setDraftBaseline(buildEditableSnapshot({
+      nextShowTitle,
+      nextScript: resolvedScript,
+      nextSpeakers: resolvedSpeakers,
+      nextIntroMusic: introMusic,
+      nextBodyMusic: bodyMusic,
+      nextOutroMusic: outroMusic,
+      nextCategory,
+    }));
     setHasUnsavedChanges(false);
-    
-    setToast({ type: "success", message: "Changes saved successfully!" });
+    setDraftRestored(false);
+    setDraftSavedAt("");
+
+    if (regenerateAfterSave) {
+      await regenerateAudio({
+        scriptOverride: resolvedScript,
+        speakersOverride: resolvedSpeakers,
+        successMessage,
+      });
+    } else {
+      setToast({ type: "success", message: successMessage });
+    }
+};
+
+const finalizeChanges = async () => {
+  if (!podcastId) return;
+
+  setSaving(true);
+  try {
+    const updatedScript = applyShowTitleToScript(
+      applySpeakerLabelRenames(script, originalSpeakers, speakers),
+      showTitle
+    );
+
+    console.log("Saving to API:", {
+      podcastId,
+      scriptLength: updatedScript.length,
+      speakersCount: speakers.length
+    });
+
+    await persistChanges({
+      nextScript: updatedScript,
+      nextSpeakers: speakers,
+      nextShowTitle: showTitle,
+      nextCategory: category,
+      successMessage: "Final changes saved. Audio regenerated from the new version.",
+    });
+
     setTimeout(() => setToast(null), 3000);
   } catch (error) {
     console.error("Save error:", error);
-    setToast({ type: "error", message: error.message || "Failed to save changes" });
+    setToast({ type: "error", message: error.message || "Failed to save final changes" });
   } finally {
     setSaving(false);
   }
 };
 
   // Regenerate audio
-  const regenerateAudio = async () => {
+  const regenerateAudio = async ({
+    scriptOverride,
+    speakersOverride,
+    successMessage = "Audio generated successfully!",
+  } = {}) => {
     if (!podcastId) return;
+
+    const resolvedScript = String(scriptOverride ?? script);
+    const resolvedSpeakers = Array.isArray(speakersOverride) ? speakersOverride : speakers;
 
     setGeneratingAudio(true);
     try {
@@ -853,10 +1101,10 @@ const saveChanges = async () => {
           'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
         },
         body: JSON.stringify({
-          scriptText: script,
+          scriptText: resolvedScript,
           podcastId,
           script_style: scriptStyle,
-          speakers_info: speakers,
+          speakers_info: resolvedSpeakers,
           language: podcastLanguage || "en",
         }),
       });
@@ -871,8 +1119,7 @@ const saveChanges = async () => {
         ? data.url
         : `${API_BASE}${data.url}`;
 
-      setGeneratedAudio(audioUrl);
-      setToast({ type: "success", message: "Audio generated successfully!" });
+      setToast({ type: "success", message: successMessage });
     } catch (error) {
       console.error("Audio generation error:", error);
       setToast({ type: "error", message: error.message || "Failed to generate audio" });
@@ -883,10 +1130,10 @@ const saveChanges = async () => {
 
       // Export script as PDF with Arabic support
 // Export script as PDF with Arabic support
-const exportScriptAsPDF = async () => {
+const exportScript = async (format = "pdf") => {
   try {
     if (hasUnsavedChanges) {
-      setToast({ type: "warning", message: "Please save your changes before exporting" });
+      setToast({ type: "warning", message: "Please save this version as final before exporting." });
       setTimeout(() => setToast(null), 3000);
       return;
     }
@@ -903,52 +1150,16 @@ const exportScriptAsPDF = async () => {
       return;
     }
 
-    // Rest of your PDF export code...
-    const doc = new jsPDF();
-    
-    doc.setFontSize(20);
-    doc.setTextColor(40, 40, 40);
-    doc.text(title, 20, 20);
-    
-    doc.setFontSize(10);
-    doc.setTextColor(100, 100, 100);
-    doc.text(`Exported on: ${new Date().toLocaleString()}`, 20, 30);
-    doc.text(`WeCast Podcast Script - ${scriptStyle || "Standard"} Style`, 20, 35);
-    
-    // Split lines and create table data
-    const lines = scriptContent.split(/\r?\n/).filter(line => line.trim());
-    
-    const tableData = [];
-    lines.forEach(line => {
-      const colonIndex = line.indexOf(":");
-      if (colonIndex > 0) {
-        const speaker = line.substring(0, colonIndex).trim();
-        const text = line.substring(colonIndex + 1).trim();
-        tableData.push([speaker, text]);
-      } else {
-        tableData.push(["", line]);
-      }
+    const exportHandler = format === "txt" ? exportScriptTxt : exportScriptPdf;
+
+    await exportHandler({
+      scriptContent,
+      title,
+      scriptStyle,
+      fileNameBase: title,
     });
     
-    // Create the table
-    autoTable(doc, {
-      head: [["Speaker", "Dialogue"]],
-      body: tableData,
-      startY: 45,
-      styles: { fontSize: 10, cellPadding: 3 },
-      headStyles: { fillColor: [147, 51, 234], textColor: 255 },
-      alternateRowStyles: { fillColor: [245, 245, 245] },
-      columnStyles: {
-        0: { fontStyle: 'bold', cellWidth: 40 },
-        1: { cellWidth: 'auto' }
-      }
-    });
-    
-    // Save the PDF
-    const fileName = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_script.pdf`;
-    doc.save(fileName);
-    
-    setToast({ type: "success", message: "Script exported successfully!" });
+    setToast({ type: "success", message: `Script exported as ${format.toUpperCase()} successfully!` });
     setTimeout(() => setToast(null), 3000);
     
   } catch (error) {
@@ -1033,7 +1244,7 @@ const exportScriptAsPDF = async () => {
               {hasUnsavedChanges && (
                 <span className="text-sm text-yellow-600 dark:text-yellow-400 flex items-center gap-1">
                   <AlertCircle className="w-4 h-4" />
-                  Unsaved changes
+                  Draft changes
                 </span>
               )}
             </div>
@@ -1077,81 +1288,36 @@ const exportScriptAsPDF = async () => {
                       autoFocus
                     />
                        <button
-  onClick={async () => {
-    if (draftTitle.trim()) {
-      const oldTitle = showTitle; 
-      const newTitle = draftTitle.trim();
-      
-      // Create the new script content
-      const escapedOldTitle = oldTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const newScript = script.replace(new RegExp(escapedOldTitle, 'g'), newTitle);
-      
-      // Update ALL states at once
-      setShowTitle(newTitle);
-      setScript(newScript);
-      setIsEditingTitle(false);
-      
-      // Save using the NEW script we just created, not the old script state
-      // We need to use the newScript variable directly because setScript hasn't updated yet
-      
-      setSaving(true);
-      try {
-        const updatedScript = applySpeakerLabelRenames(newScript, originalSpeakers, speakers);
-        
-        const res = await fetch(`${API_BASE}/api/podcast/${podcastId}/update`, {
-          method: "POST",
-          credentials: "include",
-          headers: { 
-            "Content-Type": "application/json",
-            'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
-          },
-          body: JSON.stringify({
-            script: updatedScript,
-            speakers,
-            introMusic,
-            bodyMusic,
-            outroMusic,
-            category,
-            showTitle: newTitle, // Use the new title
-            scriptStyle,
-            description: "",
-          }),
-        });
+  onClick={() => {
+    const trimmedTitle = draftTitle.trim();
+    if (!trimmedTitle) return;
 
+    const oldTitle = showTitle;
+    const escapedOldTitle = oldTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const nextScript = applyShowTitleToScript(script, trimmedTitle);
+    const newScript = oldTitle
+      ? nextScript.replace(new RegExp(escapedOldTitle, 'g'), trimmedTitle)
+      : nextScript;
 
-        const responseData = await res.json();
-
-
-        if (!res.ok) {
-          throw new Error(responseData.error || "Failed to save changes");
-        }
-
-
-        // Update original values
-        setOriginalScript(updatedScript);
-        setOriginalSpeakers(speakers);
-        setOriginalIntroMusic(introMusic);
-        setOriginalBodyMusic(bodyMusic);
-        setOriginalOutroMusic(outroMusic);
-        setHasUnsavedChanges(false);
-        
-        setToast({ type: "success", message: "Changes saved successfully!" });
-        setTimeout(() => setToast(null), 3000);
-      } catch (error) {
-        console.error("Save error:", error);
-        setToast({ type: "error", message: error.message || "Failed to save changes" });
-      } finally {
-        setSaving(false);
-      }
-    }
+    setShowTitle(trimmedTitle);
+    setScript(newScript);
+    setIsEditingTitle(false);
+    setToast({
+      type: "success",
+      message: "Title updated in your draft. Finalize changes when you're done editing.",
+    });
+    setTimeout(() => setToast(null), 3000);
   }}
   className="px-3 py-1 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700"
 >
-  Save
+  Apply
 </button>
 
                     <button
-                      onClick={() => setIsEditingTitle(false)}
+                      onClick={() => {
+                        setDraftTitle(showTitle);
+                        setIsEditingTitle(false);
+                      }}
                       className="px-3 py-1 border border-black/10 dark:border-white/15 rounded-lg text-sm hover:bg-black/5 dark:hover:bg-white/10"
                     >
                       Cancel
@@ -1168,6 +1334,43 @@ const exportScriptAsPDF = async () => {
           </div>
         </div>
       </div>
+
+      {(draftRestored || hasUnsavedChanges) && (
+        <div className="pb-6">
+          <div className="rounded-[20px] border border-amber-200 bg-[#fff9ee] p-4 shadow-[0_8px_18px_rgba(146,64,14,0.06)] dark:border-amber-400/20 dark:bg-[#2a2114]">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-start gap-4">
+                <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-400/20 dark:bg-amber-500/10 dark:text-amber-300">
+                  <AlertTriangle className="h-4 w-4" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700 dark:text-amber-300">
+                  Editing Draft
+                  </p>
+                  <p className="text-base font-semibold leading-tight text-[#44210f] dark:text-white">
+                    The original episode stays unchanged until you save this version as final.
+                  </p>
+                  <p className="max-w-3xl text-sm leading-6 text-[#9a5a2b] dark:text-white/68">
+                  {draftRestored && draftSavedAt
+                    ? `Draft saved on ${formatDraftTime(draftSavedAt)}. Keep editing, restore the original, or save this draft as final when you're ready.`
+                    : "Draft ready. Keep editing, restore the original, or save this draft as final when you're ready."}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-3 lg:justify-end">
+                <button
+                  type="button"
+                  onClick={restoreOriginalVersion}
+                  disabled={saving || generatingAudio}
+                  className="rounded-2xl border border-amber-300/90 bg-white/88 px-5 py-2.5 text-sm font-semibold text-amber-950 transition hover:-translate-y-0.5 hover:bg-white hover:shadow-sm disabled:opacity-50 dark:border-amber-400/25 dark:bg-white/10 dark:text-amber-100 dark:hover:bg-white/14"
+                >
+                  Restore Original
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Tabs and Save Button */}
       <div>
@@ -1189,26 +1392,46 @@ const exportScriptAsPDF = async () => {
             ))}
           </nav>
           
-          {/* Save Changes Button */}
-<button
-  onClick={() => {
-    if (isEditingTitle) {
-      setToast({ type: "warning", message: "Please save your title edit before saving" });
-      setTimeout(() => setToast(null), 3000);
-      return;
-    }
-    saveChanges();
-  }}
-  disabled={saving || !hasUnsavedChanges}
-  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition ${
-    hasUnsavedChanges
-      ? "bg-purple-600 text-white hover:bg-purple-700"
-      : "bg-black/5 text-black/35 cursor-not-allowed dark:bg-white/10 dark:text-white/40"
-  }`}
->
-  <Save className="w-4 h-4" />
-  {saving ? "Saving..." : "Save Changes"}
-</button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                if (isEditingTitle) {
+                  setToast({ type: "warning", message: "Apply or cancel the title draft before saving." });
+                  setTimeout(() => setToast(null), 3000);
+                  return;
+                }
+                saveDraftLocally();
+              }}
+              disabled={saving || generatingAudio || !hasUnsavedChanges}
+              className={`flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-semibold transition ${
+                hasUnsavedChanges
+                  ? "border border-purple-300 bg-white text-purple-700 hover:-translate-y-0.5 hover:bg-purple-50 dark:border-purple-400/30 dark:bg-white/5 dark:text-purple-200 dark:hover:bg-purple-900/20"
+                  : "bg-black/5 text-black/35 cursor-not-allowed dark:bg-white/10 dark:text-white/40"
+              }`}
+            >
+              <Save className="w-4 h-4" />
+              {hasUnsavedChanges ? "Save Draft" : draftRestored ? "Draft Loaded" : "Save Draft"}
+            </button>
+            <button
+              onClick={() => {
+                if (isEditingTitle) {
+                  setToast({ type: "warning", message: "Apply or cancel the title draft before finalizing." });
+                  setTimeout(() => setToast(null), 3000);
+                  return;
+                }
+                finalizeChanges();
+              }}
+              disabled={saving || generatingAudio || (!hasUnsavedChanges && !draftRestored)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition ${
+                hasUnsavedChanges || draftRestored
+                  ? "bg-purple-600 text-white hover:bg-purple-700"
+                  : "bg-black/5 text-black/35 cursor-not-allowed dark:bg-white/10 dark:text-white/40"
+              }`}
+            >
+              <Save className="w-4 h-4" />
+              {saving ? "Saving Final..." : "Save as Final"}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1249,46 +1472,50 @@ const exportScriptAsPDF = async () => {
   />
 </div>
 
-           <div className="flex justify-end gap-3">
-{/* Export PDF Button */}
-<button
-  onClick={() => {
-    if (isEditingTitle) {
-      setToast({ type: "warning", message: "Please save your title edit before exporting" });
-      setTimeout(() => setToast(null), 3000);
-      return;
-    }
-    exportScriptAsPDF();
-  }}
-  disabled={!script.trim()}
-  className="flex items-center gap-2 px-4 py-2 border border-purple-500 text-purple-600 dark:text-purple-300 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50"
-  title="Export script as PDF"
->
-  <Download className="w-4 h-4" />
-  Export PDF
-</button>
-  
-  {/* Done Button */}
-<button
-  onClick={() => {
-    if (isEditingTitle) {
-      setToast({ type: "warning", message: "Please save your title edit before continuing" });
-      setTimeout(() => setToast(null), 3000);
-      return;
-    }
-    if (hasUnsavedChanges) {
-      setToast({ type: "warning", message: "Please save your changes before completing the edit" });
-      setTimeout(() => setToast(null), 3000);
-    } else {
-      setShowDoneConfirmation(true);
-    }
-  }}
-  disabled={generatingAudio}
-  className="flex items-center gap-2 px-6 py-2 border border-purple-500 text-purple-600 dark:text-purple-300 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50 font-semibold"
->
-  <Check className="w-4 h-4" />
-  Done
-</button>
+<div className="flex justify-end">
+<div className="relative">
+  <button
+    onClick={() => {
+      if (isEditingTitle) {
+        setToast({ type: "warning", message: "Please save your title edit before exporting" });
+        setTimeout(() => setToast(null), 3000);
+        return;
+      }
+      setShowExportMenu((prev) => !prev);
+    }}
+    disabled={!script.trim()}
+    className="flex items-center gap-2 px-4 py-2 border border-purple-500 text-purple-600 dark:text-purple-300 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50"
+    title="Export script"
+  >
+    <Download className="w-4 h-4" />
+    Export
+    <ChevronDown className={`w-4 h-4 transition-transform ${showExportMenu ? "rotate-180" : ""}`} />
+  </button>
+  {showExportMenu && script.trim() && (
+    <div className="absolute right-0 top-full z-20 mt-2 w-44 overflow-hidden rounded-2xl border border-black/10 bg-white/96 p-1.5 shadow-[0_16px_40px_rgba(15,23,42,0.12)] backdrop-blur-sm dark:border-white/10 dark:bg-neutral-900/96">
+      <button
+        onClick={() => {
+          setShowExportMenu(false);
+          exportScript("pdf");
+        }}
+        className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-black/80 transition hover:bg-purple-50 hover:text-purple-700 dark:text-white/80 dark:hover:bg-purple-900/20 dark:hover:text-purple-200"
+      >
+        <Download className="w-4 h-4" />
+        Export as PDF
+      </button>
+      <button
+        onClick={() => {
+          setShowExportMenu(false);
+          exportScript("txt");
+        }}
+        className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-black/80 transition hover:bg-black/5 dark:text-white/80 dark:hover:bg-white/10"
+      >
+        <Download className="w-4 h-4" />
+        Export as TXT
+      </button>
+    </div>
+  )}
+</div>
 </div>
           </div>
         )}
@@ -1328,7 +1555,7 @@ const exportScriptAsPDF = async () => {
       name: newName,
     };
     setSpeakers(newSpeakers);
-    // Script will be updated when Save Changes is clicked
+    // Script labels will be synchronized when the user saves the final version
   }}
   className={`w-full px-3 py-2 rounded-lg max-w-md ${studioFieldClass}`}
   placeholder="Enter speaker name"
@@ -1426,27 +1653,6 @@ const exportScriptAsPDF = async () => {
               );
             })}
              <div className="flex justify-end gap-3">
-  {/* Done Button */}
-<button
-  onClick={() => {
-    if (isEditingTitle) {
-      setToast({ type: "warning", message: "Please save your title edit before continuing" });
-      setTimeout(() => setToast(null), 3000);
-      return;
-    }
-    if (hasUnsavedChanges) {
-      setToast({ type: "warning", message: "Please save your changes before completing the edit" });
-      setTimeout(() => setToast(null), 3000);
-    } else {
-      setShowDoneConfirmation(true);
-    }
-  }}
-  disabled={generatingAudio}
-  className="flex items-center gap-2 px-6 py-2 border border-purple-500 text-purple-600 dark:text-purple-300 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50 font-semibold"
->
-  <Check className="w-4 h-4" />
-  Done
-</button>
 </div>
           </div>
         )}
@@ -1526,109 +1732,12 @@ const exportScriptAsPDF = async () => {
                )}
              </div>
               <div className="flex justify-end gap-3 mt-6">
-      <button
-        onClick={() => {
-          if (isEditingTitle) {
-            setToast({ type: "warning", message: "Please save your title edit before continuing" });
-            setTimeout(() => setToast(null), 3000);
-            return;
-          }
-          if (hasUnsavedChanges) {
-            setToast({ type: "warning", message: "Please save your changes before completing the edit" });
-            setTimeout(() => setToast(null), 3000);
-          } else {
-            setShowDoneConfirmation(true);
-          }
-        }}
-        disabled={generatingAudio}
-        className="flex items-center gap-2 px-6 py-2 border border-purple-500 text-purple-600 dark:text-purple-300 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50 font-semibold"
-      >
-        <Check className="w-4 h-4" />
-        Done
-      </button>
     </div>
                </>
   
   
 )}
 
-        {/* Generated Audio */}
-        {generatedAudio && (
-          <div className={`${studioGlassCardClass} mt-8 p-6`}>
-            <h3 className="text-lg font-semibold text-green-800 dark:text-green-300 mb-4 flex items-center gap-2">
-              <Check className="w-5 h-5" />
-              Generated Audio
-            </h3>
-            <WeCastAudioPlayer src={generatedAudio} title={showTitle} />
-          </div>
-        )}
-        {/* Done! Confirmation Modal */}
-{showDoneConfirmation && (
-  <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-    <div className="w-[min(92vw,400px)] bg-white dark:bg-neutral-900 rounded-xl shadow-2xl p-6">
-      <div className="flex items-center gap-3 mb-4">
-        <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
-          <Check className="w-5 h-5 text-green-600" />
-        </div>
-        <h2 className="text-lg font-bold">Complete Edit</h2>
-      </div>
-      <p className="text-gray-600 dark:text-white/70 mb-6">
-        Are you sure you're done with your podcast edit? (Script + Voices + Music)
-      </p>
-      <div className="flex justify-end gap-3">
-        <button
-          onClick={() => setShowDoneConfirmation(false)}
-          className="px-4 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 font-medium"
-        >
-          No
-        </button>
-        <button
-          onClick={() => {
-            setShowDoneConfirmation(false);
-            setShowAudioGenerationOptions(true);
-          }}
-          className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium"
-        >
-          Yes
-        </button>
-      </div>
-    </div>
-  </div>
-)}
-
-{/* Audio Generation Options Modal */}
-{showAudioGenerationOptions && (
-  <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-    <div className="w-[min(92vw,400px)] bg-white dark:bg-neutral-900 rounded-xl shadow-2xl p-6">
-      <div className="flex items-center gap-3 mb-4">
-        <div className="w-10 h-10 bg-purple-100 rounded-full flex items-center justify-center">
-          <Sparkles className="w-5 h-5 text-purple-600" />
-        </div>
-        <h2 className="text-lg font-bold">Generate Audio</h2>
-      </div>
-      <p className="text-gray-600 dark:text-white/70 mb-6">
-        Would you like to generate the audio for your podcast now?
-      </p>
-      <div className="flex justify-end gap-3">
-        <button
-          onClick={() => setShowAudioGenerationOptions(false)}
-          className="px-4 py-2 border border-gray-300 dark:border-white/15 text-gray-600 dark:text-white/70 rounded-lg hover:bg-gray-50 dark:hover:bg-white/10 font-medium"
-        >
-          Wait!
-        </button>
-        <button
-          onClick={async () => {
-            setShowAudioGenerationOptions(false);
-            await regenerateAudio();
-          }}
-          className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium"
-        >
-          Generate Audio
-        </button>
-      </div>
-    </div>
-  </div>
-)}
       </div>
       </div>
       </main>
@@ -1657,38 +1766,39 @@ const exportScriptAsPDF = async () => {
       {/* Exit Warning Modal */}
       {showExitWarning && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-[min(92vw,400px)] bg-white dark:bg-neutral-900 rounded-xl shadow-2xl p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 bg-yellow-100 rounded-full flex items-center justify-center">
-                <AlertTriangle className="w-5 h-5 text-yellow-600" />
+          <div className="w-[min(92vw,440px)] rounded-[20px] border border-neutral-200 bg-white p-5 shadow-[0_24px_56px_rgba(15,23,42,0.22)] dark:border-white/10 dark:bg-neutral-900">
+            <div className="mb-4 flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600 ring-1 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-400/20">
+                <AlertTriangle className="h-4 w-4" />
               </div>
-              <h2 className="text-lg font-bold">Unsaved Changes</h2>
+              <div className="space-y-1">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700 dark:text-amber-300">Leave Editor</p>
+                <h2 className="text-lg font-semibold tracking-tight text-neutral-950 dark:text-white">Save this draft before leaving?</h2>
+              </div>
             </div>
-            <p className="text-gray-600 dark:text-white/70 mb-6">
-              You have unsaved changes. What would you like to do?
+            <p className="mb-5 text-sm leading-6 text-neutral-600 dark:text-white/70">
+              Save Draft keeps your latest edits without replacing the original episode. Discard Draft leaves this page and removes those edits.
             </p>
-            <div className="flex justify-end gap-3">
+            <div className="grid gap-2.5 sm:grid-cols-3">
               <button
                 onClick={() => setShowExitWarning(false)}
-                className="px-4 py-2 border border-gray-300 dark:border-white/15 rounded-lg hover:bg-gray-50 dark:hover:bg-white/10"
+                className="rounded-xl border border-neutral-300 bg-white px-4 py-2.5 text-sm font-semibold text-neutral-900 transition hover:bg-neutral-50 dark:border-white/15 dark:bg-white/5 dark:text-white dark:hover:bg-white/10"
               >
-                Cancel
+                Continue Editing
               </button>
               <button
   onClick={async () => {
-    await saveChanges();
-    setShowExitWarning(false);
-    window.location.hash = pendingNavigation || "#/episodes";
+    await saveDraftLocally({ navigateTo: pendingNavigation || "#/create?from=studio" });
   }}
-  className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+  className="rounded-xl bg-[#8b3dff] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_10px_22px_rgba(139,61,255,0.22)] transition hover:bg-[#7a2ef1]"
 >
-  Save & Exit
+  Save Draft & Exit
 </button>
               <button
                 onClick={confirmNavigation}
-                className="px-4 py-2 border border-yellow-300 text-yellow-700 rounded-lg hover:bg-yellow-50"
+                className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-700 transition hover:bg-red-100 dark:border-red-400/25 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/16"
               >
-                Discard Changes
+                Discard Draft
               </button>
             </div>
           </div>
