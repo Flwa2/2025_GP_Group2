@@ -685,7 +685,7 @@ export default function Episodes() {
                             {ep.hasEditDraft && (
                               <div className={`mt-1 inline-flex w-fit items-center gap-2 rounded-full border border-amber-300/70 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800 dark:border-amber-400/30 dark:bg-amber-900/15 dark:text-amber-200 ${isRTL ? "self-end" : ""}`}>
                                 <span className="h-2 w-2 rounded-full bg-amber-500" />
-                                Continue editing available
+                                Editing In Progress
                               </div>
                             )}
                             <div
