@@ -1,5 +1,3 @@
-﻿# app.py
-
 from flask import (
     Flask,
     request,
@@ -34,7 +32,7 @@ print("DEBUG in app.py:", db)
 SHOW_TITLE_PLACEHOLDER = "{{SHOW_TITLE}}"
 ARABIC_SECTION_HEADERS = {
     "INTRO": "مقدمة",
-    "BODY": "الحوار",
+    "BODY": "النص",
     "OUTRO": "الخاتمة",
 }
 ARABIC_MUSIC_TAG = "[فاصل موسيقي]"
@@ -45,7 +43,7 @@ def is_music_tag(text: str) -> bool:
 
 def is_section_header(text: str) -> bool:
     stripped = str(text or "").strip()
-    return bool(re.match(r"^(INTRO|BODY|OUTRO|مقدمة|الحوار|الخاتمة)\s*:?$", stripped, re.IGNORECASE))
+    return bool(re.match(r"^(INTRO|BODY|OUTRO|مقدمة|النص|الخاتمة)\s*:?$", stripped, re.IGNORECASE))
 
 def localize_script_structure(script: str, language: str) -> str:
     if not script:
@@ -73,7 +71,7 @@ def localize_script_structure(script: str, language: str) -> str:
             if re.match(r"^مقدمة\s*:?$", stripped):
                 localized_lines.append("INTRO")
                 continue
-            if re.match(r"^الحوار\s*:?$", stripped):
+            if re.match(r"^النص\s*:?$", stripped):
                 localized_lines.append("BODY")
                 continue
             if re.match(r"^الخاتمة\s*:?$", stripped):
@@ -260,7 +258,6 @@ def is_arabic(text: str) -> bool:
     if total_letters == 0:
         return False
 
-    # tweak this threshold if you want, 0.3 = 30% of letters
     return (arabic_letters / total_letters) >= 0.30
 
 
@@ -350,7 +347,7 @@ def save_generated_podcast_to_firestore(user_id: str, title: str, script_style: 
             "name": (s.get("name") or "").strip(),
             "gender": (s.get("gender") or "").strip(),
             "role": (s.get("role") or "").strip(),
-            "providerVoiceId": (s.get("voiceId") or "").strip(),  # your frontend uses voiceId
+            "providerVoiceId": (s.get("voiceId") or "").strip(),  
             "createdAt": now,
         })
 
@@ -387,10 +384,29 @@ def generate_podcast_script(description: str, speakers_info: list, script_style:
             --------------------
             {ARABIC_SECTION_HEADERS["INTRO"]}
             --------------------
-            - يجب أن تكون أول جملة منطوقة في المقدمة من المقدم الرئيسي (أول متحدث في القائمة).
-    - يجب أن تحتوي هذه الجملة على {{SHOW_TITLE}} حرفيًا داخل علامات اقتباس، مثال:
-    <اسم_المقدم>: مرحبًا بكم في حلقة جديدة من "{{SHOW_TITLE}}".
-    - بعد هذه الجملة، أكمل المقدمة بتقديم الموضوع والمتحدثين بشكل طبيعي.
+          
+- يجب أن يبدأ النص بتحية من المضيف للمستمعين بطريقة طبيعية مثل:
+  "<HostName>: أهلاً بكم في بودكاست '{{SHOW_TITLE}}'."
+  أو
+  "<HostName>: مرحباً بكم في '{{SHOW_TITLE}}'."
+  أو
+  "<HostName>: سعيد بانضمامكم إلينا في '{{SHOW_TITLE}}'."
+  أو تحية مشابهة طبيعية ومتنوعة.
+
+- يمنع استخدام العبارات التالية:
+  "أهلاً بكم في حلقة جديدة من"
+  أو
+  "أهلا بكم في حلقة جديدة"
+
+- يجب أن تكون التحية طبيعية ومتنوعة وليست مكررة.
+
+- بعد التحية مباشرة:
+  قم بتقديم موضوع الحلقة بشكل طبيعي.
+
+- ثم قدم المتحدثين أو الضيوف بطريقة سلسة وطبيعية ضمن النص.
+
+- اجعل الأسلوب يشبه بودكاست حقيقي، محادثة خفيفة وطبيعية بين المضيف والضيوف.
+
     """
     else:
             intro_block = """
@@ -417,34 +433,34 @@ def generate_podcast_script(description: str, speakers_info: list, script_style:
     # Style guidelines used in prompt
     style_guidelines = {
         "Interview": """
-â€¢ Tone: Professional, journalistic.
-â€¢ Flow: Host asks, guest answers.
-â€¢ Turn-taking: MUST alternate speakers.
-â€¢ Goal: Insightful conversation.
+- Tone: Professional, journalistic.
+- Flow: Host asks, guest answers.
+- Turn-taking: MUST alternate speakers.
+- Goal: Insightful conversation.
 """,
         "Storytelling": """
-â€¢ Tone: Cinematic and narrative.
-â€¢ Flow: Story with emotional beats.
-â€¢ Turn-taking: All speakers appear in intro, body, outro.
-â€¢ Goal: Immersive storytelling.
+- Tone: Cinematic and narrative.
+- Flow: Story with emotional beats.
+- Turn-taking: All speakers appear in intro, body, outro.
+- Goal: Immersive storytelling.
 """,
         "Educational": """
-â€¢ Tone: Clear and helpful.
-â€¢ Flow: Explain â†’ clarify â†’ examples.
-â€¢ Turn-taking: Host + guests engage.
-â€¢ Goal: Learn through dialogue.
+- Tone: Clear and helpful.
+- Flow: Explain â†’ clarify â†’ examples.
+- Turn-taking: Host + guests engage.
+- Goal: Learn through dialogue.
 """,
         "Conversational": """
-â€¢ Tone: Friendly and natural.
-â€¢ Flow: Co-host casual conversation.
-â€¢ Turn-taking: Hosts react and alternate often.
-â€¢ Goal: Feel like real conversation.
+- Tone: Friendly and natural.
+- Flow: Co-host casual conversation.
+- Turn-taking: Hosts react and alternate often.
+- Goal: Feel like real conversation.
 """,
     }
 
     style_rules = style_guidelines.get(script_style, "")
 
-    # FULL PROMPT FOR GPT
+    # FULL PROMPT 
     prompt = f"""
 You are a professional podcast scriptwriter.
 
@@ -460,7 +476,7 @@ Follow these requirements:
 {intro_block}
 
 --------------------
-{"الحوار" if is_ar else "BODY"}
+{"النص" if is_ar else "BODY"}
 --------------------
 - Natural dialogue.
 - All speakers MUST speak multiple times.
@@ -484,7 +500,7 @@ RULES
 {ARABIC_MUSIC_TAG if is_ar else "[music]"}
 
 --------------------
-{"الحوار" if is_ar else "BODY"}
+{"النص" if is_ar else "BODY"}
 --------------------
 [script content here]
 --------------------
@@ -515,19 +531,19 @@ TRANSITION SPEECH RULES (VERY IMPORTANT):
 
 - The sentence immediately BEFORE a {"[music]" if not is_ar else ARABIC_MUSIC_TAG} tag must sound like a natural ending, conclusion, or pause. 
 - Do NOT end abruptly. End with tone markers such as:
-  â€¢ a reflective closing thought
-  â€¢ a conversational wrap-up
-  â€¢ a gentle shift phrase such as:
+  1- a reflective closing thought
+  2- a conversational wrap-up
+  3- a gentle shift phrase such as:
       "We'll continue right after this..."
       "More on that in a moment."
       "Let's pause for a second."
 
 - The FIRST sentence after a {"[music]" if not is_ar else ARABIC_MUSIC_TAG} tag must feel like a fresh beginning or a smooth re-entry. 
 - Use natural re-entry language like:
-      "Welcome backâ€”"
-      "Now letâ€™s continueâ€”"
-      "Picking up where we left offâ€”"
-      "So nowâ€”"
+      "Welcome back”"
+      "Now lets continue”"
+      "Picking up where we left off”"
+      "So now”"
 
 - DO NOT be robotic or repetitive. 
 - Tone must feel intentional, confident, and designed for audio.
@@ -562,7 +578,7 @@ Transform the following text into a structured podcast script:
 
     if PLACEHOLDER not in raw_script:
         m = re.search(
-            r"(episode of\s+[\"â€œ'آ«])(.+?)([\"â€‌'آ»])",
+            r"(episode of\s+[\"“«](.+?)[\"”»]",
             raw_script,
             flags=re.IGNORECASE,
         )
@@ -572,7 +588,7 @@ Transform the following text into a structured podcast script:
 
     if PLACEHOLDER not in raw_script and is_arabic(raw_script):
         m = re.search(
-            r"(?:حلقة جديدة من|حلقة من|من)\s*[\"“«](.+?)[\"”»]",
+            r"(?:حلقة من|من)\s*[\"“«](.+?)[\"”»]",
             raw_script,
         )
         if m:
@@ -580,7 +596,7 @@ Transform the following text into a structured podcast script:
             raw_script = raw_script.replace(bad_title, PLACEHOLDER, 1)
 
     # ============================================================
-    # ًں§¹ CLEAN ONLY BAD LINES â€” DO NOT DELETE MAIN SCRIPT
+    # CLEAN ONLY BAD LINES 
     # ============================================================
     cleaned_lines = []
     for ln in raw_script.splitlines():
@@ -604,7 +620,7 @@ Transform the following text into a structured podcast script:
 
 
 def generate_title_from_script(script: str, script_style: str = "") -> str:
-    """Generate a short, catchy podcast episode title (4â€“8 words)."""
+    """Generate a short, catchy podcast episode title (3-8 words)."""
 
     text = script or ""
     if not text.strip():
@@ -617,10 +633,10 @@ def generate_title_from_script(script: str, script_style: str = "") -> str:
     if is_ar:
         # Arabic title instructions
         prompt = f"""
-أنت كاتب عناوين لبودكاست.
+أنت كاتب محترف لعناوين البودكاست.
 
 اكتب عنوانًا واحدًا قصيرًا وجذابًا لحلقة بودكاست
-مكوّنًا من ٤ إلى ٨ كلمات تقريبًا.
+مكوّنًا من 3 إلى 8 كلمات تقريبًا.
 
 القواعد:
 - العنوان باللغة العربية فقط.
@@ -677,7 +693,6 @@ def fallback_time_split_chapters(word_timeline, language: str = "en"):
         return []
 
     duration = float(word_timeline[-1]["end"])
-    # 5 chapters baseline
     cuts = [0.0, duration * 0.22, duration * 0.45, duration * 0.7, duration * 0.88]
 
     if language == "ar":
@@ -719,7 +734,6 @@ def sanitize_chapter_titles(chapters, language: str = "en"):
     return sanitized
 
 def generate_chapters_from_transcript(transcript_text: str, language: str = "en"):
-    # Keep prompt simple & strict JSON
     if language == "ar":
         user_prompt = f"""
 Split this podcast transcript into podcast chapters for a player.
@@ -739,8 +753,8 @@ Transcript:
 Split this podcast transcript into podcast chapters for a player.
 Return 5 to 7 chapters.
 For each chapter:
-- title: short (2â€“6 words)
-- anchor: a short phrase (4â€“12 words) that appears in the transcript and starts that section (must be nearly exact text)
+- title: short (2-6 words)
+- anchor: a short phrase (4-12 words) that appears in the transcript and starts that section (must be nearly exact text)
 
 Return JSON only:
 {{"chapters":[{{"title":"...","anchor":"..."}}, ...]}}
@@ -792,7 +806,7 @@ def build_chapters(word_timeline, transcript_text, language="en"):
 
     chapters.sort(key=lambda x: x["startSec"])
 
-    # Guardrails: must be â€œactual chaptersâ€‌
+    # Guardrails: must be actual chapters‌
     # If fewer than 5 chapters, fallback to deterministic time split
     if len(chapters) < 5:
         chapters = fallback_time_split_chapters(word_timeline, language=language)
@@ -910,7 +924,7 @@ def api_voices():
         limit = int(request.args.get("limit") or "0")
     except Exception:
         limit = 0
-    # Safety cap: allow larger lists but prevent overly heavy responses.
+    #allow larger lists but prevent overly heavy responses.
     limit = max(0, min(limit, 1000))
 
     def _gender_matches(value: str):
@@ -1244,16 +1258,13 @@ def _validate_image_bytes(image_bytes: bytes, min_size: int = 512):
     if w < min_size or h < min_size:
         return False, f"Image too small. Minimum is {min_size}x{min_size}px."
 
-    # We wonâ€™t force square (can crop on frontend). But you can enforce if you want:
-    # if w != h: return False, "Please upload a square image (1:1)."
-
     return True, {"width": w, "height": h, "format": (img.format or "").upper()}
 
 
 def _build_cover_prompt(title: str, style: str, language: str, description: str, extra: str = ""):
     lang_hint = "Arabic" if language == "ar" else "English"
 
-    # IMPORTANT: no text on image (title is shown in UI, not baked into art)
+    # no text on image (title is shown in UI, not baked into art)
     return f"""
 Create a professional podcast cover art image.
 
@@ -1423,7 +1434,7 @@ def api_cover_generate(podcast_id):
 
     style = (payload.get("style") or draft.get("script_style") or pdata.get("style") or "Conversational").strip()
     language = (payload.get("language") or draft.get("language") or pdata.get("language") or "en").strip().lower()
-    extra = (payload.get("direction") or "").strip()  # optional: "blue palette", "minimal", etc.
+    extra = (payload.get("direction") or "").strip()  #"blue palette", "minimal", etc.
 
     prompt = _build_cover_prompt(title=title, style=style, language=language, description=description, extra=extra)
 
@@ -1540,7 +1551,7 @@ def api_update_podcast(podcast_id):
     podcast_ref.set(updates, merge=True)
     print(f"Updated main podcast document")
 
-    # IMPORTANT: Get the script that the frontend sent (already has updated speaker names)
+    # Get the script that the frontend sent (already has updated speaker names)
     script_to_save = payload["script"]
     print(f"DEBUG: Saving script with length: {len(script_to_save)}")
     print(f"DEBUG: Script preview: {script_to_save[:200]}")
@@ -1610,7 +1621,7 @@ def api_cover_upload(podcast_id):
 
     mimeType = "image/png" if info["format"] == "PNG" else "image/jpeg"
 
-    # Encode to base64 for session storage + frontend display
+    # Encode for session storage + frontend display
     b64 = base64.b64encode(image_bytes).decode("utf-8")
 
     try:
@@ -1672,7 +1683,7 @@ def api_podcast_update_title(podcast_id):
         merge=True
     )
 
-    # also keep session draft in sync if itâ€™s the same podcast
+    # also keep session draft in sync if its the same podcast
     draft = session.get("create_draft") or {}
     if draft.get("podcastId") == podcast_id:
         draft["title"] = title
@@ -1947,13 +1958,13 @@ def api_generate():
 
     script_template = script  
     show_title = title or "Podcast Show"
-    # âœ… figure out user (prefer session)
+    # figure out user (prefer session)
     user_id = session.get("user_id")
     if not user_id:
         # fallback to JWT header if you want
         user_id = get_current_user_email()
 
-    # If you require login to save, enforce it
+    # require login to save, enforce it
     if not user_id:
         return jsonify(ok=False, error="Not logged in."), 401
 
@@ -2007,7 +2018,6 @@ def api_episodes_list():
                     continue
                 continue
 
-            # Convert "Speaker: text" to just "text" for a clean synopsis.
             m = re.match(r"^[^:]{1,40}:\s+(.+)$", line)
             if m:
                 line = m.group(1).strip()
@@ -2235,7 +2245,6 @@ def api_delete_episode(episode_id):
     if data.get("userId") != user_id:
         return jsonify(error="Forbidden"), 403
 
-    # Delete known subcollections first so DB and UI stay consistent.
     for sub_name in ("scripts", "speakers", "transcripts"):
         try:
             for sub_doc in ref.collection(sub_name).stream():
@@ -2273,7 +2282,7 @@ def clean_script_for_tts(script: str) -> str:
         if is_section_header(line):
             continue
 
-        if re.match(r"^([^:ï¼ڑ]+)[:ï¼ڑ]\s*(intro|body|outro|مقدمة|الحوار|الخاتمة)\s*$", line, re.IGNORECASE):
+        if re.match(r"^([^:ï¼ڑ]+)[:ï¼ڑ]\s*(intro|body|outro|مقدمة|النص|الخاتمة)\s*$", line, re.IGNORECASE):
             continue
 
         if re.fullmatch(r"\[[^\]]+\]", line):
@@ -2469,7 +2478,7 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
 
     file_url = url_for("static", filename=filename, _external=True)
 
-    # store last transcript in session too (optional but useful)
+    # store last transcript in session too 
     session["last_word_timeline"] = word_timeline
     session.modified = True
 
@@ -2500,11 +2509,11 @@ def api_audio():
     if not ok:
         return jsonify(error=result), 400
 
-    # keep audio in session (as you want)
+    # keep audio in session 
     session["last_audio_url"] = result["url"]
     session.modified = True
 
-    # âœ… NEW: save live transcript (word timeline) to Firestore
+    # NEW: save live transcript (word timeline) to Firestore
     user_id = session.get("user_id") or get_current_user_email()
     if user_id and podcast_id:
         podcast_ref = db.collection("podcasts").document(podcast_id)
@@ -2586,7 +2595,6 @@ def summarize_transcript():
         if not podcast_id:
             return jsonify({"error": "Missing podcastId"}), 400
 
-        # (optional) ensure logged in
         user_id = session.get("user_id") or get_current_user_email()
         if not user_id:
             return jsonify({"error": "Not logged in"}), 401
@@ -2598,11 +2606,11 @@ def summarize_transcript():
             is_ar = is_arabic(text)
 
         if is_ar:
-            system_prompt = "أنت مساعد مفيد يقوم بإنشاء ملخصات بودكاست موجزة. يجب أن تكون جميع الردود بحد أقصى 250 كلمة."
-            user_prompt = f"يرجى تلخيص نص البودكاست التالي بحد أقصى 250 كلمة. ركز على النقاط الرئيسية والأفكار المهمة:\n\n{text}"
+            system_prompt = "أنت مساعد محترف يقوم بإنشاء ملخصات بودكاست موجزة. يجب أن تكون جميع الردود بحد أقصى 150 كلمة."
+            user_prompt = f"يرجى تلخيص نص البودكاست التالي بحد أقصى 150 كلمة. ركز على النقاط الرئيسية والأفكار المهمة:\n\n{text}"
         else:
-            system_prompt = "You are a helpful assistant that creates concise podcast summaries. Always respond with 250 words or less."
-            user_prompt = f"Please summarize this podcast transcript in 250 words or less. Focus on the main points, key insights, and important discussions:\n\n{text}"
+            system_prompt = "You are a helpful assistant that creates concise podcast summaries. Always respond with 150 words or less."
+            user_prompt = f"Please summarize this podcast transcript in 150 words or less. Focus on the main points, key insights, and important discussions:\n\n{text}"
 
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -2621,7 +2629,7 @@ def summarize_transcript():
         if len(words) > 250:
             summary = " ".join(words[:250]) + "..."
 
-        # âœ… Save into Firestore (and ensure ownership)
+        # Save into Firestore (and ensure ownership)
         podcast_ref = db.collection("podcasts").document(podcast_id)
         doc = podcast_ref.get()
         if not doc.exists:
@@ -2851,7 +2859,6 @@ def login():
     user_email = None
 
     if "@" in identifier:
-        # Support existing records that may have been stored with mixed-case email.
         email_candidates = [identifier, identifier.lower()]
         for candidate in email_candidates:
             doc = users.document(candidate).get()
@@ -2865,7 +2872,6 @@ def login():
             users.where("username_lower", "==", username).limit(2).stream()
         )
         if not username_docs:
-            # Backward compatibility for older users without username_lower.
             username_docs = list(users.where("name", "==", identifier).limit(2).stream())
 
         if len(username_docs) > 1:
@@ -3008,7 +3014,7 @@ def social_login():
         )
 
     except Exception as e:
-        print("ًں”¥ OAuth login error:", e)
+        print("ًlogin error:", e)
         return jsonify(error="Invalid or expired OAuth token"), 401
 
 # ------------------------------------------------------------
