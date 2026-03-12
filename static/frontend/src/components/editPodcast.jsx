@@ -1014,6 +1014,22 @@ const persistChanges = async ({
       throw new Error(responseData.error || "Failed to save final changes");
     }
 
+    if (String(nextShowTitle || "").trim()) {
+      const titleRes = await fetch(`${API_BASE}/api/podcasts/${podcastId}/title`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
+        },
+        body: JSON.stringify({ title: nextShowTitle }),
+      });
+      const titleData = await titleRes.json().catch(() => ({}));
+      if (!titleRes.ok) {
+        throw new Error(titleData.error || "Failed to update episode title");
+      }
+    }
+
     setOriginalScript(resolvedScript);
     setScript(resolvedScript);
     setOriginalShowTitle(nextShowTitle);
@@ -1284,7 +1300,8 @@ const exportScript = async (format = "pdf") => {
                       type="text"
                       value={draftTitle}
                       onChange={(e) => setDraftTitle(e.target.value)}
-                      className={`px-3 py-1 rounded-lg text-lg ${studioFieldClass}`}
+                      className={`px-3 py-1 rounded-lg text-lg ${studioFieldClass} !bg-white !text-black dark:!bg-[#121129] dark:!text-white dark:!placeholder:text-white/35 dark:!caret-white dark:!border-purple-400/20`}
+                      dir={/[\u0600-\u06FF]/.test(draftTitle || showTitle || "") ? "rtl" : "ltr"}
                       autoFocus
                     />
                        <button
@@ -1545,7 +1562,7 @@ const exportScript = async (format = "pdf") => {
                   <div className="space-y-4">
                     <div>
   <label className="block text-sm font-medium mb-2">Speaker Name</label>
-  <input
+<input
   value={speaker.name}
   onChange={(e) => {
     const newName = e.target.value;
@@ -1557,7 +1574,8 @@ const exportScript = async (format = "pdf") => {
     setSpeakers(newSpeakers);
     // Script labels will be synchronized when the user saves the final version
   }}
-  className={`w-full px-3 py-2 rounded-lg max-w-md ${studioFieldClass}`}
+  className={`w-full px-3 py-2 rounded-lg max-w-md ${studioFieldClass} !bg-white !text-black dark:!bg-[#121129] dark:!text-white dark:!placeholder:text-white/35 dark:!caret-white dark:!border-purple-400/20`}
+  dir={/[\u0600-\u06FF]/.test(speaker.name || "") ? "rtl" : "ltr"}
   placeholder="Enter speaker name"
 />
 </div>
@@ -1691,7 +1709,7 @@ const exportScript = async (format = "pdf") => {
                          <select
                            value={item.value}
                            onChange={(e) => item.setter(e.target.value)}
-                           className={`px-3 py-2 rounded-lg min-w-[200px] ${studioFieldClass}`}
+                           className={`px-3 py-2 rounded-lg min-w-[200px] ${studioFieldClass} !bg-white !text-black dark:!bg-[#121129] dark:!text-white dark:!border-purple-400/20 [color-scheme:light] dark:[color-scheme:dark]`}
                          >
                            <option value="">Select track</option>
                            {availableTracks.map((track) => (

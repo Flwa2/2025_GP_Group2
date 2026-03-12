@@ -681,11 +681,42 @@ def fallback_time_split_chapters(word_timeline, language: str = "en"):
     cuts = [0.0, duration * 0.22, duration * 0.45, duration * 0.7, duration * 0.88]
 
     if language == "ar":
-        titles = ["????????", "???????", "?????? ????????", "??????? ????", "???????"]
+        titles = [
+            "\u0627\u0644\u0645\u0642\u062f\u0645\u0629",
+            "\u0627\u0644\u062e\u0644\u0641\u064a\u0629",
+            "\u0623\u0647\u0645 \u0627\u0644\u0646\u0642\u0627\u0634\u0627\u062a",
+            "\u0646\u0642\u0627\u0637 \u062a\u062d\u0648\u0644",
+            "\u0627\u0644\u062e\u0627\u062a\u0645\u0629",
+        ]
     else:
         titles = ["Opening", "Background", "Key Discussion", "Turning Points", "Wrap-Up"]
     out = [{"title": t, "startSec": float(c)} for t, c in zip(titles, cuts)]
     return out
+
+def sanitize_chapter_titles(chapters, language: str = "en"):
+    items = list(chapters or [])
+    if language != "ar" or not items:
+        return items
+
+    fallback_titles = [c["title"] for c in fallback_time_split_chapters(
+        [{"end": float(idx + 1)} for idx in range(max(len(items), 5))], language="ar"
+    )]
+
+    sanitized = []
+    for idx, chapter in enumerate(items):
+        title = str((chapter or {}).get("title") or "").strip()
+        start_sec = float((chapter or {}).get("startSec") or 0.0)
+        looks_broken = (
+            not title
+            or re.fullmatch(r"[\?\u061F\s]+", title) is not None
+            or ("?" in title and not is_arabic(title))
+        )
+        sanitized.append({
+            "title": fallback_titles[idx] if looks_broken and idx < len(fallback_titles) else title,
+            "startSec": start_sec,
+        })
+
+    return sanitized
 
 def generate_chapters_from_transcript(transcript_text: str, language: str = "en"):
     # Keep prompt simple & strict JSON
@@ -766,7 +797,7 @@ def build_chapters(word_timeline, transcript_text, language="en"):
     if len(chapters) < 5:
         chapters = fallback_time_split_chapters(word_timeline, language=language)
 
-    return chapters
+    return sanitize_chapter_titles(chapters, language=language)
 
 
 def validate_roles(style: str, speakers_info: list):
