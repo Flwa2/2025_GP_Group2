@@ -1260,7 +1260,7 @@ const exportScript = async (format = "pdf") => {
               {hasUnsavedChanges && (
                 <span className="text-sm text-yellow-600 dark:text-yellow-400 flex items-center gap-1">
                   <AlertCircle className="w-4 h-4" />
-                  Draft changes
+                  unsaved changes
                 </span>
               )}
             </div>
@@ -1834,5 +1834,3 @@ const exportScript = async (format = "pdf") => {
     </div>
   );
 }
-
-
