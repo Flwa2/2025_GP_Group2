@@ -8,6 +8,11 @@ const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
   : "http://localhost:5000";
 
+const getAuthHeaders = () => {
+  const token = localStorage.getItem("token") || sessionStorage.getItem("token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 /* -----------------------------
    Summary helpers
 ------------------------------ */
@@ -160,7 +165,10 @@ export default function Preview() {
         .then((d) => d?.url && setAudioUrl(d.url))
         .catch(() => {});
 
-      fetch(`${API_BASE}/api/transcript/last`, { credentials: "include" })
+      fetch(`${API_BASE}/api/transcript/last`, {
+        credentials: "include",
+        headers: getAuthHeaders(),
+      })
         .then((r) => r.json())
         .then((d) => {
           if (Array.isArray(d?.words)) setWords(d.words);
@@ -189,6 +197,7 @@ export default function Preview() {
       try {
         const res = await fetch(`${API_BASE}/api/podcasts/${episodeId}`, {
           credentials: "include",
+          headers: getAuthHeaders(),
         });
         const data = await res.json();
         if (!res.ok) return;
@@ -230,6 +239,7 @@ export default function Preview() {
       try {
         const res = await fetch(`${API_BASE}/api/podcasts/${episodeId}/transcript`, {
           credentials: "include",
+          headers: getAuthHeaders(),
         });
         const data = await res.json();
         if (res.ok && Array.isArray(data?.words)) {
@@ -242,6 +252,7 @@ export default function Preview() {
       try {
         const res = await fetch(`${API_BASE}/api/podcasts/${episodeId}/finalize`, {
           credentials: "include",
+          headers: getAuthHeaders(),
         });
         const data = await res.json();
         if (!res.ok) return;
@@ -476,7 +487,7 @@ export default function Preview() {
       const res = await fetch(`${API_BASE}/api/podcasts/${episodeId}/save-all`, {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({
           title: displayTitle,
           audioUrl,
