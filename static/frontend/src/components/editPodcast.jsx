@@ -28,6 +28,7 @@ import {
 import Modal from "../components/Modal";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
+import { shouldAutoplayVoicePreview, shouldShowEditingNotifications } from "../utils/accountPreferences";
 
 const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
@@ -131,6 +132,7 @@ function LoadingOverlay({ show, logoSrc = "/logo.png", message }) {
 /* -------------------- toast notification -------------------- */
 function Toast({ toast, onClose }) {
   if (!toast) return null;
+  if (!shouldShowEditingNotifications() && !["error", "warning"].includes(toast.type)) return null;
   
   const bgColor = toast.type === "error" 
     ? "bg-red-50 border-red-200 text-red-800" 
@@ -975,6 +977,9 @@ const applySpeakerLabelRenames = (inputScript, oldSpeakers, newSpeakers) => {
   return updatedLines.join("\n");
 };
 
+const speakersEqual = (left, right) =>
+  JSON.stringify(Array.isArray(left) ? left : []) === JSON.stringify(Array.isArray(right) ? right : []);
+
 const persistChanges = async ({
   nextScript,
   nextSpeakers,
@@ -1079,12 +1084,22 @@ const finalizeChanges = async () => {
       speakersCount: speakers.length
     });
 
+    const shouldRegenerateAudio =
+      updatedScript !== String(originalScript || "") ||
+      !speakersEqual(speakers, originalSpeakers) ||
+      String(introMusic || "") !== String(originalIntroMusic || "") ||
+      String(bodyMusic || "") !== String(originalBodyMusic || "") ||
+      String(outroMusic || "") !== String(originalOutroMusic || "");
+
     await persistChanges({
       nextScript: updatedScript,
       nextSpeakers: speakers,
       nextShowTitle: showTitle,
       nextCategory: category,
-      successMessage: "Final changes saved. Audio regenerated from the new version.",
+      regenerateAfterSave: shouldRegenerateAudio,
+      successMessage: shouldRegenerateAudio
+        ? "Final changes saved. Audio regenerated from the new version."
+        : "Final changes saved. Title updated without regenerating audio.",
     });
 
     setTimeout(() => setToast(null), 3000);
@@ -1220,7 +1235,7 @@ const exportScript = async (format = "pdf") => {
 
   const studioGlassPanelClass = "border border-purple-200/90 dark:border-purple-400/30 bg-white/78 dark:bg-neutral-900/45 backdrop-blur-sm shadow-[0_10px_30px_rgba(0,0,0,0.08)]";
   const studioGlassCardClass = "rounded-[28px] border border-purple-200/90 dark:border-purple-400/30 bg-white/74 dark:bg-neutral-900/42 backdrop-blur-md shadow-[0_12px_36px_rgba(15,23,42,0.10)]";
-  const studioFieldClass = "border border-neutral-300/80 dark:border-white/15 bg-white/82 dark:bg-neutral-900/72 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-purple-500 focus:border-transparent";
+  const studioFieldClass = "border border-neutral-300/80 dark:border-white/10 bg-white/88 dark:bg-neutral-800/90 text-gray-900 dark:text-gray-100 placeholder:text-black/35 dark:placeholder:text-white/35 caret-black dark:caret-white shadow-sm focus:ring-2 focus:ring-purple-500/35 focus:border-purple-400/50";
 
   if (loading) {
     return (
@@ -1300,7 +1315,7 @@ const exportScript = async (format = "pdf") => {
                       type="text"
                       value={draftTitle}
                       onChange={(e) => setDraftTitle(e.target.value)}
-                      className={`px-3 py-1 rounded-lg text-lg ${studioFieldClass} !bg-white !text-black dark:!bg-[#121129] dark:!text-white dark:!placeholder:text-white/35 dark:!caret-white dark:!border-purple-400/20`}
+                      className={`px-3 py-1 rounded-lg text-lg ${studioFieldClass}`}
                       dir={/[\u0600-\u06FF]/.test(draftTitle || showTitle || "") ? "rtl" : "ltr"}
                       autoFocus
                     />
@@ -1482,7 +1497,7 @@ const exportScript = async (format = "pdf") => {
     value={script}
     onChange={(e) => setScript(e.target.value)}
     onKeyDown={onKeyDownGuard}
-    className={`w-full px-4 py-3 rounded-lg font-mono text-sm leading-relaxed ${studioFieldClass} !bg-white/82 !border-neutral-300/80 !text-black dark:!bg-[#121129] dark:!text-white dark:!placeholder:text-white/35 dark:!caret-white dark:!border-purple-400/20`}
+    className={`w-full px-4 py-3 rounded-lg font-mono text-sm leading-relaxed ${studioFieldClass}`}
     style={{ minHeight: "400px" }}
     placeholder="Start typing your script..."
     dir={isRTL ? "rtl" : "ltr"}
@@ -1574,7 +1589,7 @@ const exportScript = async (format = "pdf") => {
     setSpeakers(newSpeakers);
     // Script labels will be synchronized when the user saves the final version
   }}
-  className={`w-full px-3 py-2 rounded-lg max-w-md ${studioFieldClass} !bg-white !text-black dark:!bg-[#121129] dark:!text-white dark:!placeholder:text-white/35 dark:!caret-white dark:!border-purple-400/20`}
+  className={`w-full px-3 py-2 rounded-lg max-w-md ${studioFieldClass}`}
   dir={/[\u0600-\u06FF]/.test(speaker.name || "") ? "rtl" : "ltr"}
   placeholder="Enter speaker name"
 />
@@ -1617,6 +1632,11 @@ const exportScript = async (format = "pdf") => {
                                     voiceId: newVoice,
                                   };
                                   setSpeakers(newSpeakers);
+
+                                  if (newVoice && shouldAutoplayVoicePreview()) {
+                                    const selected = pool.find((v) => getVoiceId(v) === newVoice);
+                                    previewVoice(newVoice, selected?.name || "");
+                                  }
                                 }}
                                 className={`w-full appearance-none pr-10 px-3 py-2 rounded-lg ${studioFieldClass} [color-scheme:light] dark:[color-scheme:dark]`}
                               >
@@ -1709,7 +1729,7 @@ const exportScript = async (format = "pdf") => {
                          <select
                            value={item.value}
                            onChange={(e) => item.setter(e.target.value)}
-                           className={`px-3 py-2 rounded-lg min-w-[200px] ${studioFieldClass} !bg-white !text-black dark:!bg-[#121129] dark:!text-white dark:!border-purple-400/20 [color-scheme:light] dark:[color-scheme:dark]`}
+                           className={`px-3 py-2 rounded-lg min-w-[200px] ${studioFieldClass} [color-scheme:light] dark:[color-scheme:dark]`}
                          >
                            <option value="">Select track</option>
                            {availableTracks.map((track) => (

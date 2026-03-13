@@ -47,7 +47,7 @@ function FooterArt() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder={t("contact.emailPlaceholder")}
-            className="h-12 flex-1 rounded-xl border border-black/20 bg-[#f6f1e3] px-4 text-base outline-none placeholder:text-black/45 focus:border-black/45"
+            className="h-12 flex-1 rounded-xl border border-black/20 bg-[#f6f1e3] px-4 text-base text-neutral-900 caret-neutral-900 outline-none placeholder:text-black/45 focus:border-black/45 dark:text-neutral-900 dark:caret-neutral-900"
           />
           <button
             type="submit"

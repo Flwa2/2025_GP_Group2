@@ -27,6 +27,7 @@ import WeCastAudioPlayer from "./WeCastAudioPlayer";
 import Modal from "../components/Modal";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
+import { shouldAutoplayVoicePreview, shouldShowEditingNotifications } from "../utils/accountPreferences";
 
 const API_BASE = import.meta.env.PROD
     ? "https://wecast.onrender.com"
@@ -147,6 +148,7 @@ function LoadingOverlay({ show, logoSrc = "/logo.png", title, subtitle, logoAlt 
 /* -------------------- tiny toast -------------------- */
 function Toast({ toast, onClose, closeLabel = "Close" }) {
   if (!toast) return null;
+  if (!shouldShowEditingNotifications() && toast.type !== "error") return null;
 
   return (
     <div className="fixed top-4 right-4 z-[9998]">
@@ -1945,6 +1947,13 @@ const exportScript = async (format = "pdf") => {
                                                                                 n[i] = { ...n[i], voiceId: newVoice };
                                                                                 return n;
                                                                             });
+
+                                                                            if (newVoice && shouldAutoplayVoicePreview()) {
+                                                                                const selected = pool.find(
+                                                                                    (v) => (v.providerVoiceId || v.id || v.docId) === newVoice
+                                                                                );
+                                                                                previewVoice(newVoice, selected?.name || "");
+                                                                            }
                                                                         }}
                                                                     >
                                                                         <option value="">{t("create.speakers.selectVoice")}</option>

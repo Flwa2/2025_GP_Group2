@@ -337,6 +337,16 @@ export default function Preview() {
     return -1;
   }, [currentTime, words]);
 
+  const transcriptText = useMemo(
+    () => words.map((w) => String(w?.w || "")).join(" "),
+    [words]
+  );
+  const transcriptDir = useMemo(() => {
+    if (isLikelyArabic(transcriptText)) return "rtl";
+    if (podcastLanguage === "ar") return "rtl";
+    return "ltr";
+  }, [transcriptText, podcastLanguage]);
+
   const hasSpeakerInfo = useMemo(
     () => words.some((w) => typeof w.speaker === "string" && w.speaker.trim()),
     [words]
@@ -620,17 +630,18 @@ export default function Preview() {
 
               <div
                 ref={transcriptRef}
+                dir={transcriptDir}
                 onWheel={markUserInteraction}
                 onTouchStart={markUserInteraction}
                 onTouchMove={markUserInteraction}
                 onMouseDown={markUserInteraction}
                 className={[
                   "overflow-y-auto leading-8 text-[15px]",
-                  i18n.language === "ar" ? "pl-3" : "pr-3",
+                  transcriptDir === "rtl" ? "pl-3 text-right" : "pr-3 text-left",
                 ].join(" ")}
                 style={transcriptBodyHeight ? { height: transcriptBodyHeight } : undefined}
               >
-                <div className="leading-8 text-[15px]">
+                <div dir={transcriptDir} className="leading-8 text-[15px]">
                   {transcriptTokens.map((tok) => {
                     if (tok.type === "speaker") {
                       return (
@@ -640,7 +651,7 @@ export default function Preview() {
                             onClick={() => handleWordClick(tok.start)}
                             className={[
                               "font-extrabold text-black/80 dark:text-white/80 hover:underline",
-                              i18n.language === "ar" ? "ml-2" : "mr-2",
+                              transcriptDir === "rtl" ? "ml-2" : "mr-2",
                             ].join(" ")}
                             title={t("preview.jumpToTime", { time: formatMMSS(tok.start) })}
                           >

@@ -1,7 +1,8 @@
 // src/components/Account.jsx
 import React, { useEffect, useRef, useState } from "react";
-import { LogOut, Check, AlertCircle, AlertTriangle } from "lucide-react";
+import { LogOut, Check, AlertCircle, AlertTriangle, Save, RefreshCcw, Bell, PlayCircle, Palette } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { DEFAULT_ACCOUNT_PREFERENCES, loadAccountPreferences, saveAccountPreferences } from "../utils/accountPreferences";
 
 const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
@@ -69,6 +70,7 @@ export default function Account() {
 
   // Dark mode state (saved to localStorage)
   const [darkMode, setDarkMode] = useState(false);
+  const [preferences, setPreferences] = useState(DEFAULT_ACCOUNT_PREFERENCES);
 
   // Local avatar preview
   const [avatarPreview, setAvatarPreview] = useState(null);
@@ -96,8 +98,14 @@ export default function Account() {
       applyDarkMode(v);
     }
 
+    setPreferences(loadAccountPreferences());
+
     loadUserProfile();
   }, []);
+
+  useEffect(() => {
+    saveAccountPreferences(preferences);
+  }, [preferences]);
 
   const loadUserProfile = async () => {
     setLoading(true);
@@ -213,6 +221,22 @@ export default function Account() {
   function toggleDark(v) {
     setDarkMode(v);
     applyDarkMode(v);
+  }
+
+  function resetProfileChanges() {
+    setProfile(originalProfile);
+    setAvatarFile(null);
+    setAvatarPreview(null);
+    if (fileRef.current) fileRef.current.value = "";
+    showToast("Profile changes discarded", "info");
+  }
+
+  function resetPreferences() {
+    const defaults = { ...DEFAULT_ACCOUNT_PREFERENCES };
+    setPreferences(defaults);
+    setDarkMode(false);
+    applyDarkMode(false);
+    showToast("Preferences reset to default", "info");
   }
 
   async function save() {
@@ -361,21 +385,25 @@ export default function Account() {
       </header>
 
       {/* PROFILE */}
-      <Card title={t("account.profile")}>
+      <Card
+        title={t("account.profile")}
+        subtitle="Update your public identity, avatar, and bio in one place."
+        icon={<Save className="w-5 h-5" />}
+      >
         <div className="flex flex-col gap-6">
           {/* Avatar + name row */}
-          <div className="flex items-center gap-6">
-            <div className="relative">
+          <div className="flex flex-col md:flex-row items-start gap-6">
+            <div className="relative shrink-0">
               <img
                 src={shownAvatar}
                 alt="Avatar"
-                className="w-24 h-24 rounded-2xl object-cover border border-gray-200 dark:border-neutral-700 bg-white dark:bg-neutral-800"
+                className="w-28 h-28 rounded-[24px] object-cover border border-gray-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 shadow-sm"
               />
               <button
                 onClick={onPickAvatar}
-                className="absolute -bottom-2 -right-2 text-xs px-2 py-1 rounded-md
+                className="absolute -bottom-3 left-1/2 -translate-x-1/2 text-xs px-3 py-1.5 rounded-full
                   bg-black text-white dark:bg-white dark:text-black border
-                  border-black dark:border-white"
+                  border-black dark:border-white shadow-md"
               >
                 Change
               </button>
@@ -388,13 +416,25 @@ export default function Account() {
               />
             </div>
 
-            <div className="flex-1 grid md:grid-cols-2 gap-4 items-center">
+            <div className="flex-1 grid md:grid-cols-2 gap-4 items-start">
+              <div className="md:col-span-2 rounded-2xl border border-black/5 dark:border-white/10 bg-white/70 dark:bg-white/5 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45 dark:text-white/45">
+                  Profile snapshot
+                </p>
+                <p className="mt-2 text-lg font-semibold text-black dark:text-white">
+                  {profile.displayName || "WeCast User"}
+                </p>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  {profile.email || "No email available"}
+                </p>
+              </div>
+
               <Field
                 label={t("account.username")}
                 hint={t("account.usernameHint")}
               >
                 <input
-                  className="form-input bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-gray-600"
+                  className="form-input"
                   placeholder="Enter your name"
                   value={profile.displayName}
                   onChange={(e) =>
@@ -402,6 +442,16 @@ export default function Account() {
                   }
                 />
               </Field>
+
+              {profile.email && (
+                <Field label={t("account.email")}>
+                  <input
+                    className="form-input bg-neutral-100 dark:bg-neutral-800"
+                    value={profile.email}
+                    readOnly
+                  />
+                </Field>
+              )}
             </div>
           </div>
 
@@ -411,7 +461,7 @@ export default function Account() {
             hint={t("account.bioHint")}
           >
             <textarea
-              className="form-textarea bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-gray-600"
+              className="form-textarea"
               placeholder="Tell the world what you make…"
               value={profile.bio}
               onChange={(e) =>
@@ -421,67 +471,110 @@ export default function Account() {
             />
           </Field>
 
-          {/* Email (read-only) */}
-          {profile.email && (
-            <Field label={t("account.email")}>
-              <input 
-                className="form-input bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-gray-600" 
-                value={profile.email} 
-                readOnly 
-              />
-            </Field>
-          )}
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 rounded-2xl border border-purple-200/70 dark:border-purple-400/20 bg-purple-50/70 dark:bg-purple-900/10 px-4 py-4">
+            <div>
+              <p className="font-semibold text-black dark:text-white">Profile actions</p>
+              <p className="text-sm text-gray-600 dark:text-gray-300">
+                Save from here because these buttons only affect the profile section above.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={resetProfileChanges}
+                disabled={!hasUnsavedChanges || saving}
+                className={`inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold border transition ${
+                  hasUnsavedChanges && !saving
+                    ? "border-black/15 text-black hover:bg-black/5 dark:border-white/15 dark:text-white dark:hover:bg-white/10"
+                    : "border-gray-200 text-gray-400 cursor-not-allowed dark:border-gray-700 dark:text-gray-500"
+                }`}
+              >
+                <RefreshCcw className="w-4 h-4" />
+                Reset
+              </button>
+              <button
+                onClick={save}
+                disabled={saving || !hasUnsavedChanges}
+                className={`inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-sm font-semibold transition ${
+                  hasUnsavedChanges
+                    ? "bg-black text-white hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90"
+                    : "bg-gray-200 text-gray-500 cursor-not-allowed dark:bg-gray-700 dark:text-gray-400"
+                }`}
+              >
+                {saving ? (
+                  <>
+                    <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                    {t("account.saving")}
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4" />
+                    {t("account.save")}
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       </Card>
 
       {/* APPEARANCE */}
-      <Card title={t("account.appearance")}>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="font-semibold">{t("account.darkMode")}</p>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-               {t("account.darkModeHint")}     
-            </p>
-          </div>
-          <Toggle checked={darkMode} onChange={toggleDark} />
+      <Card
+        title={t("account.appearance")}
+        subtitle="Device-level preferences for how WeCast feels while you work."
+        icon={<Palette className="w-5 h-5" />}
+      >
+        <div className="space-y-5">
+          <PreferenceRow
+            icon={<Palette className="w-4 h-4" />}
+            title={t("account.darkMode")}
+            hint={t("account.darkModeHint")}
+            control={<Toggle checked={darkMode} onChange={toggleDark} />}
+          />
+          <PreferenceRow
+            icon={<PlayCircle className="w-4 h-4" />}
+            title="Auto-play voice previews"
+            hint="Keep preview playback immediate when you test voices and clips on this device."
+            control={
+              <Toggle
+                checked={preferences.autoplayPreview}
+                onChange={(value) =>
+                  setPreferences((prev) => ({ ...prev, autoplayPreview: value }))
+                }
+              />
+            }
+          />
+          <PreferenceRow
+            icon={<Bell className="w-4 h-4" />}
+            title="Editing notifications"
+            hint="Show or hide non-critical success notices while editing. Errors and warnings still appear."
+            control={
+              <Toggle
+                checked={preferences.editingNotifications}
+                onChange={(value) =>
+                  setPreferences((prev) => ({ ...prev, editingNotifications: value }))
+                }
+              />
+            }
+          />
         </div>
       </Card>
 
-      {/* ACTIONS: Save + Logout */}
-      <Card>
+      {/* ACTIONS */}
+      <Card
+        title={t("account.actions")}
+        subtitle="Log out of your account or reset the preferences saved on this device."
+      >
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div>
-            <p className="font-semibold text-black dark:text-white">
-              {t("account.actions")}
-            </p>
-            <p className="text-sm text-gray-600 dark:text-gray-300">
-               {t("account.actionsHint")}
-            </p>
-          </div>
-
           <div className="flex gap-3 md:ml-auto">
-            {/* Save button */}
             <button
-              onClick={save}
-              disabled={saving || !hasUnsavedChanges}
-              className={`inline-flex items-center justify-center px-6 py-3
-                   rounded-xl text-sm font-semibold transition
-                   ${hasUnsavedChanges 
-                     ? 'bg-black text-white hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90' 
-                     : 'bg-gray-200 text-gray-500 cursor-not-allowed dark:bg-gray-700 dark:text-gray-400'
-                   }`}
+              type="button"
+              onClick={resetPreferences}
+              className="inline-flex items-center justify-center px-6 py-3 rounded-xl text-sm font-semibold border border-black/15 text-black hover:bg-black/5 dark:border-white/15 dark:text-white dark:hover:bg-white/10 transition"
             >
-              {saving ? (
-                <>
-                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></span>
-                  {t("account.saving")}
-                </>
-              ) : (
-                t("account.save")
-              )}
+              Reset Preferences
             </button>
 
-            {/* Logout button */}
             <button
               type="button"
               onClick={handleLogout}
@@ -505,10 +598,24 @@ export default function Account() {
 }
 
 /* ---------- UI helpers ---------- */
-function Card({ title, children }) {
+function Card({ title, subtitle, icon, children }) {
   return (
     <div className="ui-card">
-      {title && <h2 className="ui-card-title">{title}</h2>}
+      {(title || subtitle) && (
+        <div className="mb-6 flex items-start justify-between gap-4">
+          <div>
+            {title && (
+              <div className="flex items-center gap-2">
+                {icon ? <span className="text-black/70 dark:text-white/70">{icon}</span> : null}
+                <h2 className="ui-card-title !mb-0">{title}</h2>
+              </div>
+            )}
+            {subtitle ? (
+              <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">{subtitle}</p>
+            ) : null}
+          </div>
+        </div>
+      )}
       {children}
     </div>
   );
@@ -542,3 +649,21 @@ function Toggle({ checked, onChange }) {
     </button>
   );
 }
+
+function PreferenceRow({ icon, title, hint, control }) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-2xl border border-black/5 dark:border-white/10 bg-white/60 dark:bg-white/5 px-4 py-4">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-black text-white dark:bg-white dark:text-black">
+          {icon}
+        </div>
+        <div>
+          <p className="font-semibold text-black dark:text-white">{title}</p>
+          <p className="text-sm text-gray-600 dark:text-gray-400">{hint}</p>
+        </div>
+      </div>
+      <div className="shrink-0">{control}</div>
+    </div>
+  );
+}
+
