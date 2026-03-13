@@ -191,12 +191,12 @@ if (!podcastId) {
 }
 
   if (loading) {
-    return <div style={{ padding: 24 }}>Loading finalize…</div>;
+    return <div style={{ padding: 16 }}>Loading finalize...</div>;
   }
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
-      <h1 className="text-4xl md:text-5xl font-extrabold text-black mb-2">
+    <div style={{ padding: 16, maxWidth: 1100, margin: "0 auto" }}>
+      <h1 className="mb-2 text-3xl font-extrabold text-black md:text-5xl">
         Finalize &amp; Publish
       </h1>
       <p style={{ marginTop: 0, opacity: 0.8 }}>
@@ -239,7 +239,7 @@ if (!podcastId) {
             <style>{`@keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}`}</style>
         </div>
         )}
-      <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", gap: 24 }}>
+      <div className="grid gap-6 md:grid-cols-[360px_1fr]">
         {/* Cover section */}
         <div style={{ border: "1px solid #e5e5e5", borderRadius: 16, padding: 16 }}>
           <div
@@ -349,3 +349,4 @@ const btnSecondary = {
   ...btn,
   background: "#f7f7f7",
 };
+

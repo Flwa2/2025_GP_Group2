@@ -1,11 +1,12 @@
 // src/components/Header.jsx
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Globe2 } from "lucide-react";
+import { Globe2, Menu, X } from "lucide-react";
 
 export default function Header() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [hash, setHash] = useState(window.location.hash || "#/");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { i18n, t } = useTranslation();
   const isStudioSurface =
     hash.startsWith("#/episodes") ||
@@ -43,10 +44,24 @@ export default function Header() {
     };
   }, []);
 
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [hash]);
+
   const scrollToTop = () => {
     window.location.hash = "#/";
     setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
   };
+
+  const mobileLinks = [
+    { label: t("Home"), action: scrollToTop },
+    ...(loggedIn
+      ? [{ label: t("episodes.sidebar.library"), href: "#/episodes" }]
+      : []),
+    ...(loggedIn
+      ? [{ label: t("Profile"), href: "#/account" }]
+      : []),
+  ];
 
   return (
     <header className={`fixed top-0 inset-x-0 z-50 backdrop-blur-md border-b text-black dark:text-white ${
@@ -106,7 +121,7 @@ export default function Header() {
           )}
         </ul>
 
-        <div className="flex items-center gap-3 sm:gap-4 justify-self-end">
+        <div className="hidden md:flex items-center gap-3 sm:gap-4 justify-self-end">
           <button
             type="button"
             onClick={() => setLanguage(i18n.language === "ar" ? "en" : "ar")}
@@ -158,7 +173,74 @@ export default function Header() {
             </div>
           )}
         </div>
+
+        <div className="flex md:hidden items-center justify-self-end">
+          <button
+            type="button"
+            onClick={() => setMobileMenuOpen((prev) => !prev)}
+            className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-black/15 bg-white/22 shadow-[inset_0_1px_0_rgba(255,255,255,0.55),0_4px_12px_rgba(0,0,0,0.06)] backdrop-blur-xl transition hover:bg-white/30 dark:border-white/20 dark:bg-white/10 dark:hover:bg-white/14"
+            aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
+          >
+            {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </button>
+        </div>
       </nav>
+
+      {mobileMenuOpen && (
+        <div className="md:hidden border-t border-black/10 bg-[#f5ead2]/95 px-4 pb-4 pt-3 shadow-[0_12px_30px_rgba(15,23,42,0.10)] backdrop-blur-xl dark:border-white/10 dark:bg-neutral-950/94">
+          <div className="space-y-3">
+            <div className="rounded-2xl border border-black/10 bg-white/70 p-2 dark:border-white/10 dark:bg-white/5">
+              <button
+                type="button"
+                onClick={() => setLanguage(i18n.language === "ar" ? "en" : "ar")}
+                className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-sm font-semibold transition hover:bg-black/5 dark:hover:bg-white/10"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <Globe2 className="h-4 w-4" />
+                  Language
+                </span>
+                <span className="rounded-lg bg-black px-2 py-1 text-xs text-white dark:bg-white dark:text-black">
+                  {i18n.language === "ar" ? "AR" : "EN"}
+                </span>
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-black/10 bg-white/70 p-2 dark:border-white/10 dark:bg-white/5">
+              {mobileLinks.map((item) =>
+                item.href ? (
+                  <a
+                    key={item.label}
+                    href={item.href}
+                    className="block rounded-xl px-3 py-3 text-sm font-semibold transition hover:bg-black/5 dark:hover:bg-white/10"
+                  >
+                    {item.label}
+                  </a>
+                ) : (
+                  <button
+                    key={item.label}
+                    type="button"
+                    onClick={item.action}
+                    className="block w-full rounded-xl px-3 py-3 text-left text-sm font-semibold transition hover:bg-black/5 dark:hover:bg-white/10"
+                  >
+                    {item.label}
+                  </button>
+                )
+              )}
+            </div>
+
+            {!loggedIn && (
+              <div className="grid grid-cols-2 gap-3">
+                <a href="#/login" className="btn-secondary px-4 text-center">
+                  {t("Login")}
+                </a>
+                <a href="#/signup" className="btn-primary px-4 text-center">
+                  {t("Signup")}
+                </a>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </header>
   );
 }

@@ -308,7 +308,7 @@ export default function Login() {
   // UI
   // ------------------------------------------------------------------
   return (
-    <div className="min-h-screen relative overflow-hidden flex items-center justify-center bg-cream dark:bg-[#0a0a1a] transition-colors pb-20 md:pb-28">
+    <div className="min-h-screen relative overflow-hidden flex items-center justify-center bg-cream dark:bg-[#0a0a1a] transition-colors px-4 pb-12 pt-6 sm:px-6 md:pb-28">
       {/* RIGHT animated shapes */}
       <div className="pointer-events-none absolute right-[-24px] top-24 w-72 h-72 rounded-full blur-3xl opacity-40 bg-pink-400/70 dark:bg-pink-300/20 animate-pulse" />
       <div className="pointer-events-none absolute right-24 bottom-20 w-40 h-40 rounded-2xl blur-xl opacity-40 bg-blue-400/70 dark:bg-blue-300/20 animate-bounce" />
@@ -329,7 +329,7 @@ export default function Login() {
       {/* LOGIN / RESET CARD */}
       <div className="relative z-10 w-full max-w-md">
         <div
-          className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-8 shadow-sm transition-colors"
+          className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-5 shadow-sm transition-colors sm:p-8"
         >
 
 
@@ -350,19 +350,19 @@ export default function Login() {
           <div className="mb-6 text-center">
             {mode === "login" ? (
               <>
-                <h2 className="text-2xl font-extrabold tracking-tight text-black dark:text-white">
+                <h2 className="text-2xl font-extrabold tracking-tight text-black dark:text-white sm:text-[2rem]">
                   Log in to{" "}
                   <span className="text-purple-700 dark:text-purple-300">
                     WeCast
                   </span>
                 </h2>
-                <p className="text-sm text-black/60 dark:text-white/60 mt-1">
+                <p className="mt-1 text-sm leading-6 text-black/60 dark:text-white/60">
                   Welcome back. Sign in to access your podcasts and drafts.
                 </p>
               </>
             ) : (
               <>
-                <h2 className="text-2xl font-extrabold tracking-tight text-black dark:text-white">
+                <h2 className="text-2xl font-extrabold tracking-tight text-black dark:text-white sm:text-[2rem]">
                   Reset your password
                 </h2>
                 <p className="text-sm text-black/60 dark:text-white/60 mt-1">

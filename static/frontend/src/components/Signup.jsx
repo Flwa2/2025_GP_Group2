@@ -211,13 +211,13 @@ const pwLabel = strengthLabels[passwordScore];
     };
 
     return (
-        <div className="relative min-h-screen flex items-center justify-center bg-cream dark:bg-[#0a0a1a] text-black dark:text-white px-4 py-12 overflow-hidden">
+        <div className="relative min-h-screen flex items-center justify-center overflow-hidden bg-cream px-4 py-8 text-black dark:bg-[#0a0a1a] dark:text-white sm:px-6 sm:py-12">
             {/*Decorative Background (BlubSignup image)*/}
             <div
-                className="pointer-events-none absolute z-0 right-[40px] bottom-[20px] opacity-90"
+                className="pointer-events-none absolute z-0 right-[-80px] bottom-[-30px] opacity-60 md:right-[40px] md:bottom-[20px] md:opacity-90"
                 style={{
-                    width: 460,
-                    height: 460,
+                    width: 340,
+                    height: 340,
                     backgroundImage: "url('/BlubSignup.png')",
                     backgroundRepeat: "no-repeat",
                     backgroundSize: "contain",
@@ -259,9 +259,9 @@ const pwLabel = strengthLabels[passwordScore];
             </div>
 
             {/*Signup Card*/}
-            <div className="ui-card relative z-10 w-full max-w-md p-8 backdrop-blur">
+            <div className="ui-card relative z-10 w-full max-w-md p-5 backdrop-blur sm:p-8">
                 <div className="mb-8 text-center">
-                    <h1 className="text-3xl font-extrabold text-black-medium dark:text-purple-400">
+                    <h1 className="text-3xl font-extrabold text-black-medium dark:text-purple-400 sm:text-[2rem]">
                         {t("signup.title")}
                     </h1>
                     <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">

@@ -134,7 +134,7 @@ export default function Preview() {
   const isFromStudioCreatePreview = fromSource === "studio_create";
   const useDashboardGlassTone = isFromDashboardPreview || isFromStudioCreatePreview;
   const dashboardShellClass = "w-full border-b border-black/10 bg-white/70 dark:bg-neutral-900/45 shadow-[0_10px_30px_rgba(0,0,0,0.08)] backdrop-blur-sm";
-  const dashboardContentClass = "mx-auto w-full max-w-[1400px] px-6 pt-4 pb-10 bg-white/35 dark:bg-neutral-900/20 space-y-6";
+  const dashboardContentClass = "mx-auto w-full max-w-[1400px] px-4 pt-4 pb-8 bg-white/35 dark:bg-neutral-900/20 space-y-6 sm:px-6 sm:pb-10";
   const dashboardCardClass = "rounded-3xl border border-purple-200/90 dark:border-purple-400/30 bg-white/55 dark:bg-neutral-900/60 backdrop-blur-md shadow-sm";
   const [externalSeek, setExternalSeek] = useState(null);
   const displayTitle = title || t("preview.title");
@@ -547,11 +547,11 @@ export default function Preview() {
       <div
         className={useDashboardGlassTone
           ? dashboardContentClass
-          : "max-w-[1400px] mx-auto px-6 py-10 space-y-6"}
+          : "max-w-[1400px] mx-auto px-4 py-8 space-y-6 sm:px-6 sm:py-10"}
       >
         <div>
-          <div className="flex flex-wrap items-center gap-3 justify-between">
-            <div className="flex items-center gap-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3 sm:items-center sm:gap-4">
               <button
                 onClick={handleBack}
                 className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition"
@@ -568,8 +568,8 @@ export default function Preview() {
                 />
               ) : null}
 
-            <div>
-                <h1 className="text-3xl font-extrabold leading-tight">
+            <div className="min-w-0">
+                <h1 className="text-2xl font-extrabold leading-tight sm:text-3xl">
                   {displayTitle}
                 </h1>
                 <p className="text-sm text-black/60 dark:text-white/60">
@@ -588,7 +588,7 @@ export default function Preview() {
           </div>
         </div>
         {saveMessage && (
-          <div className="fixed top-20 right-6 z-50">
+          <div className="fixed left-4 right-4 top-20 z-50 sm:left-auto sm:right-6">
             <div
               className={[
                 "rounded-xl px-4 py-3 shadow-lg border text-sm font-medium",

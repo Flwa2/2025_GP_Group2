@@ -675,9 +675,9 @@ export default function Episodes() {
                           : "border-black/10 dark:border-white/10"
                       } ${isRTL ? "text-right" : "text-left"}`}
                     >
-                      <div className={`flex items-stretch ${isRTL ? "flex-row-reverse" : ""}`}>
+                      <div className={`flex flex-col items-stretch sm:flex-row ${isRTL ? "sm:flex-row-reverse" : ""}`}>
                         <div className={`flex flex-1 min-w-0 ${isRTL ? "flex-row-reverse text-right" : "text-left"}`}>
-                          <div className={`min-h-[112px] w-24 sm:w-[7.5rem] md:w-32 shrink-0 overflow-hidden bg-neutral-100/80 dark:bg-white/10 ${isRTL ? "border-l border-black/10 dark:border-white/15" : "border-r border-black/10 dark:border-white/15"}`}>
+                          <div className={`min-h-[112px] w-full sm:w-[7.5rem] md:w-32 shrink-0 overflow-hidden bg-neutral-100/80 dark:bg-white/10 ${isRTL ? "sm:border-l border-black/10 dark:border-white/15" : "sm:border-r border-black/10 dark:border-white/15"}`}>
                             <EpisodeCover title={ep.title} coverUrl={ep.coverUrl} coverThumbB64={ep.coverThumbB64} />
                           </div>
                           <div className="flex min-w-0 flex-1 flex-col justify-center p-3.5 sm:p-4">
@@ -714,7 +714,7 @@ export default function Episodes() {
                           </div>
                         </div>
 
-                        <div className={`flex items-start gap-2 p-3.5 sm:p-4 ${isRTL ? "flex-row-reverse pr-0" : "pl-0"}`}>
+                        <div className={`flex flex-wrap items-start gap-2 border-t border-black/5 p-3.5 sm:border-t-0 sm:p-4 ${isRTL ? "sm:flex-row-reverse sm:pr-0" : "sm:pl-0"}`}>
                           {selectedEpisodeId === ep.id && (
                             <span className="inline-flex h-9 items-center gap-1 px-1 text-xs font-semibold text-purple-500">
                               <Check className="h-3 w-3" />

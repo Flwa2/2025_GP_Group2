@@ -1406,8 +1406,8 @@ const exportScript = async (format = "pdf") => {
 
       {/* Tabs and Save Button */}
       <div>
-        <div className={`${studioGlassPanelClass} rounded-[24px] px-5 sm:px-6 py-1 flex items-center justify-between`}>
-          <nav className="flex gap-6">
+        <div className={`${studioGlassPanelClass} rounded-[24px] px-4 py-3 sm:px-6 sm:py-1 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between`}>
+          <nav className="flex flex-wrap gap-4 sm:gap-6">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
@@ -1424,7 +1424,7 @@ const exportScript = async (format = "pdf") => {
             ))}
           </nav>
           
-          <div className="flex items-center gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <button
               onClick={() => {
                 if (isEditingTitle) {
@@ -1723,7 +1723,7 @@ const exportScript = async (format = "pdf") => {
                      { label: "Body Music", value: bodyMusic, setter: setBodyMusic },
                      { label: "Outro Music", value: outroMusic, setter: setOutroMusic },
                    ].map((item) => (
-                     <div key={item.label} className={`${studioGlassCardClass} p-4 sm:p-5 flex items-center justify-between gap-4`}>
+                     <div key={item.label} className={`${studioGlassCardClass} p-4 sm:p-5 flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center`}>
                        <span className="font-medium">{item.label}</span>
                        <div className="flex flex-wrap gap-2 justify-end">
                          <select

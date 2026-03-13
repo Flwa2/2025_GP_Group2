@@ -1290,11 +1290,11 @@ const exportScript = async (format = "pdf") => {
             state === "done" ? "text-neutral-500 dark:text-neutral-400" :
                 "text-black/60 dark:text-white/60";
         return (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3 shrink-0">
                 <div className={`w-8 h-8 rounded-full grid place-items-center text-sm font-bold ${dot}`}>
                     {n}
                 </div>
-                <div className={`text-sm font-semibold ${labelCls}`}>{label}</div>
+                <div className={`hidden text-sm font-semibold sm:block ${labelCls}`}>{label}</div>
             </div>
         );
     };
@@ -1335,13 +1335,13 @@ const exportScript = async (format = "pdf") => {
     return (
         <div className={`min-h-screen ${isFromStudioEntry ? "bg-cream dark:bg-[#0a0a1a]" : "bg-cream dark:bg-[#0a0a0a]"}`}>
             {!isFromStudioEntry && <div className="h-2 bg-purple-gradient" />}
-            <main className={`w-full ${isFromStudioEntry ? "max-w-full border-b border-black/10 bg-white/70 dark:bg-neutral-900/45 shadow-[0_10px_30px_rgba(0,0,0,0.08)] backdrop-blur-sm" : "mx-auto max-w-[1400px] px-6 py-10"}`}>
+            <main className={`w-full ${isFromStudioEntry ? "max-w-full border-b border-black/10 bg-white/70 dark:bg-neutral-900/45 shadow-[0_10px_30px_rgba(0,0,0,0.08)] backdrop-blur-sm" : "mx-auto max-w-[1400px] px-4 py-8 sm:px-6 sm:py-10"}`}>
                 <div className={isFromStudioEntry ? "mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-6 bg-white/35 dark:bg-neutral-900/20" : ""}>
                 {/* Title */}
                 {isFromStudioEntry ? (
                     <header className="-mx-4 sm:-mx-6 lg:-mx-8 mb-6 bg-white/75 dark:bg-neutral-900/45 border-b border-black/10 dark:border-white/10 backdrop-blur-sm">
                         <div className="px-4 sm:px-6 lg:px-8 py-4">
-                            <div className="flex items-center gap-4">
+                            <div className="flex items-start gap-3 sm:items-center sm:gap-4">
                             <button
                                 type="button"
                                 onClick={() => { window.location.hash = "#/episodes"; }}
@@ -1352,7 +1352,7 @@ const exportScript = async (format = "pdf") => {
                                 <ChevronLeft className="w-5 h-5" />
                             </button>
                             <div>
-                                <h1 className="text-2xl font-bold text-black dark:text-white">Create New Episode</h1>
+                                <h1 className="text-xl font-bold text-black sm:text-2xl dark:text-white">Create New Episode</h1>
                                 <p className="mt-1 text-sm text-black/60 dark:text-white/60">{stepTitles[step]} - {stepDescriptions[step]}</p>
                             </div>
                         </div>
@@ -1374,12 +1374,12 @@ const exportScript = async (format = "pdf") => {
 
                 {/* Stepper */}
                 {step > 0 && (
-                    <div className={`w-full max-w-[1400px] mx-auto rounded-2xl border p-4 mb-8 ${
+                    <div className={`w-full max-w-[1400px] mx-auto rounded-2xl border p-3 sm:p-4 mb-8 overflow-x-auto ${
                         isFromStudioEntry
                             ? `${studioTopPanelClass} dark:bg-neutral-900/45 dark:border-white/10`
                             : "bg-white/60 dark:bg-neutral-900/60 border-neutral-200 dark:border-neutral-800"
                     }`}>
-                        <div className="flex items-center gap-2">
+                        <div className="flex min-w-max items-center gap-2">
                             <StepDot n={1} label={stepperLabels[0]} />
                             <StepLine on={step > 1} />
 

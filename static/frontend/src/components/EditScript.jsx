@@ -520,7 +520,7 @@ export default function EditScript() {
       
       <div className="h-2 bg-purple-gradient" />
 
-      <main className="w-full max-w-[1400px] mx-auto px-6 py-10">
+      <main className="w-full max-w-[1400px] mx-auto px-4 py-8 sm:px-6 sm:py-10">
        <header className="mb-6 text-center" >
     <h1 className="text-3xl md:text-4xl font-extrabold text-black dark:text-white">
       Review & Edit Script
@@ -530,8 +530,8 @@ export default function EditScript() {
     </p>
   </header>
 
-        <div className="w-full rounded-2xl bg-white/60 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 p-4 mb-8">
-          <div className="flex items-center gap-2">
+        <div className="w-full rounded-2xl bg-white/60 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 p-3 sm:p-4 mb-8 overflow-x-auto">
+          <div className="flex min-w-max items-center gap-2">
             <StepDot n={1} label="Choose Style" done />
             <StepLine on={true} />
 
@@ -583,7 +583,7 @@ export default function EditScript() {
               `mt-8 mb-6 px-5 py-4 rounded-2xl border border-amber-200/70 ` +
               `bg-gradient-to-r from-amber-50 via-amber-100 to-amber-50 ` +
               `dark:from-neutral-800 dark:via-neutral-900 dark:to-neutral-800 ` +
-              `shadow-sm flex items-center justify-between gap-4 transition-all ` +
+              `shadow-sm flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center transition-all ` +
               `duration-300 ${titleJustUpdated
                 ? "ring-2 ring-purple-300/70 shadow-md"
                 : "ring-0"
@@ -616,7 +616,7 @@ export default function EditScript() {
                 Edit title
               </button>
             ) : (
-              <div className="flex items-center gap-2">
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
                 <input
                   type="text"
                   value={draftTitle}
@@ -645,7 +645,7 @@ export default function EditScript() {
           </div>
 
           <div className="ui-card mt-6">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
               <h2 className="ui-card-title mb-0">Your Script</h2>
               
               <div className="relative">
@@ -709,7 +709,7 @@ export default function EditScript() {
                   placeholder="Host: …"
                 />
 
-                <div className="mt-4 flex items-center justify-between gap-4 flex-wrap">
+                <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
                   <button
                     onClick={() => {
                       const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
@@ -731,7 +731,7 @@ export default function EditScript() {
                     Back to Review
                   </button>
 
-                  <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
                     <button
                       onClick={save}
                       disabled={saving}

@@ -29,8 +29,8 @@ function FooterArt() {
         <div className="absolute left-9 top-52 h-7 w-7 rounded-full bg-purple-medium/70" />
       </div>
 
-      <div className="section-shell section-block relative max-w-5xl text-center">
-        <h3 className="heading-lg">
+      <div className="section-shell section-block relative max-w-5xl py-14 text-center sm:py-20">
+        <h3 className="heading-lg max-w-[10ch] mx-auto sm:max-w-none">
           {t("contact.title")}
         </h3>
         <p className="body-md mx-auto mt-5 max-w-3xl text-black/65 dark:text-white/70">
@@ -47,11 +47,11 @@ function FooterArt() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder={t("contact.emailPlaceholder")}
-            className="h-12 flex-1 rounded-xl border border-black/20 bg-[#f6f1e3] px-4 text-base text-neutral-900 caret-neutral-900 outline-none placeholder:text-black/45 focus:border-black/45 dark:text-neutral-900 dark:caret-neutral-900"
+            className="h-12 w-full flex-1 rounded-xl border border-black/20 bg-[#f6f1e3] px-4 text-base text-neutral-900 caret-neutral-900 outline-none placeholder:text-black/45 focus:border-black/45 dark:text-neutral-900 dark:caret-neutral-900"
           />
           <button
             type="submit"
-            className="btn-primary px-6"
+            className="btn-primary w-full justify-center px-6 sm:w-auto"
           >
             {t("contact.button")}
           </button>

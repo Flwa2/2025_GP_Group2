@@ -7,21 +7,20 @@ export default function HowItWorks() {
 
   return (
     <section className="bg-[#e9e2ff] text-black transition-colors duration-500 dark:bg-[#0a0a1a] dark:text-white">
-      <div className="section-shell section-block">
+      <div className="section-shell section-block py-14 sm:py-20">
         <h2 className="heading-lg text-center text-black dark:text-gray-100">
           {t("How WeCast Works")}
         </h2>
 
         <p className="body-md mx-auto mt-4 max-w-2xl text-center text-black/75 dark:text-gray-300">
-          {t("HowItWorks Line1")}
-          <br />
-          {t("HowItWorks Line2")}
+          <span className="block">{t("HowItWorks Line1")}</span>
+          <span className="mt-1 block">{t("HowItWorks Line2")}</span>
         </p>
 
-        <ol className="mt-10 grid grid-cols-1 gap-6 md:grid-cols-3">
+        <ol className="mt-8 grid grid-cols-1 gap-5 sm:mt-10 sm:gap-6 md:grid-cols-3">
           <StepCard
             delay={0}
-            className="group relative rounded-2xl border border-black/10 bg-white/80 p-6 backdrop-blur transition-all duration-300 hover:border-black/20 dark:border-white/10 dark:bg-[#12121f]/85 dark:hover:border-white/20"
+            className="group relative rounded-2xl border border-black/10 bg-white/80 p-5 backdrop-blur transition-all duration-300 hover:border-black/20 sm:p-6 dark:border-white/10 dark:bg-[#12121f]/85 dark:hover:border-white/20"
           >
             <div className="absolute -left-2 -top-2 grid h-9 w-9 place-items-center rounded-full bg-black text-lg font-bold text-white dark:bg-white dark:text-black">
               1
@@ -45,7 +44,7 @@ export default function HowItWorks() {
 
           <StepCard
             delay={150}
-            className="group relative rounded-2xl border border-black/10 bg-white/80 p-6 backdrop-blur transition-all duration-300 hover:border-black/20 dark:border-white/10 dark:bg-[#12121f]/85 dark:hover:border-white/20"
+            className="group relative rounded-2xl border border-black/10 bg-white/80 p-5 backdrop-blur transition-all duration-300 hover:border-black/20 sm:p-6 dark:border-white/10 dark:bg-[#12121f]/85 dark:hover:border-white/20"
           >
             <div className="absolute -left-2 -top-2 grid h-9 w-9 place-items-center rounded-full bg-black text-lg font-bold text-white dark:bg-white dark:text-black">
               2
@@ -58,7 +57,7 @@ export default function HowItWorks() {
 
           <StepCard
             delay={300}
-            className="group relative rounded-2xl border border-black/10 bg-white/80 p-6 backdrop-blur transition-all duration-300 hover:border-black/20 dark:border-white/10 dark:bg-[#12121f]/85 dark:hover:border-white/20"
+            className="group relative rounded-2xl border border-black/10 bg-white/80 p-5 backdrop-blur transition-all duration-300 hover:border-black/20 sm:p-6 dark:border-white/10 dark:bg-[#12121f]/85 dark:hover:border-white/20"
           >
             <div className="absolute -left-2 -top-2 grid h-9 w-9 place-items-center rounded-full bg-black text-lg font-bold text-white dark:bg-white dark:text-black">
               3
@@ -71,8 +70,8 @@ export default function HowItWorks() {
           </StepCard>
         </ol>
 
-        <div className="mt-10 flex flex-col items-center gap-3">
-          <a href="#/create" className="btn-primary">
+        <div className="mt-8 flex flex-col items-center gap-3 sm:mt-10">
+          <a href="#/create" className="btn-primary w-full justify-center sm:w-auto">
             {t("Try WeCast Now Button")}
           </a>
           <p className="body-sm text-black/60 dark:text-gray-400">{t("No Signup Required")}</p>

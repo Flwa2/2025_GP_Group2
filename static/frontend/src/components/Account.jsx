@@ -370,9 +370,9 @@ export default function Account() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto p-6 space-y-8">
+    <div className="max-w-5xl mx-auto px-4 py-6 space-y-6 sm:p-6 sm:space-y-8">
       <header className="space-y-1">
-        <h1 className="text-3xl font-extrabold">{t("account.title")}</h1>
+        <h1 className="text-3xl font-extrabold sm:text-4xl">{t("account.title")}</h1>
         <p className="text-sm text-gray-600 dark:text-gray-300">
            {t("account.subtitle")}
         </p>
@@ -478,12 +478,12 @@ export default function Account() {
                 Save from here because these buttons only affect the profile section above.
               </p>
             </div>
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <button
                 type="button"
                 onClick={resetProfileChanges}
                 disabled={!hasUnsavedChanges || saving}
-                className={`inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold border transition ${
+                className={`inline-flex w-full items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold border transition sm:w-auto ${
                   hasUnsavedChanges && !saving
                     ? "border-black/15 text-black hover:bg-black/5 dark:border-white/15 dark:text-white dark:hover:bg-white/10"
                     : "border-gray-200 text-gray-400 cursor-not-allowed dark:border-gray-700 dark:text-gray-500"
@@ -495,7 +495,7 @@ export default function Account() {
               <button
                 onClick={save}
                 disabled={saving || !hasUnsavedChanges}
-                className={`inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-sm font-semibold transition ${
+                className={`inline-flex w-full items-center justify-center gap-2 px-6 py-3 rounded-xl text-sm font-semibold transition sm:w-auto ${
                   hasUnsavedChanges
                     ? "bg-black text-white hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90"
                     : "bg-gray-200 text-gray-500 cursor-not-allowed dark:bg-gray-700 dark:text-gray-400"
@@ -566,11 +566,11 @@ export default function Account() {
         subtitle="Log out of your account or reset the preferences saved on this device."
       >
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div className="flex gap-3 md:ml-auto">
+          <div className="flex flex-col gap-3 sm:flex-row md:ml-auto">
             <button
               type="button"
               onClick={resetPreferences}
-              className="inline-flex items-center justify-center px-6 py-3 rounded-xl text-sm font-semibold border border-black/15 text-black hover:bg-black/5 dark:border-white/15 dark:text-white dark:hover:bg-white/10 transition"
+              className="inline-flex w-full items-center justify-center px-6 py-3 rounded-xl text-sm font-semibold border border-black/15 text-black hover:bg-black/5 dark:border-white/15 dark:text-white dark:hover:bg-white/10 transition sm:w-auto"
             >
               Reset Preferences
             </button>
@@ -578,11 +578,11 @@ export default function Account() {
             <button
               type="button"
               onClick={handleLogout}
-              className="inline-flex items-center justify-center px-6 py-3
+              className="inline-flex w-full items-center justify-center px-6 py-3
                    rounded-xl text-sm font-semibold
                    border border-red-400 text-red-600 bg-transparent
                    hover:bg-red-50 dark:hover:bg-red-900/20
-                   transition"
+                   transition sm:w-auto"
             >
               <LogOut className="w-4 h-4 mr-1" />
               {t("account.logout")}
