@@ -3,10 +3,7 @@ import React, { useEffect, useState } from "react";
 import { Eye, EyeOff, Mail, Lock, ArrowLeft } from "lucide-react";
 import { signInWithPopup } from "firebase/auth";
 import { auth, googleProvider, githubProvider } from "../firebaseClient";
-
-const API_BASE = import.meta.env.PROD
-  ? "https://wecast.onrender.com"
-  : "http://localhost:5000";
+import { API_BASE } from "../utils/api";
 
 const REMEMBERED_LOGIN_KEY = "rememberedLoginIdentifier";
   

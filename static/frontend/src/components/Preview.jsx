@@ -2,11 +2,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, Save } from "lucide-react";
+import { API_BASE } from "../utils/api";
 import WeCastAudioPlayer from "./WeCastAudioPlayer";
-
-const API_BASE = import.meta.env.PROD
-  ? "https://wecast.onrender.com"
-  : "http://localhost:5000";
 
 const getAuthHeaders = () => {
   const token = localStorage.getItem("token") || sessionStorage.getItem("token");

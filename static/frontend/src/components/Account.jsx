@@ -2,11 +2,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { LogOut, Check, AlertCircle, AlertTriangle, Save, RefreshCcw, Bell, PlayCircle, Palette } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { API_BASE } from "../utils/api";
 import { DEFAULT_ACCOUNT_PREFERENCES, loadAccountPreferences, saveAccountPreferences } from "../utils/accountPreferences";
-
-const API_BASE = import.meta.env.PROD
-  ? "https://wecast.onrender.com"
-  : "http://localhost:5000";
 
 /* ---- Dark mode helper ---- */
 function applyDarkMode(enabled) {

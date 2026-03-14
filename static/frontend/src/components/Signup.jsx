@@ -2,11 +2,7 @@ import React, { useMemo, useState } from "react";
 import { signInWithPopup } from "firebase/auth";
 import { auth, googleProvider, githubProvider } from "../firebaseClient";
 import { useTranslation } from "react-i18next";
-
-
-const API_BASE = import.meta.env.PROD
-  ? "https://wecast.onrender.com"
-  : "http://localhost:5000";
+import { API_BASE } from "../utils/api";
   
 function getRedirectParams() {
     const hash = window.location.hash || "";

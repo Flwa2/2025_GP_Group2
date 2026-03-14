@@ -93,8 +93,12 @@ app = Flask(__name__)
 FRONTEND_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://wecast-frontend.onrender.com",  
 ]
+FRONTEND_ORIGINS.extend(
+    origin.strip()
+    for origin in os.getenv("FRONTEND_ORIGINS", "").split(",")
+    if origin.strip()
+)
 
 CORS(
     app,
@@ -1382,6 +1386,59 @@ def _persist_cover_to_storage_and_doc(podcast_id: str, cover_b64: str, mime_type
 
     return cover_url, storage_path, thumb_b64, persist_error
 
+
+def _normalize_public_url(url: str) -> str:
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if url.startswith("http://") and not re.match(r"^http://(localhost|127\.0\.0\.1)(:|/|$)", url):
+        return "https://" + url[len("http://"):]
+    return url
+
+
+def _persist_audio_to_storage(audio_bytes: bytes, podcast_id: str, mime_type: str = "audio/mpeg"):
+    """
+    Persist generated audio to Firebase Storage and return a durable HTTPS URL.
+    Returns: (audio_url, storage_path, used_bucket, persist_error)
+    """
+    if not audio_bytes:
+        return "", "", "", "missing_audio_data"
+
+    safe_id = re.sub(r"[^A-Za-z0-9_-]", "", podcast_id or "") or "output"
+    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    storage_path = f"audio/{safe_id}/{ts}.mp3"
+
+    bucket = get_storage_bucket()
+    bucket_name = (getattr(bucket, "name", "") or "").strip()
+    candidates = [bucket_name] if bucket_name else []
+    if bucket_name.endswith(".appspot.com"):
+        candidates.append(bucket_name.replace(".appspot.com", ".firebasestorage.app"))
+    elif bucket_name.endswith(".firebasestorage.app"):
+        candidates.append(bucket_name.replace(".firebasestorage.app", ".appspot.com"))
+
+    last_err = None
+    audio_url = ""
+    used_bucket = ""
+    for bname in [x for x in candidates if x]:
+        try:
+            b = storage.bucket(bname)
+            blob = b.blob(storage_path)
+            blob.upload_from_string(audio_bytes, content_type=mime_type)
+            audio_url = blob.generate_signed_url(
+                expiration=timedelta(days=3650),
+                method="GET",
+            )
+            used_bucket = bname
+            break
+        except Exception as e:
+            last_err = e
+
+    persist_error = ""
+    if not audio_url:
+        persist_error = f"audio_storage_upload_failed buckets={candidates} last_error={last_err}"
+
+    return _normalize_public_url(audio_url), storage_path, used_bucket, persist_error
+
 @app.get("/api/podcasts/<podcast_id>/finalize")
 def api_finalize_get(podcast_id):
     user_id, err = _require_login_user()
@@ -1921,7 +1978,7 @@ def api_get_podcast(podcast_id):
         "outroMusic": podcast_data.get("outroMusic", ""),
         "category": podcast_data.get("category", ""),
         "language": podcast_data.get("language", "en"),
-        "audioUrl": podcast_data.get("audioUrl", ""),
+        "audioUrl": _normalize_public_url(podcast_data.get("audioUrl", "")),
         "editDraft": edit_draft,
     })
     
@@ -2137,7 +2194,7 @@ def api_episodes_list():
             "id": doc.id,
             "title": title or "Untitled Episode",
             "brief": _short_brief(brief),
-            "audioUrl": data.get("audioUrl") or "",
+            "audioUrl": _normalize_public_url(data.get("audioUrl") or ""),
             "style": data.get("style") or "",
             "scriptStyle": data.get("style") or "",
             "coverUrl": data.get("coverUrl") or "",
@@ -2466,23 +2523,45 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
     for item in audio_parts:
         final_audio += item
 
-    output_path = os.path.join("static", "output.mp3")
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     safe_id = re.sub(r"[^A-Za-z0-9_-]", "", podcast_id or "")
     if not safe_id:
         safe_id = "output"
     filename = f"output_{safe_id}.mp3"
     output_path = os.path.join("static", filename)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    final_audio.export(output_path, format="mp3")
+    audio_buffer = BytesIO()
+    final_audio.export(audio_buffer, format="mp3")
+    audio_bytes = audio_buffer.getvalue()
 
-    file_url = url_for("static", filename=filename, _external=True)
+    file_url, storage_path, storage_bucket_name, persist_error = _persist_audio_to_storage(
+        audio_bytes,
+        podcast_id=safe_id,
+        mime_type="audio/mpeg",
+    )
+
+    if not file_url:
+        with open(output_path, "wb") as fh:
+            fh.write(audio_bytes)
+        file_url = _normalize_public_url(url_for("static", filename=filename, _external=True))
+    else:
+        try:
+            with open(output_path, "wb") as fh:
+                fh.write(audio_bytes)
+        except Exception:
+            pass
 
     # store last transcript in session too 
     session["last_word_timeline"] = word_timeline
     session.modified = True
 
-    return True, {"url": file_url, "words": word_timeline}
+    return True, {
+        "url": file_url,
+        "words": word_timeline,
+        "storagePath": storage_path,
+        "storageBucket": storage_bucket_name,
+        "storageError": persist_error,
+    }
 
 @app.post("/api/audio")
 def api_audio():
@@ -2509,8 +2588,10 @@ def api_audio():
     if not ok:
         return jsonify(error=result), 400
 
+    audio_url = _normalize_public_url(result.get("url") or "")
+
     # keep audio in session 
-    session["last_audio_url"] = result["url"]
+    session["last_audio_url"] = audio_url
     session.modified = True
 
     # NEW: save live transcript (word timeline) to Firestore
@@ -2534,8 +2615,10 @@ def api_audio():
                 podcast_ref.set({
                     "transcriptText": transcript_text,
                     "transcriptUpdatedAt": firestore.SERVER_TIMESTAMP,
-                    "audioUrl": result["url"],
+                    "audioUrl": audio_url,
                     "audioUpdatedAt": firestore.SERVER_TIMESTAMP,
+                    "audioPath": result.get("storagePath", ""),
+                    "audioBucket": result.get("storageBucket", ""),
                 }, merge=True)
 
                 # Save full word timeline in a subcollection doc
@@ -2557,7 +2640,13 @@ def api_audio():
         else:
             print("WARN: podcastId not found. Not saving transcript.")
 
-    return jsonify(url=result["url"], words=result["words"])
+    return jsonify(
+        url=audio_url,
+        words=result["words"],
+        storagePath=result.get("storagePath", ""),
+        storageBucket=result.get("storageBucket", ""),
+        storageError=result.get("storageError", ""),
+    )
 
 @app.get("/api/transcript/last")
 def api_transcript_last():
@@ -2710,7 +2799,7 @@ def save_all_podcast(podcast_id):
 
     payload = request.get_json(silent=True) or {}
     title = (payload.get("title") or "").strip()
-    audio_url = (payload.get("audioUrl") or payload.get("audio_url") or "").strip()
+    audio_url = _normalize_public_url((payload.get("audioUrl") or payload.get("audio_url") or "").strip())
     summary = payload.get("summary")
     chapters = payload.get("chapters")
     words = payload.get("words")
@@ -2776,7 +2865,7 @@ def api_audio_last():
     Return the last generated audio URL for this session, if any.
     Used so the audio does not 'disappear' after refresh or navigation.
     """
-    url = session.get("last_audio_url")
+    url = _normalize_public_url(session.get("last_audio_url") or "")
     return jsonify(url=url or None)
 
 @app.route("/api/signup", methods=["POST"])

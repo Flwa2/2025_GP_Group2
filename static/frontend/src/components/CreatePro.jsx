@@ -25,13 +25,10 @@ import {
 } from "lucide-react";
 import WeCastAudioPlayer from "./WeCastAudioPlayer";
 import Modal from "../components/Modal";
+import { API_BASE } from "../utils/api";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
 import { shouldAutoplayVoicePreview, shouldShowEditingNotifications } from "../utils/accountPreferences";
-
-const API_BASE = import.meta.env.PROD
-    ? "https://wecast.onrender.com"
-    : "http://localhost:5000";
 
 const splitList = (value) => {
     if (Array.isArray(value)) {
