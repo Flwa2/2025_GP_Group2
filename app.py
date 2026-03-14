@@ -90,15 +90,19 @@ def localize_script_structure(script: str, language: str) -> str:
 # ------------------------------------------------------------
 
 app = Flask(__name__)
-FRONTEND_ORIGINS = [
+FRONTEND_ORIGINS = {
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-]
-FRONTEND_ORIGINS.extend(
+    # Safe Render defaults for this project, even if env sync is missing.
+    "https://wecast-frontend.onrender.com",
+    "https://wecast.onrender.com",
+}
+FRONTEND_ORIGINS.update(
     origin.strip()
     for origin in os.getenv("FRONTEND_ORIGINS", "").split(",")
     if origin.strip()
 )
+FRONTEND_ORIGINS = sorted(FRONTEND_ORIGINS)
 
 CORS(
     app,
@@ -189,6 +193,29 @@ def get_current_user_email():
     except Exception as e:
         print("JWT decode failed:", e)
         return None
+
+
+def user_id_candidates(user_id):
+    value = (user_id or "").strip()
+    if not value:
+        return []
+    candidates = [value]
+    lowered = value.lower()
+    if lowered not in candidates:
+        candidates.append(lowered)
+    return candidates
+
+
+def user_ids_match(left, right):
+    return (left or "").strip().lower() == (right or "").strip().lower()
+
+
+def get_user_doc_by_candidates(user_id):
+    for candidate in user_id_candidates(user_id):
+        doc = db.collection("users").document(candidate).get()
+        if doc.exists:
+            return doc
+    return None
 
 # ------------------------------------------------------------
 # API Clients (OpenAI + ElevenLabs)
@@ -1796,10 +1823,9 @@ def api_me():
         return jsonify(error="Not logged in"), 401
 
     try:
-        user_ref = db.collection("users").document(user_id)
-        doc = user_ref.get()
+        doc = get_user_doc_by_candidates(user_id)
 
-        if not doc.exists:
+        if not doc or not doc.exists:
             return jsonify(error="User not found"), 404
 
         data = doc.to_dict() or {}
@@ -2129,94 +2155,99 @@ def api_episodes_list():
                 pass
         ref.delete()
 
-    query = db.collection("podcasts").where("userId", "==", user_id)
     now_utc = datetime.now(timezone.utc)
     recycle_cutoff = now_utc - timedelta(days=RECYCLE_BIN_RETENTION_DAYS)
     items = []
     recycle_items = []
-    for doc in query.stream():
-        data = doc.to_dict() or {}
-        deleted_at = _coerce_datetime(data.get("deletedAt"))
-        if deleted_at and deleted_at.tzinfo is None:
-            deleted_at = deleted_at.replace(tzinfo=timezone.utc)
-        if deleted_at and deleted_at <= recycle_cutoff:
-            _purge_episode_document(doc.reference)
-            continue
+    seen_doc_ids = set()
+    for candidate in user_id_candidates(user_id):
+        query = db.collection("podcasts").where("userId", "==", candidate)
+        for doc in query.stream():
+            if doc.id in seen_doc_ids:
+                continue
+            seen_doc_ids.add(doc.id)
+            data = doc.to_dict() or {}
+            deleted_at = _coerce_datetime(data.get("deletedAt"))
+            if deleted_at and deleted_at.tzinfo is None:
+                deleted_at = deleted_at.replace(tzinfo=timezone.utc)
+            if deleted_at and deleted_at <= recycle_cutoff:
+                _purge_episode_document(doc.reference)
+                continue
 
-        # Show only finalized/saved episodes.
-        # Legacy compatibility: older saved episodes may still carry status="draft"
-        # from historical flows, so we treat rich, finalized-looking records as saved.
-        status = str(data.get("status") or "").strip().lower()
-        if status == "deleted" and deleted_at:
-            is_saved = True
-            legacy_saved = False
-        else:
-            is_saved = status == "saved" or bool(data.get("savedAt"))
-            legacy_saved = (
-                status == "draft"
-                and bool(data.get("audioUrl"))
-                and bool(data.get("summary"))
-                and isinstance(data.get("chapters"), list)
-                and len(data.get("chapters")) > 0
+            # Show only finalized/saved episodes.
+            # Legacy compatibility: older saved episodes may still carry status="draft"
+            # from historical flows, so we treat rich, finalized-looking records as saved.
+            status = str(data.get("status") or "").strip().lower()
+            if status == "deleted" and deleted_at:
+                is_saved = True
+                legacy_saved = False
+            else:
+                is_saved = status == "saved" or bool(data.get("savedAt"))
+                legacy_saved = (
+                    status == "draft"
+                    and bool(data.get("audioUrl"))
+                    and bool(data.get("summary"))
+                    and isinstance(data.get("chapters"), list)
+                    and len(data.get("chapters")) > 0
+                )
+            if not (is_saved or legacy_saved):
+                continue
+
+            script_source = ""
+            script_final = ""
+            script_doc = (
+                db.collection("podcasts")
+                .document(doc.id)
+                .collection("scripts")
+                .document("main")
+                .get()
             )
-        if not (is_saved or legacy_saved):
-            continue
+            if script_doc.exists:
+                sdata = script_doc.to_dict() or {}
+                script_source = sdata.get("sourceText") or ""
+                script_final = sdata.get("finalScriptText") or ""
 
-        script_source = ""
-        script_final = ""
-        script_doc = (
-            db.collection("podcasts")
-            .document(doc.id)
-            .collection("scripts")
-            .document("main")
-            .get()
-        )
-        if script_doc.exists:
-            sdata = script_doc.to_dict() or {}
-            script_source = sdata.get("sourceText") or ""
-            script_final = sdata.get("finalScriptText") or ""
+            title = data.get("title") or ""
+            prefer_arabic_brief = _has_arabic(title) or (data.get("language") == "ar")
+            # Keep brief episode-specific first, and prefer Arabic text for Arabic episodes.
+            brief = _choose_best_brief(
+                [
+                    data.get("summary") or "",
+                    data.get("transcriptText") or "",
+                    script_final,
+                    script_source,
+                    data.get("description") or "",
+                ],
+                prefer_arabic=prefer_arabic_brief,
+            )
 
-        title = data.get("title") or ""
-        prefer_arabic_brief = _has_arabic(title) or (data.get("language") == "ar")
-        # Keep brief episode-specific first, and prefer Arabic text for Arabic episodes.
-        brief = _choose_best_brief(
-            [
-                data.get("summary") or "",
-                data.get("transcriptText") or "",
-                script_final,
-                script_source,
-                data.get("description") or "",
-            ],
-            prefer_arabic=prefer_arabic_brief,
-        )
+            payload = {
+                "id": doc.id,
+                "title": title or "Untitled Episode",
+                "brief": _short_brief(brief),
+                "audioUrl": _normalize_public_url(data.get("audioUrl") or ""),
+                "style": data.get("style") or "",
+                "scriptStyle": data.get("style") or "",
+                "coverUrl": data.get("coverUrl") or "",
+                "coverThumbB64": data.get("coverThumbB64") or "",
+                "createdAt": data.get("createdAt"),
+            }
 
-        payload = {
-            "id": doc.id,
-            "title": title or "Untitled Episode",
-            "brief": _short_brief(brief),
-            "audioUrl": _normalize_public_url(data.get("audioUrl") or ""),
-            "style": data.get("style") or "",
-            "scriptStyle": data.get("style") or "",
-            "coverUrl": data.get("coverUrl") or "",
-            "coverThumbB64": data.get("coverThumbB64") or "",
-            "createdAt": data.get("createdAt"),
-        }
+            draft_data = _serialize_edit_draft(_edit_draft_ref(doc.id).get())
+            if draft_data:
+                payload["hasEditDraft"] = True
+                payload["editDraftUpdatedAt"] = draft_data.get("updatedAt") or draft_data.get("savedAt") or ""
+            else:
+                payload["hasEditDraft"] = False
 
-        draft_data = _serialize_edit_draft(_edit_draft_ref(doc.id).get())
-        if draft_data:
-            payload["hasEditDraft"] = True
-            payload["editDraftUpdatedAt"] = draft_data.get("updatedAt") or draft_data.get("savedAt") or ""
-        else:
-            payload["hasEditDraft"] = False
-
-        if deleted_at:
-            payload["deletedAt"] = deleted_at.isoformat()
-            payload["deleteAfter"] = (
-                deleted_at + timedelta(days=RECYCLE_BIN_RETENTION_DAYS)
-            ).isoformat()
-            recycle_items.append(payload)
-        else:
-            items.append(payload)
+            if deleted_at:
+                payload["deletedAt"] = deleted_at.isoformat()
+                payload["deleteAfter"] = (
+                    deleted_at + timedelta(days=RECYCLE_BIN_RETENTION_DAYS)
+                ).isoformat()
+                recycle_items.append(payload)
+            else:
+                items.append(payload)
 
     return jsonify(
         items=items,
