@@ -84,3 +84,4 @@ elevenlabs
 firebase-admin
 pydub
 Pillow
+boto3

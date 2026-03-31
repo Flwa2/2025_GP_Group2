@@ -64,7 +64,7 @@ Thumbs.db
 # Audio outputs
 static/output_*.mp3
 static/voice_output.mp3
-
+static/generated_audio/
 
 # Node junk
 static/frontend/node_modules/

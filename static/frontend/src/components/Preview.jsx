@@ -196,12 +196,22 @@ export default function Preview() {
         const podcast = data?.podcast || {};
         if (!isMounted) return;
 
-        if (podcast.audioUrl) {
+        if (podcast.audioKey) {
+          const audioRes = await fetch(`${API_BASE}/api/audio/${episodeId}`, {
+            credentials: "include",
+          });
+          const audioData = await audioRes.json();
+
+          if (audioRes.ok && audioData?.url) {
+            setAudioUrl(audioData.url);
+          }
+        } else if (podcast.audioUrl) {
           const baseUrl = podcast.audioUrl.startsWith("http")
             ? podcast.audioUrl
             : `${API_BASE}${podcast.audioUrl}`;
-          setAudioUrl(`${baseUrl}${baseUrl.includes("?") ? "&" : "?"}t=${Date.now()}`);
+          setAudioUrl(baseUrl);
         }
+
         if (podcast.title) setTitle(podcast.title);
 
         const savedSummary = podcast.summary;

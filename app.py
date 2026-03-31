@@ -129,6 +129,9 @@ Session(app)
 # Load .env variables configuring ffmpeg for pydub
 load_dotenv()
 
+import boto3
+from botocore.client import Config
+
 # Get ffmpeg & ffprobe paths from .env
 ffmpeg_path = os.getenv("FFMPEG_PATH")
 ffprobe_path = os.getenv("FFPROBE_PATH")
@@ -142,7 +145,7 @@ if ffmpeg_path and os.path.exists(ffmpeg_path):
     ffmpeg_dir = os.path.dirname(ffmpeg_path)
     os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
 else:
-    print("âڑ ï¸ڈ ffmpeg_path missing or invalid")
+    print("WARNING: ffmpeg_path missing or invalid")
 
 if ffprobe_path and os.path.exists(ffprobe_path):
     AudioSegment.ffprobe = ffprobe_path
@@ -150,7 +153,7 @@ if ffprobe_path and os.path.exists(ffprobe_path):
     if ffprobe_dir not in os.environ.get("PATH", ""):
         os.environ["PATH"] = ffprobe_dir + os.pathsep + os.environ.get("PATH", "")
 else:
-    print("âڑ ï¸ڈ ffprobe_path missing or invalid")
+    print("WARNING: ffprobe_path missing or invalid")
 
 print("DEBUG AudioSegment.converter:", getattr(AudioSegment, "converter", None))
 print("DEBUG AudioSegment.ffprobe:", getattr(AudioSegment, "ffprobe", None))
@@ -185,6 +188,72 @@ def get_current_user_email():
     except Exception as e:
         print("JWT decode failed:", e)
         return None
+
+# ------------------------------------------------------------
+# Cloudflare R2 Config
+# ------------------------------------------------------------
+R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID")
+R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
+R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
+R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
+
+R2_ENDPOINT = (
+    f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+    if R2_ACCOUNT_ID else None
+)
+
+r2_client = None
+if all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME]):
+    r2_client = boto3.client(
+        "s3",
+        endpoint_url=R2_ENDPOINT,
+        aws_access_key_id=R2_ACCESS_KEY_ID,
+        aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+        config=Config(signature_version="s3v4"),
+        region_name="auto",
+    )
+else:
+    print("WARNING: R2 environment variables are missing. R2 client not initialized.")
+
+
+def upload_bytes_to_r2(file_bytes: bytes, object_key: str, content_type: str):
+    if not r2_client:
+        raise RuntimeError("R2 client is not configured.")
+
+    r2_client.put_object(
+        Bucket=R2_BUCKET_NAME,
+        Key=object_key,
+        Body=file_bytes,
+        ContentType=content_type,
+    )
+    return object_key
+
+
+def generate_r2_signed_url(object_key: str, expires_in: int = 3600):
+    if not r2_client:
+        raise RuntimeError("R2 client is not configured.")
+
+    return r2_client.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": R2_BUCKET_NAME,
+            "Key": object_key,
+        },
+        ExpiresIn=expires_in,
+    )
+
+
+def delete_from_r2(object_key: str):
+    if not r2_client:
+        raise RuntimeError("R2 client is not configured.")
+
+    r2_client.delete_object(Bucket=R2_BUCKET_NAME, Key=object_key)
+
+print("DEBUG R2_ACCOUNT_ID present:", bool(R2_ACCOUNT_ID))
+print("DEBUG R2_ACCESS_KEY_ID present:", bool(R2_ACCESS_KEY_ID))
+print("DEBUG R2_SECRET_ACCESS_KEY present:", bool(R2_SECRET_ACCESS_KEY))
+print("DEBUG R2_BUCKET_NAME:", R2_BUCKET_NAME)
+print("DEBUG R2_ENDPOINT:", R2_ENDPOINT)
 
 # ------------------------------------------------------------
 # API Clients (OpenAI + ElevenLabs)
@@ -578,7 +647,7 @@ Transform the following text into a structured podcast script:
 
     if PLACEHOLDER not in raw_script:
         m = re.search(
-            r"(episode of\s+[\"“«](.+?)[\"”»]",
+            r'episode of\s+["“«](.+?)["”»]',
             raw_script,
             flags=re.IGNORECASE,
         )
@@ -1322,15 +1391,26 @@ def _make_cover_thumb_b64(image_bytes: bytes, size: int = 256) -> str:
     except Exception:
         return ""
 
+def _persist_avatar_to_r2(user_id: str, image_bytes: bytes, mime_type: str):
+    ext = _cover_ext_from_mime(mime_type)
+    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    object_key = f"avatars/{user_id}/{ts}.{ext}"
+
+    upload_bytes_to_r2(image_bytes, object_key, mime_type)
+    signed_url = generate_r2_signed_url(object_key, expires_in=3600)
+
+    return signed_url, object_key
 
 def _persist_cover_to_storage_and_doc(podcast_id: str, cover_b64: str, mime_type: str = "image/png"):
     """
-    Persist cover image to Firebase Storage when possible, and always store
-    a compact DB thumbnail fallback (coverThumbB64) for Episodes cards.
+    Persist cover image to Cloudflare R2 and store a small thumbnail in Firestore.
     Returns: (cover_url, storage_path, thumb_b64, persist_error)
     """
     if not cover_b64:
         return "", "", "", "missing_cover_data"
+    
+    if cover_b64.startswith("data:"):
+        cover_b64 = cover_b64.split(",", 1)[1]
 
     img_bytes = base64.b64decode(cover_b64)
     thumb_b64 = _make_cover_thumb_b64(img_bytes)
@@ -1338,47 +1418,25 @@ def _persist_cover_to_storage_and_doc(podcast_id: str, cover_b64: str, mime_type
     ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     storage_path = f"covers/{podcast_id}/{ts}.{ext}"
 
-    bucket = get_storage_bucket()
-    bucket_name = (getattr(bucket, "name", "") or "").strip()
-    candidates = [bucket_name] if bucket_name else []
-    if bucket_name.endswith(".appspot.com"):
-        candidates.append(bucket_name.replace(".appspot.com", ".firebasestorage.app"))
-    elif bucket_name.endswith(".firebasestorage.app"):
-        candidates.append(bucket_name.replace(".firebasestorage.app", ".appspot.com"))
-
-    last_err = None
     cover_url = ""
-    used_bucket = ""
-    for bname in [x for x in candidates if x]:
-        try:
-            b = storage.bucket(bname)
-            blob = b.blob(storage_path)
-            blob.upload_from_string(img_bytes, content_type=mime_type)
-            # Signed URL (long-lived) avoids ACL/public-bucket requirements.
-            cover_url = blob.generate_signed_url(
-                expiration=timedelta(days=3650),
-                method="GET",
-            )
-            used_bucket = bname
-            break
-        except Exception as e:
-            last_err = e
+    persist_error = ""
+
+    try:
+        upload_bytes_to_r2(img_bytes, storage_path, mime_type)
+        cover_url = generate_r2_signed_url(storage_path, expires_in=3600)
+    except Exception as e:
+        persist_error = f"r2_upload_failed: {e}"
 
     db.collection("podcasts").document(podcast_id).set(
         {
             "coverUrl": cover_url,
             "coverPath": storage_path,
             "coverMimeType": mime_type,
-            "coverBucket": used_bucket,
             "coverThumbB64": thumb_b64,
             "coverUpdatedAt": firestore.SERVER_TIMESTAMP,
         },
         merge=True,
     )
-
-    persist_error = ""
-    if not cover_url:
-        persist_error = f"storage_upload_failed buckets={candidates} last_error={last_err}"
 
     return cover_url, storage_path, thumb_b64, persist_error
 
@@ -1699,18 +1757,14 @@ def api_cover_clear(podcast_id):
     if err:
         return err
 
-    _, err = _assert_podcast_owner(podcast_id, user_id)
+    pdata, err = _assert_podcast_owner(podcast_id, user_id)
     if err:
         return err
 
     try:
-        pdata, _ = _assert_podcast_owner(podcast_id, user_id)
         old_path = (pdata or {}).get("coverPath") or ""
         if old_path:
-            bucket = get_storage_bucket()
-            blob = bucket.blob(old_path)
-            if blob.exists():
-                blob.delete()
+            delete_from_r2(old_path)
     except Exception as e:
         print("Cover delete warning:", e)
 
@@ -1733,6 +1787,7 @@ def api_me():
     """
     Return the logged-in user's basic profile from Firestore.
     Uses the session user_id set during /api/login or /api/social-login.
+    Refreshes avatarUrl from R2 if avatarKey exists.
     """
     user_id = session.get("user_id") or get_current_user_email()
     if not user_id:
@@ -1747,12 +1802,31 @@ def api_me():
 
         data = doc.to_dict() or {}
 
+        avatar_url = data.get("avatarUrl", "")
+        avatar_key = data.get("avatarKey", "")
+
+        if avatar_key:
+            try:
+                avatar_url = generate_r2_signed_url(avatar_key, expires_in=3600)
+                user_ref.set(
+                    {
+                        "avatarUrl": avatar_url,
+                        "updatedAt": firestore.SERVER_TIMESTAMP,
+                    },
+                    merge=True,
+                )
+            except Exception as e:
+                print(f"Avatar signed URL refresh failed: {e}")
+
         return jsonify(
             email=data.get("email", user_id),
             displayName=data.get("name", data.get("displayName", "WeCast User")),
             bio=data.get("bio", "I create AI-powered podcasts."),
-            avatarUrl=data.get("avatarUrl", ""),
-            handle=data.get("handle", f"@{data.get('name', 'user').lower().replace(' ', '')}"),
+            avatarUrl=avatar_url,
+            handle=data.get(
+                "handle",
+                f"@{data.get('name', 'user').lower().replace(' ', '')}"
+            ),
             createdAt=data.get("created_at"),
         )
     except Exception as e:
@@ -1789,24 +1863,12 @@ def api_profile_update():
                 return jsonify(error="Image size should be less than 5MB"), 400
             
             try:
-                # Upload to Firebase Storage
-                bucket = get_storage_bucket()
-                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                # Sanitize filename
-                safe_filename = re.sub(r'[^a-zA-Z0-9._-]', '', avatar_file.filename)
-                filename = f"avatars/{user_id}/{timestamp}_{safe_filename}"
-                blob = bucket.blob(filename)
-                
-                # Set content type
-                blob.upload_from_string(
-                    image_bytes, 
-                    content_type=avatar_file.content_type
+                signed_url, avatar_key = _persist_avatar_to_r2(
+                    user_id=user_id,
+                    image_bytes=image_bytes,
+                    mime_type=avatar_file.content_type,
                 )
-                
-                # Make publicly accessible
-                blob.make_public()
-                avatar_url = blob.public_url
-                
+                avatar_url = signed_url
             except Exception as e:
                 print(f"Avatar upload error: {e}")
                 return jsonify(error="Failed to upload avatar"), 500
@@ -1832,6 +1894,8 @@ def api_profile_update():
     
     if avatar_url:
         update_data['avatarUrl'] = avatar_url
+    if 'avatar_key' in locals():
+        update_data['avatarKey'] = avatar_key
     
     update_data['updatedAt'] = firestore.SERVER_TIMESTAMP
 
@@ -1861,6 +1925,36 @@ def api_profile_update():
         print(f"Profile update error: {e}")
         return jsonify(error="Failed to update profile"), 500
 
+@app.get("/api/profile/avatar")
+def api_profile_avatar():
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    user_ref = db.collection("users").document(user_id)
+    doc = user_ref.get()
+    if not doc.exists:
+        return jsonify(error="User not found"), 404
+
+    data = doc.to_dict() or {}
+    avatar_key = data.get("avatarKey") or ""
+
+    if not avatar_key:
+        return jsonify(avatarUrl="")
+
+    try:
+        signed_url = generate_r2_signed_url(avatar_key, expires_in=3600)
+        user_ref.set(
+            {
+                "avatarUrl": signed_url,
+                "updatedAt": firestore.SERVER_TIMESTAMP,
+            },
+            merge=True,
+        )
+        return jsonify(avatarUrl=signed_url)
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+    
 @app.get("/api/podcast/<podcast_id>")
 def api_get_podcast(podcast_id):
     """Fetch full podcast data for editing"""
@@ -2458,7 +2552,6 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
     final_audio = AudioSegment.silent(duration=500)
     timeline_offset_final = 0.5  # because we added 500ms silence
 
-    # shift EVERYTHING by 0.5 sec to match the initial silence
     for w in word_timeline:
         w["start"] += timeline_offset_final
         w["end"] += timeline_offset_final
@@ -2466,23 +2559,30 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
     for item in audio_parts:
         final_audio += item
 
-    output_path = os.path.join("static", "output.mp3")
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     safe_id = re.sub(r"[^A-Za-z0-9_-]", "", podcast_id or "")
     if not safe_id:
         safe_id = "output"
-    filename = f"output_{safe_id}.mp3"
-    output_path = os.path.join("static", filename)
 
-    final_audio.export(output_path, format="mp3")
+    local_dir = os.path.join("static", "generated_audio")
+    os.makedirs(local_dir, exist_ok=True)
+    local_filename = f"output_{safe_id}.mp3"
+    local_path = os.path.join(local_dir, local_filename)
 
-    file_url = url_for("static", filename=filename, _external=True)
+    final_audio.export(local_path, format="mp3")
 
-    # store last transcript in session too 
-    session["last_word_timeline"] = word_timeline
-    session.modified = True
+    # Upload to R2
+    with open(local_path, "rb") as f:
+        mp3_bytes = f.read()
 
-    return True, {"url": file_url, "words": word_timeline}
+    object_key = f"episodes/{safe_id}/{local_filename}"
+    upload_bytes_to_r2(mp3_bytes, object_key, "audio/mpeg")
+    signed_url = generate_r2_signed_url(object_key, expires_in=3600)
+
+    return True, {
+        "url": signed_url,
+        "audioKey": object_key,
+        "words": word_timeline,
+    }
 
 @app.post("/api/audio")
 def api_audio():
@@ -2535,6 +2635,7 @@ def api_audio():
                     "transcriptText": transcript_text,
                     "transcriptUpdatedAt": firestore.SERVER_TIMESTAMP,
                     "audioUrl": result["url"],
+                    "audioKey": result.get("audioKey", ""),
                     "audioUpdatedAt": firestore.SERVER_TIMESTAMP,
                 }, merge=True)
 
@@ -2557,8 +2658,38 @@ def api_audio():
         else:
             print("WARN: podcastId not found. Not saving transcript.")
 
-    return jsonify(url=result["url"], words=result["words"])
+    return jsonify(
+        url=result["url"],
+        audioKey=result.get("audioKey", ""),
+        words=result["words"]
+    )
 
+@app.get("/api/audio/<podcast_id>")
+def get_audio(podcast_id):
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    ref = db.collection("podcasts").document(podcast_id)
+    doc = ref.get()
+
+    if not doc.exists:
+        return jsonify(error="Podcast not found"), 404
+
+    data = doc.to_dict() or {}
+    if data.get("userId") != user_id:
+        return jsonify(error="Forbidden"), 403
+
+    audio_key = data.get("audioKey")
+    if not audio_key:
+        return jsonify(error="Audio not found"), 404
+
+    try:
+        signed_url = generate_r2_signed_url(audio_key, expires_in=3600)
+        return jsonify(url=signed_url)
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+    
 @app.get("/api/transcript/last")
 def api_transcript_last():
     words = session.get("last_word_timeline") or None
@@ -2711,6 +2842,7 @@ def save_all_podcast(podcast_id):
     payload = request.get_json(silent=True) or {}
     title = (payload.get("title") or "").strip()
     audio_url = (payload.get("audioUrl") or payload.get("audio_url") or "").strip()
+    audio_key = (payload.get("audioKey") or "").strip()
     summary = payload.get("summary")
     chapters = payload.get("chapters")
     words = payload.get("words")
@@ -2722,6 +2854,8 @@ def save_all_podcast(podcast_id):
     if audio_url:
         updates["audioUrl"] = audio_url
         updates["audioUpdatedAt"] = firestore.SERVER_TIMESTAMP
+    if audio_key:
+        updates["audioKey"] = audio_key
     if summary is not None:
         updates["summary"] = summary
         updates["summaryUpdatedAt"] = firestore.SERVER_TIMESTAMP

@@ -1164,7 +1164,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
             };
             sessionStorage.setItem("wecast_preview", JSON.stringify(previewPayload));
 
-            setGeneratedAudio(baseAudioUrl + "?t=" + Date.now());
+            setGeneratedAudio(baseAudioUrl);
 
             setToast({
             type: "success",
