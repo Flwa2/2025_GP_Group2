@@ -660,7 +660,9 @@ export default function Episodes() {
                   <div className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">{loadError}</div>
                 ) : filtered.length === 0 ? (
                   <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white/90 dark:bg-neutral-900/70 p-5 text-sm text-black/70 dark:text-white/70">
-                    {activeFilter === "deleted"
+                    {q.trim()
+                      ? t("episodes.searchEmpty")
+                      : activeFilter === "deleted"
                         ? t("episodes.recycle.empty")
                       : t("episodes.empty")}
                   </div>
@@ -675,8 +677,8 @@ export default function Episodes() {
                           : "border-black/10 dark:border-white/10"
                       } ${isRTL ? "text-right" : "text-left"}`}
                     >
-                      <div className={`flex flex-col items-stretch sm:flex-row ${isRTL ? "sm:flex-row-reverse" : ""}`}>
-                        <div className={`flex flex-1 min-w-0 ${isRTL ? "flex-row-reverse text-right" : "text-left"}`}>
+                      <div className="flex flex-col items-stretch sm:flex-row">
+                        <div className={`flex flex-1 min-w-0 ${isRTL ? "text-right" : "text-left"}`}>
                           <div className={`min-h-[112px] w-full sm:w-[7.5rem] md:w-32 shrink-0 overflow-hidden bg-neutral-100/80 dark:bg-white/10 ${isRTL ? "sm:border-l border-black/10 dark:border-white/15" : "sm:border-r border-black/10 dark:border-white/15"}`}>
                             <EpisodeCover title={ep.title} coverUrl={ep.coverUrl} coverThumbB64={ep.coverThumbB64} />
                           </div>
@@ -714,9 +716,9 @@ export default function Episodes() {
                           </div>
                         </div>
 
-                        <div className={`flex flex-wrap items-start gap-2 border-t border-black/5 p-3.5 sm:border-t-0 sm:p-4 ${isRTL ? "sm:flex-row-reverse sm:pr-0" : "sm:pl-0"}`}>
+                        <div className={`flex flex-wrap items-start gap-2 border-t border-black/5 p-3.5 sm:border-t-0 sm:p-4 ${isRTL ? "sm:pr-0" : "sm:pl-0"}`}>
                           {selectedEpisodeId === ep.id && (
-                            <span className="inline-flex h-9 items-center gap-1 px-1 text-xs font-semibold text-purple-500">
+                            <span className={`inline-flex h-9 items-center gap-1 px-1 text-xs font-semibold text-purple-500 ${isRTL ? "sm:order-5" : ""}`}>
                               <Check className="h-3 w-3" />
                               {t("episodes.card.selected")}
                             </span>

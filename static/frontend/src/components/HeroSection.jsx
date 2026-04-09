@@ -3,8 +3,10 @@ import CurvedWeCast from "./CurvedWeCast";
 import { useTranslation } from "react-i18next";
 
 function HeroSection() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const isRTL = i18n.language === "ar";
   const [flashMessage, setFlashMessage] = useState("");
+  const heroTitleLines = String(t("Give Your Words a Voice with WeCast")).split("\n");
 
   useEffect(() => {
     const msg = sessionStorage.getItem("wecast:flash");
@@ -37,15 +39,19 @@ function HeroSection() {
         </div>
       )}
 
-      <div className="section-shell section-block relative grid grid-cols-1 items-center gap-8 pt-12 sm:pt-16 lg:grid-cols-2 lg:gap-10 lg:pt-24">
-        <div className="order-1 space-y-4 text-left sm:space-y-5">
-          <h1 className="max-w-[11ch] text-[2.55rem] font-black leading-[0.95] tracking-tight text-black sm:max-w-xl sm:text-6xl dark:text-gray-100">
-            {t("Give Your Words a Voice with WeCast")}
+      <div className="section-shell section-block relative grid grid-cols-1 items-center gap-8 pt-8 sm:pt-16 lg:grid-cols-2 lg:gap-10 lg:pt-24">
+        <div className={`order-1 space-y-3 sm:space-y-5 ${isRTL ? "text-right" : "text-left"}`}>
+          <h1 className={`text-[2.05rem] font-black leading-[0.94] tracking-tight text-black min-[380px]:text-[2.25rem] sm:text-6xl dark:text-gray-100 ${isRTL ? "ml-auto max-w-[12.4ch] sm:max-w-[12.8ch]" : "max-w-[12ch] min-[380px]:max-w-[13ch] sm:max-w-xl"}`}>
+            {heroTitleLines.map((line, index) => (
+              <span key={`${line}-${index}`} className="block whitespace-nowrap">
+                {line}
+              </span>
+            ))}
           </h1>
-          <p className="max-w-[32rem] text-lg leading-8 text-black/78 sm:text-[1.35rem] dark:text-gray-200">
+          <p className={`text-[0.98rem] leading-7 text-black/78 sm:text-[1.35rem] sm:leading-8 dark:text-gray-200 ${isRTL ? "ml-auto max-w-[32rem]" : "max-w-[32rem]"}`}>
             {t("Hero Description")}
           </p>
-          <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:flex-wrap sm:items-center">
+          <div className={`flex flex-col gap-3 pt-1 sm:flex-wrap sm:items-center ${isRTL ? "w-full sm:ml-auto sm:max-w-[32rem] sm:flex-row sm:justify-start" : "sm:flex-row"}`}>
             <button
               onClick={navigateToCreate}
               className="btn-primary w-full justify-center sm:w-auto"
@@ -56,19 +62,22 @@ function HeroSection() {
               href="#about"
               className="btn-secondary w-full justify-center text-center sm:w-auto"
             >
-              {t("Learn More")}
+              {isRTL ? "اعرف المزيد" : t("Learn More")}
             </a>
           </div>
         </div>
 
-        <div className="order-2 relative min-h-[250px] sm:min-h-[300px] md:min-h-[350px]">
-          <div className="absolute left-1/2 top-[56%] z-20 w-fit -translate-x-1/2 -translate-y-1/2 sm:top-1/2">
-            <div dir="ltr" className="inline-block drop-shadow-md">
-              <CurvedWeCast variant="heroStable" className="text-[4.25rem] sm:text-6xl md:text-7xl" />
+        <div className="order-2 relative min-h-[200px] sm:min-h-[300px] md:min-h-[350px]">
+          <div className="absolute left-1/2 top-[50%] z-20 w-fit -translate-x-1/2 -translate-y-1/2 sm:top-1/2">
+            <div dir="ltr" className="inline-block">
+              <CurvedWeCast
+                variant="heroStable"
+                className="text-[3.2rem] min-[380px]:text-[3.7rem] sm:text-6xl md:text-7xl"
+              />
             </div>
           </div>
 
-          <div className="absolute left-[8%] top-[18%] rotate-12 text-sm font-semibold text-black dark:text-gray-100 sm:text-base">
+          <div className="absolute left-[8%] top-[18%] hidden rotate-12 text-sm font-semibold text-black dark:text-gray-100 sm:block sm:text-base">
             <span className="animate-pulse body-sm">{t("Start Casting!!")}</span>
             <div className="relative mt-2 h-6 w-6">
               <div className="absolute inset-0 rounded-full bg-pink-bright animate-spin" />
@@ -77,7 +86,7 @@ function HeroSection() {
             </div>
           </div>
 
-          <div className="absolute right-[2%] top-[18%] -rotate-12 text-sm font-semibold text-black dark:text-gray-100 sm:text-base">
+          <div className="absolute right-[2%] top-[18%] hidden -rotate-12 text-sm font-semibold text-black dark:text-gray-100 sm:block sm:text-base">
             <span className="animate-pulse body-sm">{t("Turn Text to speech!")}</span>
             <div className="relative mt-2 h-6 w-6">
               <div className="absolute inset-0 rounded-full bg-blue-bright animate-spin" style={{ animationDirection: "reverse" }} />
@@ -86,15 +95,15 @@ function HeroSection() {
             </div>
           </div>
 
-          <div className="pointer-events-none absolute left-[16%] top-[62%] z-10 h-4 w-4 rounded-full bg-purple-medium animate-bounce" />
-          <div className="pointer-events-none absolute right-[14%] top-[66%] z-10 h-3 w-3 rounded-full bg-green-bright animate-pulse" />
-          <div className="pointer-events-none absolute right-[4%] top-[62%] z-10 h-5 w-5 rounded-full bg-yellow-bright/90 animate-pulse sm:h-6 sm:w-6 sm:top-[56%] sm:right-[2%]" />
-          <div className="pointer-events-none absolute left-[26%] top-[8%] z-10 h-8 w-8 rounded-full border-2 border-purple-medium/60 animate-pulse sm:h-10 sm:w-10" />
-          <div className="pointer-events-none absolute right-[20%] top-[18%] z-10 h-8 w-8 rounded-full border-2 border-pink-bright/70 animate-pulse sm:h-10 sm:w-10" style={{ animationDelay: "0.5s" }} />
+          <div className="pointer-events-none absolute left-[16%] top-[62%] z-10 h-3.5 w-3.5 rounded-full bg-purple-medium animate-bounce sm:h-4 sm:w-4 sm:top-[62%]" />
+          <div className="pointer-events-none absolute right-[14%] top-[64%] z-10 h-3 w-3 rounded-full bg-green-bright animate-pulse sm:top-[66%]" />
+          <div className="pointer-events-none absolute right-[8%] top-[58%] z-10 h-4 w-4 rounded-full bg-yellow-bright/90 animate-pulse sm:h-6 sm:w-6 sm:top-[56%] sm:right-[2%]" />
+          <div className="pointer-events-none absolute left-[24%] top-[12%] z-10 hidden h-8 w-8 rounded-full border-2 border-purple-medium/60 animate-pulse sm:block sm:h-10 sm:w-10" />
+          <div className="pointer-events-none absolute right-[20%] top-[18%] z-10 hidden h-8 w-8 rounded-full border-2 border-pink-bright/70 animate-pulse sm:block sm:h-10 sm:w-10" style={{ animationDelay: "0.5s" }} />
 
-          <div className="pointer-events-none absolute left-[30%] top-[30%] z-10 h-2.5 w-2.5 rounded-full bg-pink-bright animate-bounce" />
-          <div className="pointer-events-none absolute left-[44%] top-[74%] z-10 h-3 w-3 rounded-full bg-blue-bright animate-pulse sm:top-[68%]" />
-          <div className="pointer-events-none absolute right-[28%] top-[30%] z-10 h-3 w-3 rounded-full bg-orange-bright animate-bounce" style={{ animationDelay: "0.2s" }} />
+          <div className="pointer-events-none absolute left-[28%] top-[28%] z-10 h-2.5 w-2.5 rounded-full bg-pink-bright animate-bounce" />
+          <div className="pointer-events-none absolute left-[44%] top-[70%] z-10 h-3 w-3 rounded-full bg-blue-bright animate-pulse sm:top-[68%]" />
+          <div className="pointer-events-none absolute right-[26%] top-[28%] z-10 h-3 w-3 rounded-full bg-orange-bright animate-bounce" style={{ animationDelay: "0.2s" }} />
           <div className="pointer-events-none absolute right-[36%] top-[66%] z-10 hidden h-9 w-9 rounded-full border-2 border-green-bright/70 animate-pulse sm:block sm:top-[58%]" style={{ animationDelay: "0.35s" }} />
           <div className="pointer-events-none absolute left-[38%] top-[22%] z-10 hidden text-lg text-purple-medium/80 animate-pulse sm:block">*</div>
           <div className="pointer-events-none absolute right-[34%] top-[76%] z-10 hidden text-base text-pink-bright/80 animate-bounce sm:block sm:top-[70%]">+</div>

@@ -8,11 +8,6 @@ export default function Header() {
   const [hash, setHash] = useState(window.location.hash || "#/");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { i18n, t } = useTranslation();
-  const isStudioSurface =
-    hash.startsWith("#/episodes") ||
-    hash.startsWith("#/create") ||
-    hash.startsWith("#/preview") ||
-    hash.startsWith("#/edit-podcast");
 
   const setLanguage = (newLang) => {
     if (i18n.language === newLang) return;
@@ -64,10 +59,8 @@ export default function Header() {
   ];
 
   return (
-    <header className={`fixed top-0 inset-x-0 z-50 backdrop-blur-md border-b text-black dark:text-white ${
-      isStudioSurface
-        ? "bg-[#efe4c8]/88 border-black/10 dark:bg-neutral-950/70 dark:border-white/10"
-        : "bg-white/20 border-black/10 dark:bg-black/40 dark:border-white/10"
+    <header className={`fixed top-0 inset-x-0 z-50 border-b text-black dark:text-white ${
+      "bg-white/78 border-black/10 shadow-[0_10px_30px_rgba(15,23,42,0.08)] supports-[backdrop-filter]:bg-white/62 supports-[backdrop-filter]:backdrop-blur-xl dark:bg-[#0f1020]/82 dark:border-white/10 dark:shadow-[0_10px_30px_rgba(0,0,0,0.28)] dark:supports-[backdrop-filter]:bg-[#0f1020]/70"
     }`}>
       <nav className="section-shell h-16 grid grid-cols-[1fr_auto_1fr] items-center gap-3">
         <div className="flex min-w-0 items-center gap-2 justify-self-start">

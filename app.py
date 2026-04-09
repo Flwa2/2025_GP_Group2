@@ -26,6 +26,7 @@ import jwt
 from firebase_init import db, get_storage_bucket
 from PIL import Image, UnidentifiedImageError
 import json
+import html
 
 print("DEBUG in app.py:", db)
 
@@ -254,6 +255,317 @@ print("DEBUG R2_ACCESS_KEY_ID present:", bool(R2_ACCESS_KEY_ID))
 print("DEBUG R2_SECRET_ACCESS_KEY present:", bool(R2_SECRET_ACCESS_KEY))
 print("DEBUG R2_BUCKET_NAME:", R2_BUCKET_NAME)
 print("DEBUG R2_ENDPOINT:", R2_ENDPOINT)
+
+
+def is_reasonably_valid_email(email: str) -> bool:
+    value = (email or "").strip()
+    if not value or len(value) > 254:
+        return False
+    if not re.match(r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}$", value, re.IGNORECASE):
+        return False
+
+    local_part, _, domain = value.rpartition("@")
+    if not local_part or not domain:
+        return False
+    if ".." in local_part or ".." in domain:
+        return False
+    if local_part.startswith(".") or local_part.endswith("."):
+        return False
+
+    labels = domain.split(".")
+    if any(not label or label.startswith("-") or label.endswith("-") for label in labels):
+        return False
+
+    return True
+
+
+def normalize_auth_provider(provider_value, password_hash=None):
+    raw = (provider_value or "").strip().lower()
+    if raw in {"password", "email", "email_password"}:
+        return "password"
+    if "google" in raw:
+        return "google"
+    if "github" in raw:
+        return "github"
+    if password_hash:
+        return "password"
+    return raw or "unknown"
+
+
+def user_id_candidates(user_id):
+    value = (user_id or "").strip()
+    if not value:
+        return []
+    candidates = [value]
+    lowered = value.lower()
+    if lowered not in candidates:
+        candidates.append(lowered)
+    return candidates
+
+
+def user_ids_match(left, right):
+    return (left or "").strip().lower() == (right or "").strip().lower()
+
+
+def get_user_doc_by_candidates(user_id):
+    for candidate in user_id_candidates(user_id):
+        doc = db.collection("users").document(candidate).get()
+        if doc.exists:
+            return doc
+    return None
+
+
+def _wecast_frontend_url():
+    base = (
+        os.getenv("WECAST_APP_URL")
+        or os.getenv("FRONTEND_URL")
+        or "https://wecast-frontend.onrender.com"
+    ).strip()
+    return base.rstrip("/")
+
+
+def _wecast_logo_url():
+    return (os.getenv("WECAST_LOGO_URL") or f"{_wecast_frontend_url()}/logo.png").strip()
+
+
+def _firebase_web_api_key():
+    direct = (
+        os.getenv("FIREBASE_WEB_API_KEY")
+        or os.getenv("VITE_FIREBASE_API_KEY")
+        or ""
+    ).strip()
+    if direct:
+        return direct
+
+    local_env_path = os.path.join(os.path.dirname(__file__), "static", "frontend", ".env.local")
+    if os.path.exists(local_env_path):
+        try:
+            with open(local_env_path, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    raw = line.strip()
+                    if raw.startswith("VITE_FIREBASE_API_KEY="):
+                        return raw.split("=", 1)[1].strip().strip('"').strip("'")
+        except Exception as env_error:
+            print(f"Could not read frontend .env.local for Firebase API key: {env_error}")
+    return ""
+
+
+def _build_password_reset_email(display_name, email, reset_link):
+    safe_name = html.escape((display_name or "").strip() or "there")
+    safe_email = html.escape((email or "").strip())
+    safe_link = html.escape((reset_link or "").strip(), quote=True)
+    safe_app_url = html.escape(_wecast_frontend_url(), quote=True)
+    safe_logo_url = html.escape(_wecast_logo_url(), quote=True)
+
+    subject = "Reset your WeCast password"
+    text = (
+        f"Hi {display_name or 'there'},\n\n"
+        "We received a request to reset your WeCast password.\n"
+        f"Use this secure link to choose a new password:\n{reset_link}\n\n"
+        "If you did not request this, you can safely ignore this email.\n\n"
+        "WeCast"
+    )
+    html_body = f"""\
+<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f7efe2;font-family:Arial,'Helvetica Neue',Helvetica,sans-serif;color:#171717;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7efe2;padding:32px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;background:#fffaf0;border:1px solid #ead9b7;border-radius:24px;overflow:hidden;box-shadow:0 18px 40px rgba(23,23,23,0.08);">
+            <tr>
+              <td style="background:linear-gradient(180deg,#f6d35a 0%,#f7e6b3 100%);padding:28px 32px 18px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td style="vertical-align:middle;">
+                      <img src="{safe_logo_url}" alt="WeCast" width="42" height="42" style="display:block;border:0;outline:none;text-decoration:none;">
+                    </td>
+                    <td style="vertical-align:middle;padding-left:12px;">
+                      <div style="font-family:Georgia,'Times New Roman',serif;font-size:34px;line-height:1;color:#111111;font-weight:700;">WeCast</div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:34px 32px 16px;">
+                <div style="font-size:14px;line-height:1.5;color:#6b7280;">Password Reset</div>
+                <h1 style="margin:10px 0 16px;font-size:34px;line-height:1.08;color:#111111;">Choose a new password</h1>
+                <p style="margin:0 0 14px;font-size:16px;line-height:1.8;color:#374151;">Hi {safe_name},</p>
+                <p style="margin:0 0 14px;font-size:16px;line-height:1.8;color:#374151;">
+                  We received a request to reset the password for your WeCast account
+                  <span style="font-weight:600;color:#111111;">{safe_email}</span>.
+                </p>
+                <p style="margin:0 0 22px;font-size:16px;line-height:1.8;color:#374151;">
+                  Click the button below to set a new password securely.
+                </p>
+                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 22px;">
+                  <tr>
+                    <td align="center" bgcolor="#111111" style="border-radius:14px;">
+                      <a href="{safe_link}" style="display:inline-block;padding:15px 24px;font-size:16px;font-weight:700;line-height:1;color:#ffffff;text-decoration:none;">Reset password</a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:0 0 14px;font-size:14px;line-height:1.8;color:#6b7280;">
+                  If the button doesn’t work, copy and paste this link into your browser:
+                </p>
+                <p style="margin:0 0 20px;font-size:13px;line-height:1.7;word-break:break-word;color:#7c3aed;">
+                  <a href="{safe_link}" style="color:#7c3aed;text-decoration:none;">{safe_link}</a>
+                </p>
+                <div style="border-top:1px solid #ead9b7;margin-top:22px;padding-top:18px;">
+                  <p style="margin:0 0 10px;font-size:14px;line-height:1.7;color:#6b7280;">
+                    If you didn’t request this change, you can safely ignore this email.
+                  </p>
+                  <p style="margin:0;font-size:14px;line-height:1.7;color:#6b7280;">
+                    Need help? Visit
+                    <a href="{safe_app_url}" style="color:#111111;font-weight:600;text-decoration:none;"> WeCast</a>.
+                  </p>
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
+    return subject, text, html_body
+
+
+def _send_reset_email_via_resend(email, display_name, reset_link):
+    api_key = (os.getenv("RESEND_API_KEY") or "").strip()
+    from_email = (os.getenv("RESEND_FROM_EMAIL") or "").strip()
+    if not api_key or not from_email:
+        return False
+
+    from_name = (os.getenv("RESEND_FROM_NAME") or "WeCast").strip() or "WeCast"
+    reply_to = (os.getenv("WECAST_SUPPORT_EMAIL") or from_email).strip()
+    subject, text_body, html_body = _build_password_reset_email(display_name, email, reset_link)
+
+    payload = {
+        "from": f"{from_name} <{from_email}>",
+        "to": [email],
+        "subject": subject,
+        "html": html_body,
+        "text": text_body,
+        "reply_to": reply_to,
+    }
+    response = requests.post(
+        "https://api.resend.com/emails",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=30,
+    )
+    if not response.ok:
+        raise RuntimeError(f"Resend email failed with status {response.status_code}")
+    return True
+
+
+def _send_reset_email_via_firebase(email):
+    api_key = _firebase_web_api_key()
+    if not api_key:
+        return False
+
+    payload = {
+        "requestType": "PASSWORD_RESET",
+        "email": email,
+        "continueUrl": f"{_wecast_frontend_url()}/#/login",
+        "canHandleCodeInApp": False,
+    }
+    response = requests.post(
+        f"https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={api_key}",
+        headers={"Content-Type": "application/json"},
+        json=payload,
+        timeout=30,
+    )
+    if not response.ok:
+        raise RuntimeError(f"Firebase reset email failed with status {response.status_code}: {response.text[:240]}")
+    return True
+
+
+def prepare_password_reset_delivery(email, strict=False):
+    from firebase_admin import auth as fb_auth
+
+    normalized_email = (email or "").strip().lower()
+    doc = get_user_doc_by_candidates(normalized_email)
+    data = doc.to_dict() or {} if doc and doc.exists else {}
+    user_record = None
+    try:
+        user_record = fb_auth.get_user_by_email(normalized_email)
+    except fb_auth.UserNotFoundError:
+        user_record = None
+
+    provider_ids = {
+        (getattr(provider, "provider_id", "") or "").strip().lower()
+        for provider in (getattr(user_record, "provider_data", None) or [])
+        if (getattr(provider, "provider_id", "") or "").strip()
+    }
+
+    auth_provider = normalize_auth_provider(data.get("authProvider"), data.get("password_hash"))
+    if user_record:
+        if "password" in provider_ids or not provider_ids:
+            auth_provider = "password"
+        elif "google.com" in provider_ids:
+            auth_provider = "google"
+        elif "github.com" in provider_ids:
+            auth_provider = "github"
+
+    if auth_provider != "password":
+        if strict:
+            return {"status": "provider_managed", "authProvider": auth_provider}
+        return {"status": "hidden"}
+
+    display_name = (
+        data.get("displayName")
+        or data.get("name")
+        or getattr(user_record, "display_name", None)
+        or normalized_email.split("@")[0]
+    ).strip()
+
+    if not user_record:
+        if not (doc and doc.exists):
+            return {"status": "hidden"}
+
+        temp_password = f"WeCast!{os.urandom(10).hex()}A1"
+        create_kwargs = {
+            "email": normalized_email,
+            "password": temp_password,
+            "email_verified": True,
+        }
+        if display_name:
+            create_kwargs["display_name"] = display_name
+        user_record = fb_auth.create_user(**create_kwargs)
+
+    try:
+        if _send_reset_email_via_firebase(normalized_email):
+            if doc and doc.exists:
+                doc.reference.set(
+                    {
+                        "authProvider": "password",
+                        "emailVerified": bool(data.get("emailVerified", True)),
+                        "last_password_reset_request": datetime.utcnow().isoformat(),
+                    },
+                    merge=True,
+                )
+            return {
+                "status": "sent",
+                "delivery": "firebase_server",
+                "authProvider": "password",
+                "email": normalized_email,
+            }
+    except Exception as send_error:
+        print(f"Firebase server reset email send failed for {normalized_email}: {send_error}")
+
+    return {
+        "status": "not_sent",
+        "delivery": "firebase_server",
+        "authProvider": "password",
+        "email": normalized_email,
+    }
 
 # ------------------------------------------------------------
 # API Clients (OpenAI + ElevenLabs)
@@ -1801,7 +2113,6 @@ def api_me():
             return jsonify(error="User not found"), 404
 
         data = doc.to_dict() or {}
-
         avatar_url = data.get("avatarUrl", "")
         avatar_key = data.get("avatarKey", "")
 
@@ -1818,15 +2129,19 @@ def api_me():
             except Exception as e:
                 print(f"Avatar signed URL refresh failed: {e}")
 
+        auth_provider = (
+            data.get("authProvider")
+            or ("password" if data.get("password_hash") else "unknown")
+        )
+
         return jsonify(
             email=data.get("email", user_id),
             displayName=data.get("name", data.get("displayName", "WeCast User")),
             bio=data.get("bio", "I create AI-powered podcasts."),
             avatarUrl=avatar_url,
-            handle=data.get(
-                "handle",
-                f"@{data.get('name', 'user').lower().replace(' ', '')}"
-            ),
+            authProvider=auth_provider,
+            emailVerified=bool(data.get("emailVerified")),
+            handle=data.get("handle", f"@{data.get('name', 'user').lower().replace(' ', '')}"),
             createdAt=data.get("created_at"),
         )
     except Exception as e:
@@ -1954,7 +2269,117 @@ def api_profile_avatar():
         return jsonify(avatarUrl=signed_url)
     except Exception as e:
         return jsonify(error=str(e)), 500
-    
+
+
+@app.delete("/api/account")
+def api_delete_account():
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    def _purge_podcast_document(ref):
+        for sub_name in ("scripts", "speakers", "transcripts", "edits"):
+            try:
+                for sub_doc in ref.collection(sub_name).stream():
+                    sub_doc.reference.delete()
+            except Exception:
+                pass
+        ref.delete()
+
+    try:
+        deleted_podcast_ids = set()
+        for candidate in user_id_candidates(user_id):
+            try:
+                for doc in db.collection("podcasts").where("userId", "==", candidate).stream():
+                    if doc.id in deleted_podcast_ids:
+                        continue
+                    deleted_podcast_ids.add(doc.id)
+                    _purge_podcast_document(doc.reference)
+            except Exception as podcast_error:
+                print(f"Podcast deletion error for {candidate}: {podcast_error}")
+
+        deleted_user_docs = 0
+        for candidate in user_id_candidates(user_id):
+            try:
+                user_ref = db.collection("users").document(candidate)
+                if user_ref.get().exists:
+                    user_ref.delete()
+                    deleted_user_docs += 1
+            except Exception as user_error:
+                print(f"User deletion error for {candidate}: {user_error}")
+
+        try:
+            bucket = get_storage_bucket()
+            for candidate in user_id_candidates(user_id):
+                for blob in bucket.list_blobs(prefix=f"avatars/{candidate}/"):
+                    try:
+                        blob.delete()
+                    except Exception:
+                        pass
+        except Exception as storage_error:
+            print(f"Avatar cleanup error: {storage_error}")
+
+        session.clear()
+        session.modified = True
+
+        return jsonify(
+            ok=True,
+            deletedAccount=user_id,
+            deletedUserDocs=deleted_user_docs,
+            deletedPodcasts=len(deleted_podcast_ids),
+        )
+    except Exception as e:
+        print(f"Account deletion error: {e}")
+        return jsonify(error="Failed to delete account"), 500
+
+
+@app.post("/api/account/password-reset-link")
+def api_account_password_reset_link():
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    try:
+        doc = get_user_doc_by_candidates(user_id)
+        if not doc or not doc.exists:
+            return jsonify(error="User not found"), 404
+
+        data = doc.to_dict() or {}
+        email = (data.get("email") or user_id or "").strip().lower()
+        if not email or not is_reasonably_valid_email(email):
+            return jsonify(error="A valid account email is required before sending a reset link."), 400
+
+        result = prepare_password_reset_delivery(email, strict=True)
+        if result.get("status") == "provider_managed":
+            return jsonify(
+                error="Password changes are managed by your sign-in provider.",
+                authProvider=result.get("authProvider", "unknown"),
+            ), 409
+        if result.get("status") != "sent":
+            return jsonify(error="Failed to prepare a password reset link."), 500
+
+        return jsonify(ok=True, **result)
+    except Exception as e:
+        print(f"Password reset preparation error: {e}")
+        return jsonify(error="Failed to prepare a password reset link."), 500
+
+
+@app.post("/api/password-reset-email")
+def api_password_reset_email():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+
+    if not is_reasonably_valid_email(email):
+        return jsonify(error="Please enter a valid email address."), 400
+
+    try:
+        result = prepare_password_reset_delivery(email, strict=False)
+        if result.get("status") == "sent":
+            return jsonify(ok=True, **result)
+        return jsonify(error="We couldn't send the password reset email right now."), 500
+    except Exception as e:
+        print(f"Password reset email request error: {e}")
+        return jsonify(error="We couldn't process the password reset email."), 500
 @app.get("/api/podcast/<podcast_id>")
 def api_get_podcast(podcast_id):
     """Fetch full podcast data for editing"""
@@ -2888,6 +3313,87 @@ def save_all_podcast(podcast_id):
     return jsonify(ok=True)
 
 
+@app.post("/api/preview/save")
+def save_preview_snapshot():
+    user_id = session.get("user_id") or get_current_user_email()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    payload = request.get_json(silent=True) or {}
+    title = (payload.get("title") or "").strip() or "Untitled Episode"
+    audio_url = _normalize_public_url((payload.get("audioUrl") or payload.get("audio_url") or session.get("last_audio_url") or "").strip())
+    summary = payload.get("summary")
+    chapters = payload.get("chapters")
+    words = payload.get("words")
+    language = (payload.get("language") or "").strip().lower()
+    transcript_text = payload.get("transcriptText")
+    description = (payload.get("description") or "").strip()
+    style = (payload.get("style") or "").strip()
+    speakers_info = payload.get("speakers") if isinstance(payload.get("speakers"), list) else None
+
+    draft = session.get("create_draft") or {}
+    if not description:
+        description = (draft.get("description") or "").strip()
+    if not style:
+        style = (draft.get("script_style") or "").strip()
+    if speakers_info is None:
+        draft_speakers = draft.get("speakers_info")
+        speakers_info = draft_speakers if isinstance(draft_speakers, list) else []
+
+    if not isinstance(words, list) or not words:
+        words = session.get("last_word_timeline") or []
+
+    if words and not transcript_text:
+        try:
+            transcript_text = build_transcript_text_with_speakers(words)
+        except Exception:
+            transcript_text = None
+
+    script_text = (payload.get("script") or draft.get("script") or transcript_text or "").strip()
+
+    podcast_id = save_generated_podcast_to_firestore(
+        user_id=user_id,
+        title=title,
+        script_style=style,
+        description=description,
+        script=script_text,
+        speakers_info=speakers_info or [],
+        language=language,
+    )
+
+    ref = db.collection("podcasts").document(podcast_id)
+    updates = {
+        "status": "saved",
+        "savedAt": firestore.SERVER_TIMESTAMP,
+    }
+
+    if audio_url:
+        updates["audioUrl"] = audio_url
+        updates["audioUpdatedAt"] = firestore.SERVER_TIMESTAMP
+    if summary is not None:
+        updates["summary"] = summary
+        updates["summaryUpdatedAt"] = firestore.SERVER_TIMESTAMP
+    if isinstance(chapters, list):
+        updates["chapters"] = chapters
+        updates["chaptersUpdatedAt"] = firestore.SERVER_TIMESTAMP
+    if transcript_text:
+        updates["transcriptText"] = transcript_text
+        updates["transcriptUpdatedAt"] = firestore.SERVER_TIMESTAMP
+
+    ref.set(updates, merge=True)
+
+    if isinstance(words, list) and words:
+        ref.collection("transcripts").document("main").set(
+            {
+                "words": words,
+                "updatedAt": firestore.SERVER_TIMESTAMP,
+            },
+            merge=True,
+        )
+
+    return jsonify(ok=True, podcastId=podcast_id)
+
+
 @app.post("/api/save-music")
 def save_music():
     data = request.get_json() or {}
@@ -2919,10 +3425,17 @@ def signup():
 
     email = (data.get("email") or "").strip().lower()
     password = (data.get("password") or "").strip()
+    confirm_password = (data.get("confirmPassword") or "").strip()
     name = (data.get("name") or "").strip()
 
     if not email or not password:
         return jsonify({"error": "Email and password are required"}), 400
+
+    if not is_reasonably_valid_email(email):
+        return jsonify({"error": "Please enter a valid email address."}), 400
+
+    if password != confirm_password:
+        return jsonify({"error": "Passwords do not match."}), 400
 
     if len(password) < 8:
         return jsonify(
@@ -3036,6 +3549,7 @@ def login():
                     "email": user_data.get("email"),
                     "name": user_data.get("name"),
                     "role": user_data.get("role", "user"),
+                    "authProvider": user_data.get("authProvider") or ("password" if user_data.get("password_hash") else "unknown"),
                 },
             }
         ),
@@ -3144,12 +3658,90 @@ def social_login():
         return jsonify(
             message="Login successful",
             token=token,
-            user={"email": email, "name": name, "role": "user"},
+            user={
+                "email": email,
+                "name": name,
+                "role": "user",
+                "authProvider": auth_provider,
+            },
         )
 
     except Exception as e:
         print("ًlogin error:", e)
         return jsonify(error="Invalid or expired OAuth token"), 401
+
+@app.post("/api/firebase-email-login")
+def firebase_email_login():
+    from firebase_admin import auth as fb_auth
+
+    data = request.get_json(silent=True) or {}
+    id_token = data.get("idToken")
+
+    if not id_token:
+        return jsonify(error="Missing Firebase ID token"), 400
+
+    try:
+        decoded = fb_auth.verify_id_token(id_token)
+        email = (decoded.get("email") or "").strip().lower()
+        name = (decoded.get("name") or "").strip()
+        email_verified = bool(decoded.get("email_verified"))
+
+        if not email:
+            return jsonify(error="Unable to read email from Firebase token"), 400
+
+        if not email_verified:
+            return jsonify(error="Please verify your email before signing in."), 403
+
+        user_ref = db.collection("users").document(email)
+        doc = user_ref.get()
+
+        user_payload = {
+            "email": email,
+            "authProvider": "password",
+            "emailVerified": True,
+            "last_login": datetime.utcnow().isoformat(),
+            "role": "user",
+            "password_hash": None,
+        }
+
+        if name:
+            user_payload["name"] = name
+            user_payload["displayName"] = name
+
+        if not doc.exists:
+            fallback_name = name or email.split("@")[0]
+            user_ref.set({
+                **user_payload,
+                "name": fallback_name,
+                "displayName": fallback_name,
+                "bio": "",
+                "avatarUrl": "",
+                "username_lower": fallback_name.lower(),
+                "created_at": datetime.utcnow().isoformat(),
+            })
+        else:
+            user_ref.set(user_payload, merge=True)
+
+        final_doc = user_ref.get()
+        final_data = final_doc.to_dict() or {}
+
+        token = create_token(email, email)
+        session["user_id"] = email
+        session.modified = True
+
+        return jsonify(
+            message="Login successful",
+            token=token,
+            user={
+                "email": final_data.get("email", email),
+                "name": final_data.get("name") or final_data.get("displayName") or "",
+                "role": final_data.get("role", "user"),
+                "authProvider": final_data.get("authProvider", "password"),
+            },
+        )
+    except Exception as e:
+        print("Firebase email login error:", e)
+        return jsonify(error="Invalid or expired Firebase token"), 401
 
 # ------------------------------------------------------------
 # Main

@@ -7,3 +7,37 @@ services:
     envVars:
       - key: OPENAI_API_KEY
         sync: false
+      - key: FIREBASE_STORAGE_BUCKET
+        sync: false
+      - key: VITE_FIREBASE_API_KEY
+        sync: false
+      - key: FLASK_ENV
+        value: production
+      - key: FRONTEND_ORIGINS
+        value: https://wecast-frontend.onrender.com
+  - type: static
+    name: wecast-frontend
+    rootDir: static/frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://wecast.onrender.com
+      - key: VITE_FIREBASE_API_KEY
+        sync: false
+      - key: VITE_FIREBASE_AUTH_DOMAIN
+        sync: false
+      - key: VITE_FIREBASE_PROJECT_ID
+        sync: false
+      - key: VITE_FIREBASE_STORAGE_BUCKET
+        sync: false
+      - key: VITE_FIREBASE_MESSAGING_SENDER_ID
+        sync: false
+      - key: VITE_FIREBASE_APP_ID
+        sync: false
+      - key: VITE_FIREBASE_MEASUREMENT_ID
+        sync: false

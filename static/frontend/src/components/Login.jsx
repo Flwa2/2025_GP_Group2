@@ -1,12 +1,18 @@
 // src/components/Login.jsx
 import React, { useEffect, useState } from "react";
 import { Eye, EyeOff, Mail, Lock, ArrowLeft } from "lucide-react";
-import { signInWithPopup } from "firebase/auth";
-import { auth, googleProvider, githubProvider } from "../firebaseClient";
-
-const API_BASE = import.meta.env.PROD
-  ? "https://wecast.onrender.com"
-  : "http://localhost:5000";
+import { auth, googleProvider, githubProvider, actionCodeSettings } from "../firebaseClient";
+import { API_BASE } from "../utils/api";
+import {
+  authenticateWithSocialProvider,
+  completePendingSocialRedirect,
+} from "../utils/socialAuth";
+import {
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signOut,
+} from "firebase/auth";
 
 const REMEMBERED_LOGIN_KEY = "rememberedLoginIdentifier";
   
@@ -35,21 +41,23 @@ function redirectAfterAuth() {
   }
 }
 
+function looksLikeEmail(value) {
+  return /\S+@\S+\.\S+/.test(String(value || "").trim());
+}
+
 export default function Login() {
   const [mode, setMode] = useState("login"); // "login" | "reset"
   const [identifier, setIdentifier] = useState("");
   const [pwd, setPwd] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
   const [resetEmail, setResetEmail] = useState("");
-  const [resetPwd, setResetPwd] = useState("");
-  const [resetConfirm, setResetConfirm] = useState("");
 
   const [showPwd, setShowPwd] = useState(false);
-  const [showResetPwd, setShowResetPwd] = useState(false);
 
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
+  const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
 
   useEffect(() => {
     const rememberedLogin = localStorage.getItem(REMEMBERED_LOGIN_KEY);
@@ -57,20 +65,65 @@ export default function Login() {
       setIdentifier(rememberedLogin);
       setRememberMe(true);
     }
+
+    const pendingEmail = sessionStorage.getItem("wecast:pendingVerificationEmail");
+    if (pendingEmail) {
+      setIdentifier(pendingEmail);
+      setPendingVerificationEmail(pendingEmail);
+      setInfo("Verify your email first, then log in to finish setting up your account.");
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const finishRedirectLogin = async () => {
+      try {
+        setLoading(true);
+        const completed = await completePendingSocialRedirect({
+          auth,
+          remember: localStorage.getItem(REMEMBERED_LOGIN_KEY) !== null,
+        });
+        if (!cancelled && completed) {
+          redirectAfterAuth();
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error("SOCIAL REDIRECT LOGIN ERROR:", err);
+          setError(err.message || "Social login failed. Please try again.");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    finishRedirectLogin();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const switchToLogin = () => {
     setMode("login");
     setError("");
     setInfo("");
+    setPendingVerificationEmail("");
   };
 
   const switchToReset = () => {
     setMode("reset");
     setError("");
     setInfo("");
-    // prefill reset email with login email if typed
-    if (identifier && !resetEmail) setResetEmail(identifier);
+    setPendingVerificationEmail("");
+    // Only prefill when the login field actually contains an email address.
+    if (looksLikeEmail(identifier) && !resetEmail) {
+      setResetEmail(identifier.trim());
+    } else if (!looksLikeEmail(identifier)) {
+      setResetEmail("");
+    }
   };
 
   // ------------------ LOGIN SUBMIT ------------------
@@ -78,6 +131,7 @@ export default function Login() {
     e.preventDefault();
     setError("");
     setInfo("");
+    setPendingVerificationEmail("");
 
     if (!identifier.trim() || !pwd.trim()) {
       setError("Please enter both email/username and password.");
@@ -87,6 +141,87 @@ export default function Login() {
     setLoading(true);
 
     try {
+      if (identifier.includes("@")) {
+        try {
+          const credential = await signInWithEmailAndPassword(auth, identifier.trim(), pwd);
+          const firebaseUser = credential.user;
+
+          if (!firebaseUser.emailVerified) {
+            await signOut(auth);
+            sessionStorage.setItem("wecast:pendingVerificationEmail", identifier.trim());
+            setPendingVerificationEmail(identifier.trim());
+            setInfo("Your account is almost ready. Verify your email first, then log in.");
+            setLoading(false);
+            return;
+          }
+
+          sessionStorage.removeItem("wecast:pendingVerificationEmail");
+
+          const idToken = await firebaseUser.getIdToken(true);
+          const firebaseRes = await fetch(`${API_BASE}/api/firebase-email-login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ idToken }),
+          });
+
+          let firebaseData = {};
+          try {
+            firebaseData = await firebaseRes.json();
+          } catch {
+            firebaseData = {};
+          }
+
+          if (!firebaseRes.ok) {
+            throw new Error(firebaseData.error || "Login failed.");
+          }
+
+          if (firebaseData.token) {
+            if (rememberMe) {
+              localStorage.setItem("token", firebaseData.token);
+              sessionStorage.removeItem("token");
+            } else {
+              sessionStorage.setItem("token", firebaseData.token);
+              localStorage.removeItem("token");
+            }
+          }
+
+          if (rememberMe) {
+            localStorage.setItem(REMEMBERED_LOGIN_KEY, identifier.trim());
+          } else {
+            localStorage.removeItem(REMEMBERED_LOGIN_KEY);
+          }
+
+          if (firebaseData.user) {
+            const userJson = JSON.stringify(firebaseData.user);
+            if (rememberMe) {
+              localStorage.setItem("user", userJson);
+              sessionStorage.removeItem("user");
+            } else {
+              sessionStorage.setItem("user", userJson);
+              localStorage.removeItem("user");
+            }
+          }
+
+          window.dispatchEvent(
+            new StorageEvent("storage", { key: "token", newValue: firebaseData.token || "" })
+          );
+
+          redirectAfterAuth();
+          return;
+        } catch (firebaseError) {
+          const code = firebaseError?.code || "";
+          const shouldFallback =
+            code === "auth/user-not-found" ||
+            code === "auth/invalid-credential" ||
+            code === "auth/invalid-email";
+
+          if (!shouldFallback) {
+            throw firebaseError;
+          }
+        }
+      }
+
       const res = await fetch(`${API_BASE}/api/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -168,54 +303,58 @@ export default function Login() {
     }
   };
 
-  // ------------------ RESET PASSWORD SUBMIT (DIRECT) ------------------
+// ------------------ RESET PASSWORD SUBMIT ------------------
   const handleResetSubmit = async (e) => {
     e.preventDefault();
     setError("");
     setInfo("");
 
-    if (!resetEmail.trim() || !resetPwd.trim() || !resetConfirm.trim()) {
-      setError("Please fill in all fields.");
-      return;
-    }
-
-    if (resetPwd !== resetConfirm) {
-      setError("Passwords do not match.");
+    if (!resetEmail.trim()) {
+      setError("Enter the email address linked to your account.");
       return;
     }
 
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_BASE}/api/reset-password-direct`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          email: resetEmail,
-          new_password: resetPwd,
-          confirm_password: resetConfirm,
-        }),
-      });
-
-      let data = {};
+      const email = resetEmail.trim().toLowerCase();
       try {
-        data = await res.json();
-      } catch {
-        data = {};
+        await sendPasswordResetEmail(auth, email, actionCodeSettings);
+      } catch (firebaseError) {
+        const code = firebaseError?.code || "";
+
+        if (code === "auth/invalid-email") {
+          throw firebaseError;
+        }
+
+        const res = await fetch(`${API_BASE}/api/password-reset-email`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw {
+            code: data?.code || code,
+            message: data?.error || firebaseError?.message || "We couldn’t send the reset email right now. Please try again.",
+          };
+        }
       }
 
-      if (!res.ok) {
-        // "Email is not registered." or password rule errors
-        setError(data.error || "Could not reset password. Please try again.");
-      } else {
-        setInfo(
-          data.message || "Password updated successfully. You can now log in."
-        );
-      }
+      setInfo("Check your email for a password reset link. If it doesn’t appear, check your spam folder.");
     } catch (err) {
       console.error("RESET PASSWORD ERROR:", err);
-      setError("Failed to connect to the server. Please try again.");
+      const code = err?.code || "";
+      if (code === "auth/invalid-email") {
+        setError("Enter a valid email address to continue.");
+      } else if (code === "auth/operation-not-allowed") {
+        setError("Password reset is unavailable right now. Please try again a little later.");
+      } else if (code === "auth/unauthorized-domain") {
+        setError("Password reset isn’t available on this domain yet. Please try again from the main WeCast app.");
+      } else {
+        setError(err?.message || "We couldn’t send the reset email right now. Please try again.");
+      }
     } finally {
       setLoading(false);
     }
@@ -228,36 +367,64 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const result = await signInWithPopup(auth, googleProvider);
-      const user = result.user;
-      const idToken = await user.getIdToken();
-
-      const res = await fetch(`${API_BASE}/api/social-login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ idToken }),
+      const result = await authenticateWithSocialProvider({
+        auth,
+        provider: googleProvider,
+        providerLabel: "Google",
+        remember: rememberMe,
       });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error || "Login failed.");
-        setLoading(false);
+      if (result.redirected) {
+        setInfo("Redirecting to Google sign-in...");
         return;
       }
-
-      localStorage.setItem("token", data.token);
-      localStorage.setItem("user", JSON.stringify(data.user));
-
-      window.dispatchEvent(
-        new StorageEvent("storage", { key: "token", newValue: data.token })
-      );
-
       redirectAfterAuth();
     } catch (err) {
       console.error("GOOGLE LOGIN ERROR:", err);
-      setError("Google login failed. Please try again.");
+      setError(err.message || "Google login failed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    setError("");
+    setInfo("");
+
+    if (!identifier.trim() || !pwd.trim()) {
+      setError("Enter your email and password to resend the verification email.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const credential = await signInWithEmailAndPassword(auth, identifier.trim(), pwd);
+      const firebaseUser = credential.user;
+
+      if (firebaseUser.emailVerified) {
+        await signOut(auth);
+        sessionStorage.removeItem("wecast:pendingVerificationEmail");
+        setPendingVerificationEmail("");
+        setInfo("Your email is already verified. You can log in now.");
+        return;
+      }
+
+      await sendEmailVerification(firebaseUser, actionCodeSettings);
+      await signOut(auth);
+
+      sessionStorage.setItem("wecast:pendingVerificationEmail", identifier.trim());
+      setPendingVerificationEmail(identifier.trim());
+      setInfo("A new verification email has been sent. Check your inbox and spam folder.");
+    } catch (err) {
+      const code = err?.code || "";
+      if (
+        code === "auth/invalid-credential" ||
+        code === "auth/user-not-found" ||
+        code === "auth/wrong-password"
+      ) {
+        setError("We couldn’t resend the verification email. Check your email and password, then try again.");
+      } else {
+        setError("We couldn’t resend the verification email right now. Please try again.");
+      }
     } finally {
       setLoading(false);
     }
@@ -269,36 +436,20 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const result = await signInWithPopup(auth, githubProvider);
-      const user = result.user;
-      const idToken = await user.getIdToken();
-
-      const res = await fetch(`${API_BASE}/api/social-login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ idToken }),
+      const result = await authenticateWithSocialProvider({
+        auth,
+        provider: githubProvider,
+        providerLabel: "GitHub",
+        remember: rememberMe,
       });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error || "Login failed.");
-        setLoading(false);
+      if (result.redirected) {
+        setInfo("Redirecting to GitHub sign-in...");
         return;
       }
-
-      localStorage.setItem("token", data.token);
-      localStorage.setItem("user", JSON.stringify(data.user));
-
-      window.dispatchEvent(
-        new StorageEvent("storage", { key: "token", newValue: data.token })
-      );
-
       redirectAfterAuth();
     } catch (err) {
       console.error("GITHUB LOGIN ERROR:", err);
-      setError("GitHub login failed. Please try again.");
+      setError(err.message || "GitHub login failed. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -366,7 +517,7 @@ export default function Login() {
                   Reset your password
                 </h2>
                 <p className="text-sm text-black/60 dark:text-white/60 mt-1">
-                  Enter your registered email and choose a new password. If the email exists, your password will be updated directly.
+                  Enter your account email and we’ll send you a secure password reset link.
                 </p>
               </>
             )}
@@ -382,6 +533,24 @@ export default function Login() {
             <p className="mb-3 text-sm font-medium text-emerald-500 text-center">
               {info}
             </p>
+          )}
+          {mode === "login" && pendingVerificationEmail && (
+            <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-center dark:border-amber-500/20 dark:bg-amber-500/10">
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                Verification pending for <span className="font-semibold">{pendingVerificationEmail}</span>
+              </p>
+              <p className="mt-1 text-sm text-amber-700 dark:text-amber-100/80">
+                Didn’t get the email? Enter your password and resend the verification link.
+              </p>
+              <button
+                type="button"
+                onClick={handleResendVerification}
+                disabled={loading}
+                className="mt-3 inline-flex items-center justify-center rounded-xl border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-400/20 dark:bg-transparent dark:text-amber-100 dark:hover:bg-amber-500/10"
+              >
+                Resend verification email
+              </button>
+            </div>
           )}
 
           {/* ------------------ LOGIN FORM ------------------ */}
@@ -548,9 +717,9 @@ export default function Login() {
               {/* Email */}
               <div>
                 <label className="block text-sm font-medium text-black dark:text-white mb-2">
-                  Registered email
+                  Email address
                 </label>
-                <div className="flex items-center border rounded-lg bg-white dark:bg-white/5 border-black/10 dark:border-white/15 ...">
+                <div className="flex items-center border rounded-lg bg-white dark:bg-white/5 border-black/10 dark:border-white/15 focus-within:ring-2 focus-within:ring-purple-500">
                   <span className="pl-3 text-black/60 dark:text-white/60">
                     <Mail className="w-5 h-5" />
                   </span>
@@ -565,67 +734,12 @@ export default function Login() {
                 </div>
               </div>
 
-              {/* New password */}
-              <div>
-                <label className="block text-sm font-medium text-black dark:text-white mb-2">
-                  New password
-                </label>
-                <div className="flex items-center border rounded-lg bg-white dark:bg-white/5 border-black/10 dark:border-white/15 focus-within:ring-2 focus-within:ring-purple-500">
-                  <span className="pl-3 text-black/60 dark:text-white/60">
-                    <Lock className="w-5 h-5" />
-                  </span>
-                  <input
-                    type={showResetPwd ? "text" : "password"}
-                    className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text-white placeholder-black/50 dark:placeholder-white/50"
-                    placeholder="New password"
-                    value={resetPwd}
-                    onChange={(e) => setResetPwd(e.target.value)}
-                    required
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowResetPwd((v) => !v)}
-                    className="pr-3 text-black/60 dark:text-white/60 hover:text-black dark:hover:text-white transition"
-                    aria-label={showResetPwd ? "Hide password" : "Show password"}
-                  >
-                    {showResetPwd ? (
-                      <EyeOff className="w-5 h-5" />
-                    ) : (
-                      <Eye className="w-5 h-5" />
-                    )}
-                  </button>
-                </div>
-                <p className="mt-1 text-xs text-black/60 dark:text-white/60">
-                  At least 8 characters, including one uppercase letter, one number, and one symbol.
-                </p>
-              </div>
-
-              {/* Confirm password */}
-              <div>
-                <label className="block text-sm font-medium text-black dark:text-white mb-2">
-                  Confirm new password
-                </label>
-                <div className="flex items-center border rounded-lg bg-white dark:bg-white/5 border-black/10 dark:border-white/15 focus-within:ring-2 focus-within:ring-purple-500">
-                  <span className="pl-3 text-black/60 dark:text-white/60">
-                    <Lock className="w-5 h-5" />
-                  </span>
-                  <input
-                    type={showResetPwd ? "text" : "password"}
-                    className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text-white placeholder-black/50 dark:placeholder-white/50"
-                    placeholder="Confirm new password"
-                    value={resetConfirm}
-                    onChange={(e) => setResetConfirm(e.target.value)}
-                    required
-                  />
-                </div>
-              </div>
-
               <button
                 type="submit"
                 className="w-full btn-primary"
                 disabled={loading}
               >
-                {loading ? "Updating password..." : "Change password"}
+                {loading ? "Sending reset link..." : "Send reset link"}
               </button>
             </form>
           )}

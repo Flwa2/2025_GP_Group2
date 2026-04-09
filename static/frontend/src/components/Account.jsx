@@ -1,12 +1,12 @@
 // src/components/Account.jsx
 import React, { useEffect, useRef, useState } from "react";
-import { LogOut, Check, AlertCircle, AlertTriangle, Save, RefreshCcw, Bell, PlayCircle, Palette } from "lucide-react";
+import { createPortal } from "react-dom";
+import { LogOut, Check, AlertCircle, AlertTriangle, Save, RefreshCcw, Bell, PlayCircle, Palette, Trash2 } from "lucide-react";
+import { sendPasswordResetEmail } from "firebase/auth";
 import { useTranslation } from "react-i18next";
+import { API_BASE } from "../utils/api";
+import { actionCodeSettings, auth } from "../firebaseClient";
 import { DEFAULT_ACCOUNT_PREFERENCES, loadAccountPreferences, saveAccountPreferences } from "../utils/accountPreferences";
-
-const API_BASE = import.meta.env.PROD
-  ? "https://wecast.onrender.com"
-  : "http://localhost:5000";
 
 /* ---- Dark mode helper ---- */
 function applyDarkMode(enabled) {
@@ -52,12 +52,53 @@ function dicebearAvatar(name = "WeCast User") {
   return `https://api.dicebear.com/8.x/adventurer/svg?seed=${seed}`;
 }
 
+function normalizeAuthProvider(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "unknown";
+  if (raw.includes("google")) return "google";
+  if (raw.includes("github")) return "github";
+  if (raw.includes("password") || raw.includes("email")) return "password";
+  return raw;
+}
+
+function formatAuthProviderLabel(provider) {
+  switch (normalizeAuthProvider(provider)) {
+    case "google":
+      return "Google";
+    case "github":
+      return "GitHub";
+    case "password":
+      return "Email";
+    default:
+      return "your sign-in provider";
+  }
+}
+
+const ACCOUNT_ACTION_BUTTON_CLASS =
+  "inline-flex w-full items-center justify-center gap-2 rounded-xl px-6 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[11.5rem]";
+const ACCOUNT_SECONDARY_BUTTON_CLASS =
+  `${ACCOUNT_ACTION_BUTTON_CLASS} border border-black/15 text-black hover:bg-black/5 dark:border-white/15 dark:text-white dark:hover:bg-white/10`;
+const ACCOUNT_PRIMARY_BUTTON_CLASS =
+  `${ACCOUNT_ACTION_BUTTON_CLASS} bg-black text-white hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90`;
+const ACCOUNT_BRAND_BUTTON_CLASS =
+  `${ACCOUNT_ACTION_BUTTON_CLASS} border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 dark:border-purple-400/20 dark:bg-purple-500/10 dark:text-purple-200 dark:hover:bg-purple-500/15`;
+const ACCOUNT_DANGER_BUTTON_CLASS =
+  `${ACCOUNT_ACTION_BUTTON_CLASS} border border-red-500 bg-red-600 text-white hover:bg-red-700`;
+const ACCOUNT_STATUS_PILL_CLASS =
+  "inline-flex w-full items-center justify-center rounded-xl border border-black/10 bg-black/5 px-4 py-3 text-sm font-semibold text-black/70 dark:border-white/10 dark:bg-white/5 dark:text-white/70 sm:w-auto sm:min-w-[11.5rem]";
+
 export default function Account() {
   const { t } = useTranslation();
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [toastMsg, setToastMsg] = useState("");
   const [toastType, setToastType] = useState("success");
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [sendingResetLink, setSendingResetLink] = useState(false);
+  const [showResetPasswordModal, setShowResetPasswordModal] = useState(false);
+  const [authProvider, setAuthProvider] = useState("unknown");
   
   const [profile, setProfile] = useState({
     displayName: "WeCast User",
@@ -88,6 +129,10 @@ export default function Account() {
   };
 
   const hasUnsavedChanges = JSON.stringify(profile) !== JSON.stringify(originalProfile) || avatarFile !== null;
+  const normalizedAuthProvider = normalizeAuthProvider(authProvider);
+  const providerLabel = formatAuthProviderLabel(normalizedAuthProvider);
+  const canSendResetLink = normalizedAuthProvider === "password" && Boolean(String(profile.email || "").trim());
+  const isProviderManaged = normalizedAuthProvider === "google" || normalizedAuthProvider === "github";
 
   useEffect(() => {
     // Load Dark Mode from localStorage
@@ -116,6 +161,7 @@ export default function Account() {
         try {
           const u = JSON.parse(storedUserRaw);
           const name = u.displayName || u.name || "WeCast User";
+          const storedAuthProvider = normalizeAuthProvider(u.authProvider);
           setProfile((p) => ({
             ...p,
             displayName: name,
@@ -123,6 +169,7 @@ export default function Account() {
             bio: u.bio || p.bio,
             avatarUrl: u.avatarUrl || "",
           }));
+          setAuthProvider(storedAuthProvider);
           setOriginalProfile((p) => ({
             ...p,
             displayName: name,
@@ -162,6 +209,8 @@ export default function Account() {
         return;
       }
 
+      const resolvedAuthProvider = normalizeAuthProvider(data.authProvider);
+
       const userProfile = {
         displayName: data.displayName || data.name || profile.displayName,
         bio: data.bio || profile.bio,
@@ -171,13 +220,15 @@ export default function Account() {
 
       setProfile(userProfile);
       setOriginalProfile(userProfile);
+      setAuthProvider(resolvedAuthProvider);
       
       // Update localStorage
       const userToStore = {
         displayName: userProfile.displayName,
         email: userProfile.email,
         bio: userProfile.bio,
-        avatarUrl: userProfile.avatarUrl
+        avatarUrl: userProfile.avatarUrl,
+        authProvider: resolvedAuthProvider,
       };
       
       if (localStorage.getItem("user")) {
@@ -231,12 +282,12 @@ export default function Account() {
     showToast("Profile changes discarded", "info");
   }
 
-  function resetPreferences() {
+  function resetAppearance() {
     const defaults = { ...DEFAULT_ACCOUNT_PREFERENCES };
     setPreferences(defaults);
     setDarkMode(false);
     applyDarkMode(false);
-    showToast("Preferences reset to default", "info");
+    showToast("Appearance settings reset", "info");
   }
 
   async function save() {
@@ -255,7 +306,8 @@ export default function Account() {
           displayName: profile.displayName,
           email: profile.email,
           bio: profile.bio,
-          avatarUrl: profile.avatarUrl
+          avatarUrl: profile.avatarUrl,
+          authProvider: normalizedAuthProvider,
         };
         
         localStorage.setItem("user", JSON.stringify(userToStore));
@@ -299,7 +351,8 @@ export default function Account() {
         displayName: profile.displayName,
         email: profile.email,
         bio: profile.bio,
-        avatarUrl: data.avatarUrl || profile.avatarUrl
+        avatarUrl: data.avatarUrl || profile.avatarUrl,
+        authProvider: normalizedAuthProvider,
       };
       
       if (localStorage.getItem("user")) {
@@ -328,7 +381,8 @@ export default function Account() {
         displayName: profile.displayName,
         email: profile.email,
         bio: profile.bio,
-        avatarUrl: profile.avatarUrl
+        avatarUrl: profile.avatarUrl,
+        authProvider: normalizedAuthProvider,
       };
       
       localStorage.setItem("user", JSON.stringify(userToStore));
@@ -356,6 +410,129 @@ export default function Account() {
     );
 
     window.location.hash = "#/";
+  }
+
+  function openResetPasswordModal() {
+    if (!canSendResetLink) return;
+    setShowResetPasswordModal(true);
+  }
+
+  function closeResetPasswordModal() {
+    if (sendingResetLink) return;
+    setShowResetPasswordModal(false);
+  }
+
+  async function handleSendResetLink() {
+    const email = String(profile.email || "").trim().toLowerCase();
+    if (!email) {
+      showToast(t("account.passwordInvalidEmail"), "error");
+      return;
+    }
+
+    setSendingResetLink(true);
+    try {
+      try {
+        await sendPasswordResetEmail(auth, email, actionCodeSettings);
+      } catch (firebaseError) {
+        const res = await fetch(`${API_BASE}/api/account/password-reset-link`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw {
+            code: data?.code || firebaseError?.code || "",
+            message: data?.error || firebaseError?.message || t("account.passwordSendFailed"),
+          };
+        }
+
+        setShowResetPasswordModal(false);
+        showToast(t("account.passwordSent", { email: data?.email || email }), "success");
+        return;
+      }
+
+      setShowResetPasswordModal(false);
+      showToast(t("account.passwordSent", { email }), "success");
+    } catch (error) {
+      const code = error?.code || "";
+      let message = error?.message || t("account.passwordSendFailed");
+
+      if (code === "auth/too-many-requests") {
+        message = t("account.passwordTooManyRequests");
+      } else if (code === "auth/invalid-email") {
+        message = t("account.passwordInvalidEmail");
+      }
+
+      showToast(message, code === "auth/too-many-requests" ? "warning" : "error");
+    } finally {
+      setSendingResetLink(false);
+    }
+  }
+
+  function openDeleteModal() {
+    setDeleteConfirmation("");
+    setShowDeleteModal(true);
+  }
+
+  function closeDeleteModal() {
+    if (deletingAccount) return;
+    setDeleteConfirmation("");
+    setShowDeleteModal(false);
+  }
+
+  async function handleDeleteAccount() {
+    if (deleteConfirmation !== "DELETE") {
+      showToast('Type DELETE to confirm account removal.', "warning");
+      return;
+    }
+
+    const token = localStorage.getItem("token") || sessionStorage.getItem("token");
+    if (!token) {
+      showToast("You need to be signed in to delete your account.", "error");
+      return;
+    }
+
+    setDeletingAccount(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/account`, {
+        method: "DELETE",
+        credentials: "include",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to delete account");
+      }
+
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      localStorage.removeItem("wecast:dark");
+      localStorage.removeItem("wecast-lang");
+      sessionStorage.removeItem("token");
+      sessionStorage.removeItem("user");
+
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: "token", newValue: "" })
+      );
+
+      sessionStorage.setItem(
+        "wecast:flash",
+        "Your account has been deleted successfully."
+      );
+
+      setShowDeleteModal(false);
+      window.location.hash = "#/";
+    } catch (error) {
+      console.error("Delete account error:", error);
+      showToast(error.message || "Failed to delete account", "error");
+    } finally {
+      setDeletingAccount(false);
+    }
   }
 
   if (loading) {
@@ -475,7 +652,7 @@ export default function Account() {
             <div>
               <p className="font-semibold text-black dark:text-white">Profile actions</p>
               <p className="text-sm text-gray-600 dark:text-gray-300">
-                Save from here because these buttons only affect the profile section above.
+                Save or reset your profile changes.
               </p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
@@ -483,10 +660,10 @@ export default function Account() {
                 type="button"
                 onClick={resetProfileChanges}
                 disabled={!hasUnsavedChanges || saving}
-                className={`inline-flex w-full items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-semibold border transition sm:w-auto ${
+                className={`${ACCOUNT_SECONDARY_BUTTON_CLASS} ${
                   hasUnsavedChanges && !saving
-                    ? "border-black/15 text-black hover:bg-black/5 dark:border-white/15 dark:text-white dark:hover:bg-white/10"
-                    : "border-gray-200 text-gray-400 cursor-not-allowed dark:border-gray-700 dark:text-gray-500"
+                    ? ""
+                    : "border-gray-200 text-gray-400 dark:border-gray-700 dark:text-gray-500"
                 }`}
               >
                 <RefreshCcw className="w-4 h-4" />
@@ -495,10 +672,10 @@ export default function Account() {
               <button
                 onClick={save}
                 disabled={saving || !hasUnsavedChanges}
-                className={`inline-flex w-full items-center justify-center gap-2 px-6 py-3 rounded-xl text-sm font-semibold transition sm:w-auto ${
+                className={`${ACCOUNT_PRIMARY_BUTTON_CLASS} ${
                   hasUnsavedChanges
-                    ? "bg-black text-white hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90"
-                    : "bg-gray-200 text-gray-500 cursor-not-allowed dark:bg-gray-700 dark:text-gray-400"
+                    ? ""
+                    : "bg-gray-200 text-gray-500 dark:bg-gray-700 dark:text-gray-400"
                 }`}
               >
                 {saving ? (
@@ -557,42 +734,127 @@ export default function Account() {
               />
             }
           />
+          <div className="flex justify-end pt-2">
+            <button
+              type="button"
+              onClick={resetAppearance}
+              className={ACCOUNT_SECONDARY_BUTTON_CLASS}
+            >
+              <RefreshCcw className="h-4 w-4" />
+              Reset Appearance
+            </button>
+          </div>
         </div>
       </Card>
 
       {/* ACTIONS */}
       <Card
         title={t("account.actions")}
-        subtitle="Log out of your account or reset the preferences saved on this device."
+        subtitle={t("account.actionsSubtitle")}
       >
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div className="flex flex-col gap-3 sm:flex-row md:ml-auto">
-            <button
-              type="button"
-              onClick={resetPreferences}
-              className="inline-flex w-full items-center justify-center px-6 py-3 rounded-xl text-sm font-semibold border border-black/15 text-black hover:bg-black/5 dark:border-white/15 dark:text-white dark:hover:bg-white/10 transition sm:w-auto"
-            >
-              Reset Preferences
-            </button>
+        <div className="space-y-5">
+          <div className="rounded-2xl border border-black/10 bg-white/75 px-5 py-5 dark:border-white/10 dark:bg-white/[0.04]">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="font-semibold text-black dark:text-white">{t("account.securityTitle")}</p>
+                <p className="text-sm text-gray-600 dark:text-gray-300">
+                  {canSendResetLink
+                    ? t("account.passwordHint")
+                    : isProviderManaged
+                      ? t("account.passwordProviderHint", { provider: providerLabel })
+                      : t("account.passwordUnavailableHint")}
+                </p>
+              </div>
+              {canSendResetLink ? (
+                <button
+                  type="button"
+                  onClick={openResetPasswordModal}
+                  disabled={sendingResetLink}
+                  className={ACCOUNT_SECONDARY_BUTTON_CLASS}
+                >
+                  {sendingResetLink ? (
+                    <>
+                      <span className="h-4 w-4 rounded-full border-2 border-current border-t-transparent animate-spin"></span>
+                      {t("account.passwordSending")}
+                    </>
+                  ) : (
+                    t("account.passwordButton")
+                  )}
+                </button>
+              ) : (
+                <span className={ACCOUNT_STATUS_PILL_CLASS}>
+                  {isProviderManaged
+                    ? t("account.passwordProviderManaged", { provider: providerLabel })
+                    : t("account.passwordUnavailable")}
+                </span>
+              )}
+            </div>
+          </div>
 
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="inline-flex w-full items-center justify-center px-6 py-3
-                   rounded-xl text-sm font-semibold
-                   border border-red-400 text-red-600 bg-transparent
-                   hover:bg-red-50 dark:hover:bg-red-900/20
-                   transition sm:w-auto"
-            >
-              <LogOut className="w-4 h-4 mr-1" />
-              {t("account.logout")}
-            </button>
+          <div className="rounded-2xl border border-black/10 bg-white/75 px-5 py-5 dark:border-white/10 dark:bg-white/[0.04]">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="font-semibold text-black dark:text-white">Log out</p>
+                <p className="text-sm text-gray-600 dark:text-gray-300">
+                  Sign out of your account on this device.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className={ACCOUNT_BRAND_BUTTON_CLASS}
+              >
+                <LogOut className="h-4 w-4" />
+                {t("account.logout")}
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-red-200/80 bg-red-50/80 px-5 py-5 dark:border-red-500/20 dark:bg-red-950/20">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="font-semibold text-red-700 dark:text-red-300">Delete account</p>
+                <p className="text-sm text-red-600/90 dark:text-red-200/80">
+                  Permanently delete your account and all episodes created with it.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={openDeleteModal}
+                disabled={deletingAccount}
+                className={ACCOUNT_DANGER_BUTTON_CLASS}
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete Account
+              </button>
+            </div>
           </div>
         </div>
       </Card>
 
       {/* Toast notification */}
       <Toast message={toastMsg} type={toastType} />
+      <PasswordResetModal
+        open={showResetPasswordModal}
+        email={profile.email}
+        sending={sendingResetLink}
+        onCancel={closeResetPasswordModal}
+        onConfirm={handleSendResetLink}
+        title={t("account.passwordModalTitle")}
+        body={t("account.passwordModalBody", { email: profile.email })}
+        note={t("account.passwordModalNote")}
+        cancelLabel={t("account.passwordModalCancel")}
+        confirmLabel={t("account.passwordModalConfirm")}
+        sendingLabel={t("account.passwordSending")}
+      />
+      <DeleteAccountModal
+        open={showDeleteModal}
+        confirmationText={deleteConfirmation}
+        deleting={deletingAccount}
+        onConfirmationChange={setDeleteConfirmation}
+        onCancel={closeDeleteModal}
+        onConfirm={handleDeleteAccount}
+      />
     </div>
   );
 }
@@ -618,6 +880,144 @@ function Card({ title, subtitle, icon, children }) {
       )}
       {children}
     </div>
+  );
+}
+
+function PasswordResetModal({
+  open,
+  email,
+  sending,
+  onCancel,
+  onConfirm,
+  title,
+  body,
+  note,
+  cancelLabel,
+  confirmLabel,
+  sendingLabel,
+}) {
+  if (!open) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[10020] flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-[28px] border border-black/10 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-neutral-950">
+        <div className="flex items-start gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-purple-100 text-purple-700 dark:bg-purple-500/15 dark:text-purple-200">
+            <AlertCircle className="h-5 w-5" />
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-xl font-semibold text-black dark:text-white">{title}</h3>
+            <p className="text-sm text-gray-600 dark:text-gray-300">{body}</p>
+            <p className="text-sm text-gray-600 dark:text-gray-300">{note}</p>
+          </div>
+        </div>
+
+        <div className="mt-5 space-y-4">
+          <div className="rounded-2xl border border-black/10 bg-black/[0.03] px-4 py-3 text-sm text-black/75 dark:border-white/10 dark:bg-white/[0.04] dark:text-white/75">
+            {email}
+          </div>
+
+          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={sending}
+              className="inline-flex items-center justify-center rounded-xl border border-black/15 px-5 py-3 text-sm font-semibold text-black transition hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/15 dark:text-white dark:hover:bg-white/10"
+            >
+              {cancelLabel}
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={sending}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-black/90 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-black dark:hover:bg-white/90"
+            >
+              {sending ? (
+                <>
+                  <span className="h-4 w-4 rounded-full border-2 border-current border-t-transparent animate-spin"></span>
+                  {sendingLabel}
+                </>
+              ) : (
+                confirmLabel
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function DeleteAccountModal({
+  open,
+  confirmationText,
+  deleting,
+  onConfirmationChange,
+  onCancel,
+  onConfirm,
+}) {
+  if (!open) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[10020] flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-[28px] border border-red-200 bg-white p-6 shadow-2xl dark:border-red-500/20 dark:bg-neutral-950">
+        <div className="flex items-start gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-red-100 text-red-600 dark:bg-red-500/15 dark:text-red-300">
+            <AlertTriangle className="h-5 w-5" />
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-xl font-semibold text-black dark:text-white">Delete account?</h3>
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              This action permanently deletes your account and all episodes tied to it.
+            </p>
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              Type <span className="font-semibold text-black dark:text-white">DELETE</span> to confirm.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 space-y-4">
+          <input
+            className="form-input"
+            value={confirmationText}
+            onChange={(e) => onConfirmationChange(e.target.value)}
+            placeholder="Type DELETE"
+            autoFocus
+          />
+
+          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={deleting}
+              className="inline-flex items-center justify-center rounded-xl border border-black/15 px-5 py-3 text-sm font-semibold text-black transition hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/15 dark:text-white dark:hover:bg-white/10"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={deleting || confirmationText !== "DELETE"}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-red-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {deleting ? (
+                <>
+                  <span className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin"></span>
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4" />
+                  Delete Account
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 

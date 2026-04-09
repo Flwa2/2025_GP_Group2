@@ -1,5 +1,6 @@
 // Preview.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, Save } from "lucide-react";
 import WeCastAudioPlayer from "./WeCastAudioPlayer";
@@ -109,6 +110,12 @@ export default function Preview() {
   const [summaryLoadedFromDb, setSummaryLoadedFromDb] = useState(false);
   const [coverB64, setCoverB64] = useState(null);
   const [coverMime, setCoverMime] = useState("image/png");
+  const [showSaveAuthModal, setShowSaveAuthModal] = useState(false);
+  const authToken = localStorage.getItem("token") || sessionStorage.getItem("token") || "";
+  const isAuthenticated = !!authToken;
+  const pendingSaveHandledRef = useRef(false);
+  const pendingSaveKey = "wecast:pendingPreviewSave";
+  const previewNoticeKey = "wecast:previewSaveNotice";
 
   const coverSrc = useMemo(() => {
     if (!coverB64) return null;
@@ -130,14 +137,41 @@ export default function Preview() {
   const params = new URLSearchParams(window.location.hash.split("?")[1] || "");
   const episodeId = params.get("id");
   const fromSource = params.get("from") || sessionStorage.getItem("preview_from") || "";
+  const showGuestTryWeCastSave = !isAuthenticated && fromSource === "create" && !episodeId;
   const isFromDashboardPreview = fromSource === "episodes";
   const isFromStudioCreatePreview = fromSource === "studio_create";
   const useDashboardGlassTone = isFromDashboardPreview || isFromStudioCreatePreview;
   const dashboardShellClass = "w-full border-b border-black/10 bg-white/70 dark:bg-neutral-900/45 shadow-[0_10px_30px_rgba(0,0,0,0.08)] backdrop-blur-sm";
   const dashboardContentClass = "mx-auto w-full max-w-[1400px] px-4 pt-4 pb-8 bg-white/35 dark:bg-neutral-900/20 space-y-6 sm:px-6 sm:pb-10";
   const dashboardCardClass = "rounded-3xl border border-purple-200/90 dark:border-purple-400/30 bg-white/55 dark:bg-neutral-900/60 backdrop-blur-md shadow-sm";
+  const previewCardClass = dashboardCardClass;
   const [externalSeek, setExternalSeek] = useState(null);
   const displayTitle = title || t("preview.title");
+
+  const buildPreviewAuthHash = (route = "signup") => {
+    const nextParams = new URLSearchParams();
+    nextParams.set("redirect", "preview");
+    if (episodeId) nextParams.set("id", episodeId);
+    if (fromSource) nextParams.set("from", fromSource);
+    return `#/${route}?${nextParams.toString()}`;
+  };
+
+  const queuePendingSave = () => {
+    sessionStorage.setItem(
+      pendingSaveKey,
+      JSON.stringify({
+        id: episodeId || "",
+        from: fromSource || "",
+        requestedAt: Date.now(),
+      })
+    );
+  };
+
+  const redirectForSaveAuth = (route = "signup") => {
+    queuePendingSave();
+    setShowSaveAuthModal(false);
+    window.location.hash = buildPreviewAuthHash(route);
+  };
 
   // load initial preview data
   useEffect(() => {
@@ -168,6 +202,19 @@ export default function Preview() {
         .catch(() => {});
     }
   }, [episodeId]);
+
+  useEffect(() => {
+    const savedNotice = sessionStorage.getItem(previewNoticeKey);
+    if (!savedNotice) return;
+    try {
+      const parsed = JSON.parse(savedNotice);
+      if (parsed?.message) {
+        setSaveMessage(parsed.message);
+        setSaveMessageType(parsed.type || "success");
+      }
+    } catch {}
+    sessionStorage.removeItem(previewNoticeKey);
+  }, []);
 
   // load episode data by id
   useEffect(() => {
@@ -473,8 +520,8 @@ export default function Preview() {
   };
 
   const handleSaveAll = async () => {
-    if (!episodeId) {
-      setSaveMessage(t("preview.saveMissingId"));
+    if (!isAuthenticated) {
+      setShowSaveAuthModal(true);
       return;
     }
 
@@ -483,7 +530,11 @@ export default function Preview() {
     setSaveMessageType("info");
 
     try {
-      const res = await fetch(`${API_BASE}/api/podcasts/${episodeId}/save-all`, {
+      const savePath = episodeId
+        ? `${API_BASE}/api/podcasts/${episodeId}/save-all`
+        : `${API_BASE}/api/preview/save`;
+
+      const res = await fetch(savePath, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -493,19 +544,32 @@ export default function Preview() {
           summary,
           chapters,
           words,
+          language: podcastLanguage,
+          transcriptText,
         }),
       });
 
       if (res.status === 401) {
-        setSaveMessageType("error");
-        setSaveMessage(t("preview.saveLoginRequired"));
-        window.location.hash = `#/signup?redirect=preview&id=${encodeURIComponent(episodeId)}`;
+        setShowSaveAuthModal(true);
         return;
       }
       if (!res.ok) throw new Error(`Save failed: ${res.status}`);
 
+      const data = await res.json().catch(() => ({}));
+
       setSaveMessageType("success");
       setSaveMessage(t("preview.saveSuccess"));
+
+      if (!episodeId && data?.podcastId) {
+        sessionStorage.setItem(
+          previewNoticeKey,
+          JSON.stringify({ type: "success", message: t("preview.saveSuccess") })
+        );
+        sessionStorage.removeItem(pendingSaveKey);
+        const nextFrom = fromSource || "create";
+        window.location.hash = `#/preview?id=${encodeURIComponent(data.podcastId)}&from=${encodeURIComponent(nextFrom)}`;
+        return;
+      }
     } catch (e) {
       console.error("Save failed", e);
       setSaveMessageType("error");
@@ -515,6 +579,29 @@ export default function Preview() {
       setTimeout(() => setSaveMessage(""), 3000);
     }
   };
+
+  useEffect(() => {
+    if (!isAuthenticated || pendingSaveHandledRef.current) return;
+
+    const rawIntent = sessionStorage.getItem(pendingSaveKey);
+    if (!rawIntent) return;
+
+    let intent = {};
+    try {
+      intent = JSON.parse(rawIntent) || {};
+    } catch {
+      sessionStorage.removeItem(pendingSaveKey);
+      return;
+    }
+
+    if ((intent.id || "") !== (episodeId || "")) return;
+    if ((intent.from || "") !== (fromSource || "")) return;
+    if (!episodeId && !audioUrl) return;
+
+    pendingSaveHandledRef.current = true;
+    sessionStorage.removeItem(pendingSaveKey);
+    handleSaveAll();
+  }, [isAuthenticated, episodeId, fromSource, audioUrl]);
 
   const handleBack = () => {
     // Preferred behavior: return exactly one navigation step back.
@@ -628,7 +715,7 @@ export default function Preview() {
             {/* Transcript */}
             <div
               ref={transcriptCardRef}
-              className={`${useDashboardGlassTone ? dashboardCardClass : "rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-[#faf7f1]/96 dark:bg-neutral-900/95"} p-5 shadow-lg w-full min-h-[260px]`}
+              className={`${previewCardClass} p-5 w-full min-h-[260px]`}
               style={transcriptCardHeight ? { minHeight: transcriptCardHeight } : undefined}
             >
               <div ref={transcriptHeaderRef} className="flex items-center justify-between mb-3">
@@ -706,7 +793,7 @@ export default function Preview() {
           <div ref={rightColRef} className="lg:col-span-5 w-full">
             <div className="w-full lg:sticky lg:top-24 lg:-mt-3 space-y-4">
               {/* Chapters card */}
-              <div className={`${useDashboardGlassTone ? dashboardCardClass : "rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-[#faf7f1]/94 dark:bg-neutral-900/90"} shadow-lg overflow-hidden`}>
+              <div className={`${previewCardClass} overflow-hidden`}>
                 <button
                   type="button"
                   onClick={() => {
@@ -753,7 +840,7 @@ export default function Preview() {
               </div>
 
               {/* Summary card */}
-              <div className={`${useDashboardGlassTone ? dashboardCardClass : "rounded-3xl border border-neutral-200 dark:border-neutral-800 bg-[#faf7f1]/94 dark:bg-neutral-900/90"} shadow-lg overflow-hidden`}>
+              <div className={`${previewCardClass} overflow-hidden`}>
                 <button
                   type="button"
                   onClick={() => {
@@ -800,8 +887,83 @@ export default function Preview() {
             </div>
           </div>
         </div>
+
+        {showGuestTryWeCastSave ? (
+          <div className="flex justify-end pt-2">
+            <button
+              type="button"
+              onClick={handleSaveAll}
+              disabled={isSaving}
+              title={t("preview.saveTooltip")}
+              className="inline-flex min-w-[10.5rem] items-center justify-center gap-2 rounded-2xl bg-black px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-black"
+            >
+              <Save className="h-4 w-4" />
+              {isSaving ? t("preview.saving") : t("preview.save")}
+            </button>
+          </div>
+        ) : null}
       </div>
       </div>
+      <SavePreviewAuthModal
+        open={showSaveAuthModal}
+        title={t("preview.saveAuthTitle")}
+        body={t("preview.saveAuthBody")}
+        cancelLabel={t("preview.saveAuthCancel")}
+        loginLabel={t("preview.saveAuthLogin")}
+        signupLabel={t("preview.saveAuthSignup")}
+        onClose={() => setShowSaveAuthModal(false)}
+        onLogin={() => redirectForSaveAuth("login")}
+        onSignup={() => redirectForSaveAuth("signup")}
+      />
     </div>
+  );
+}
+
+function SavePreviewAuthModal({
+  open,
+  title,
+  body,
+  cancelLabel,
+  loginLabel,
+  signupLabel,
+  onClose,
+  onLogin,
+  onSignup,
+}) {
+  if (!open) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[10020] flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-[28px] border border-black/10 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-neutral-950">
+        <div className="space-y-3">
+          <h2 className="text-2xl font-extrabold text-black dark:text-white">{title}</h2>
+          <p className="text-sm leading-7 text-black/65 dark:text-white/65">{body}</p>
+        </div>
+        <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex items-center justify-center rounded-2xl border border-black/10 px-5 py-3 text-sm font-semibold text-black transition hover:bg-black/5 dark:border-white/10 dark:text-white dark:hover:bg-white/10"
+          >
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            onClick={onLogin}
+            className="inline-flex items-center justify-center rounded-2xl border border-black/10 px-5 py-3 text-sm font-semibold text-black transition hover:bg-black/5 dark:border-white/10 dark:text-white dark:hover:bg-white/10"
+          >
+            {loginLabel}
+          </button>
+          <button
+            type="button"
+            onClick={onSignup}
+            className="inline-flex items-center justify-center rounded-2xl bg-black px-5 py-3 text-sm font-semibold text-white transition hover:opacity-90 dark:bg-white dark:text-black"
+          >
+            {signupLabel}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }

@@ -2,7 +2,8 @@
 import { useTranslation } from "react-i18next";
 
 export default function Footer() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const isRTL = i18n.language === "ar";
 
   const navigateToSection = (sectionId) => {
     if (window.location.hash !== "#/" && window.location.hash !== "") {
@@ -51,7 +52,7 @@ export default function Footer() {
             </p>
           </div>
 
-          <div className="text-center md:pl-12 md:text-left lg:pl-16">
+          <div className={isRTL ? "text-center md:pr-12 md:text-right lg:pr-16" : "text-center md:pl-12 md:text-left lg:pl-16"}>
             <h5 className="heading-md mb-4 leading-none">{t("footer.quickLinks")}</h5>
             <ul className="space-y-3 text-base font-medium text-black/88 dark:text-white/88">
               <li>
@@ -66,7 +67,7 @@ export default function Footer() {
               <li>
                 <a href="#/episodes" className="group inline-flex items-center gap-3 hover:opacity-80 transition">
                   <span className="h-2.5 w-2.5 rounded-full bg-[#22c55e] group-hover:scale-125 transition-transform" />
-                  <span>{t("Episodes")}</span>
+                  <span>{t("episodes.sidebar.library")}</span>
                 </a>
               </li>
               <li>

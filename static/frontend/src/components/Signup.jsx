@@ -1,12 +1,12 @@
-import React, { useMemo, useState } from "react";
-import { signInWithPopup } from "firebase/auth";
-import { auth, googleProvider, githubProvider } from "../firebaseClient";
+import React, { useEffect, useMemo, useState } from "react";
+import { createUserWithEmailAndPassword, sendEmailVerification, updateProfile } from "firebase/auth";
+import { auth, googleProvider, githubProvider, actionCodeSettings } from "../firebaseClient";
 import { useTranslation } from "react-i18next";
-
-
-const API_BASE = import.meta.env.PROD
-  ? "https://wecast.onrender.com"
-  : "http://localhost:5000";
+import { API_BASE } from "../utils/api";
+import {
+    authenticateWithSocialProvider,
+    completePendingSocialRedirect,
+} from "../utils/socialAuth";
   
 function getRedirectParams() {
     const hash = window.location.hash || "";
@@ -33,12 +33,68 @@ function redirectAfterAuth() {
     }
 }
 
+function mapSignupError(error) {
+    const code = error?.code || "";
+
+    if (code === "auth/email-already-in-use") {
+        return "An account already exists with this email. Try logging in instead.";
+    }
+    if (code === "auth/invalid-email") {
+        return "Enter a valid email address you can access, then try again.";
+    }
+    if (code === "auth/weak-password") {
+        return "Choose a stronger password with at least 8 characters.";
+    }
+    if (code === "auth/operation-not-allowed") {
+        return "";
+    }
+    if (code === "auth/unauthorized-domain") {
+        return "";
+    }
+
+    return error?.message || "We couldn’t create your account right now. Please try again.";
+}
+
 
 export default function Signup() {
     const { t } = useTranslation();
-    const [form, setForm] = useState({ username: "", email: "", password: "" });
+    const [form, setForm] = useState({ username: "", email: "", password: "", confirmPassword: "" });
     const [error, setError] = useState("");
+    const [info, setInfo] = useState("");
     const [loading, setLoading] = useState(false);
+    const [verificationEmail, setVerificationEmail] = useState("");
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const finishRedirectSignup = async () => {
+            try {
+                setLoading(true);
+                const completed = await completePendingSocialRedirect({
+                    auth,
+                    remember: true,
+                });
+                if (!cancelled && completed) {
+                    redirectAfterAuth();
+                }
+            } catch (err) {
+                if (!cancelled) {
+                    console.error("SOCIAL REDIRECT SIGNUP ERROR:", err);
+                    setError(err.message || "Social signup failed. Please try again.");
+                }
+            } finally {
+                if (!cancelled) {
+                    setLoading(false);
+                }
+            }
+        };
+
+        finishRedirectSignup();
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     const passwordScore = useMemo(() => {
         const p = form.password || "";
@@ -71,6 +127,8 @@ const pwLabel = strengthLabels[passwordScore];
     const onSubmit = async (e) => {
         e.preventDefault();
         setError("");
+        setInfo("");
+        setVerificationEmail("");
 
         const password = form.password || "";
         const hasMinLength = password.length >= 8;
@@ -85,48 +143,36 @@ const pwLabel = strengthLabels[passwordScore];
             return;
         }
 
+        if (form.password !== form.confirmPassword) {
+            setError("Passwords do not match.");
+            return;
+        }
+
         setLoading(true);
 
         try {
-            const res = await fetch(`${API_BASE}/api/signup`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                credentials: "include",
-                body: JSON.stringify({
-                    name: form.username,
-                    email: form.email,
-                    password: form.password,
-                }),
-            });
-
-            const data = await res.json();
-
-            if (!res.ok) {
-                setError(data.error || "Signup failed. Please try again.");
-                setLoading(false);
-                return;
-            }
-
-            if (data.token) {
-                localStorage.setItem("token", data.token);
-            }
-            if (data.user) {
-                localStorage.setItem("user", JSON.stringify(data.user));
-            }
-
-            window.dispatchEvent(
-                new StorageEvent("storage", { key: "token", newValue: data.token || "" })
+            const cred = await createUserWithEmailAndPassword(
+                auth,
+                form.email.trim(),
+                form.password
             );
 
-            redirectAfterAuth();
+            if (form.username.trim()) {
+                await updateProfile(cred.user, { displayName: form.username.trim() });
+            }
+
+            await sendEmailVerification(cred.user, actionCodeSettings);
+            await auth.signOut();
+
+            const email = form.email.trim();
+            setVerificationEmail(email);
+            setInfo("Check your inbox to verify your email, then log in to finish creating your account.");
+            sessionStorage.setItem("wecast:pendingVerificationEmail", email);
+            setForm({ username: "", email: "", password: "", confirmPassword: "" });
         } catch (err) {
             console.error("SIGNUP ERROR:", err);
-            setError(
-                err.message ||
-                "Something went wrong. Please check your connection and try again."
-            );
+            setError(mapSignupError(err));
+        } finally {
             setLoading(false);
         }
     };
@@ -137,37 +183,22 @@ const pwLabel = strengthLabels[passwordScore];
         setLoading(true);
 
         try {
-            const result = await signInWithPopup(auth, googleProvider);
-            const user = result.user;
-            const idToken = await user.getIdToken();
-
-            const res = await fetch(`${API_BASE}/api/social-login`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                credentials: "include",
-                body: JSON.stringify({ idToken }),
+            const result = await authenticateWithSocialProvider({
+                auth,
+                provider: googleProvider,
+                providerLabel: "Google",
+                remember: true,
             });
-
-            const data = await res.json();
-
-            if (!res.ok) {
-                setError(data.error || "Signup failed.");
+            if (result.redirected) {
                 return;
             }
-
-            localStorage.setItem("token", data.token);
-            localStorage.setItem("user", JSON.stringify(data.user));
-
-            window.dispatchEvent(
-                new StorageEvent("storage", { key: "token", newValue: data.token })
-            );
 
             redirectAfterAuth();
 
 
         } catch (err) {
             console.error("GOOGLE SIGNUP ERROR:", err);
-            setError("Google signup failed. Please try again.");
+            setError(err.message || "Google signup failed. Please try again.");
         } finally {
             setLoading(false);
         }
@@ -178,33 +209,20 @@ const pwLabel = strengthLabels[passwordScore];
         setLoading(true);
 
         try {
-            const result = await signInWithPopup(auth, githubProvider);
-            const user = result.user;
-            const idToken = await user.getIdToken();
-
-            const res = await fetch(`${API_BASE}/api/social-login`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                credentials: "include",
-                body: JSON.stringify({ idToken }),
+            const result = await authenticateWithSocialProvider({
+                auth,
+                provider: githubProvider,
+                providerLabel: "GitHub",
+                remember: true,
             });
-
-            const data = await res.json();
-
-            if (!res.ok) {
-                setError(data.error || "Signup failed.");
+            if (result.redirected) {
                 return;
             }
-
-            localStorage.setItem("token", data.token);
-            localStorage.setItem("user", JSON.stringify(data.user));
-
-            window.dispatchEvent(new StorageEvent("storage", { key: "token", newValue: data.token }));
-            window.location.hash = "#/";
+            redirectAfterAuth();
 
         } catch (err) {
             console.error("GITHUB SIGNUP ERROR:", err);
-            setError("GitHub signup failed. Please try again.");
+            setError(err.message || "GitHub signup failed. Please try again.");
         } finally {
             setLoading(false);
         }
@@ -269,6 +287,39 @@ const pwLabel = strengthLabels[passwordScore];
                     </p>
                 </div>
 
+                {verificationEmail ? (
+                    <div className="space-y-5">
+                        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-5 text-center dark:border-emerald-500/20 dark:bg-emerald-500/10">
+                            <h2 className="text-2xl font-extrabold tracking-tight text-black dark:text-white sm:text-[2rem]">
+                                Check your email
+                            </h2>
+                            <p className="mt-3 text-sm leading-6 text-black/70 dark:text-white/70">
+                                We sent a verification link to <span className="font-semibold text-black dark:text-white">{verificationEmail}</span>.
+                            </p>
+                            <p className="mt-2 text-sm leading-6 text-black/70 dark:text-white/70">
+                                Open the email, verify your address, then return to WeCast and log in.
+                            </p>
+                        </div>
+
+                        <a
+                            href="#/login"
+                            className="btn-cta w-full text-center"
+                        >
+                            Go to Login
+                        </a>
+
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setVerificationEmail("");
+                                setInfo("");
+                            }}
+                            className="btn-secondary w-full"
+                        >
+                            Use a different email
+                        </button>
+                    </div>
+                ) : (
                 <form onSubmit={onSubmit} className="space-y-5">
                     <div>
                         <label className="form-label">{t("signup.username")}</label>
@@ -332,9 +383,30 @@ const pwLabel = strengthLabels[passwordScore];
     </div>
 </div>
 
+                    <div>
+                        <label className="form-label">Confirm Password</label>
+                        <div className="relative">
+                            <input
+                                type="password"
+                                name="confirmPassword"
+                                value={form.confirmPassword}
+                                onChange={onChange}
+                                placeholder="••••••••"
+                                required
+                                className="form-input"
+                            />
+                        </div>
+                    </div>
+
                     {error && (
                         <p className="text-sm text-red-500 text-center">
                             {error}
+                        </p>
+                    )}
+
+                    {info && (
+                        <p className="text-sm text-emerald-600 text-center">
+                            {info}
                         </p>
                     )}
 
@@ -398,6 +470,7 @@ const pwLabel = strengthLabels[passwordScore];
                         </a>
                     </p>
                 </form>
+                )}
             </div>
         </div>
     );
