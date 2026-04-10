@@ -447,6 +447,22 @@ export default function EditPodcast() {
     category: String(nextCategory || ""),
   });
 
+const [showFinalizeWarning, setShowFinalizeWarning] = useState(false);
+
+const willRegenerateAudio = useCallback(() => {
+  const updatedScript = applyShowTitleToScript(
+    applySpeakerLabelRenames(script, originalSpeakers, speakers),
+    showTitle
+  );
+  
+  return (
+    updatedScript !== String(originalScript || "") ||
+    !speakersEqual(speakers, originalSpeakers) ||
+    String(introMusic || "") !== String(originalIntroMusic || "") ||
+    String(bodyMusic || "") !== String(originalBodyMusic || "") ||
+    String(outroMusic || "") !== String(originalOutroMusic || "")
+  );
+}, [script, originalScript, speakers, originalSpeakers, introMusic, originalIntroMusic, bodyMusic, originalBodyMusic, outroMusic, originalOutroMusic, showTitle]);
   const applyShowTitleToScript = (inputScript, nextShowTitle) =>
     String(inputScript || "").replace(/\{\{SHOW_TITLE\}\}/g, String(nextShowTitle || "").trim());
 
@@ -1201,6 +1217,8 @@ const exportScript = async (format = "pdf") => {
     setExporting(false);
   }
 };
+
+
   // Script editing guards
   const onKeyDownGuard = (e) => {
     const ta = textareaRef.current;
@@ -1445,24 +1463,31 @@ const exportScript = async (format = "pdf") => {
               {hasUnsavedChanges ? "Save Draft" : draftRestored ? "Draft Loaded" : "Save Draft"}
             </button>
             <button
-              onClick={() => {
-                if (isEditingTitle) {
-                  setToast({ type: "warning", message: "Apply or cancel the title draft before finalizing." });
-                  setTimeout(() => setToast(null), 3000);
-                  return;
-                }
-                finalizeChanges();
-              }}
-              disabled={saving || generatingAudio || (!hasUnsavedChanges && !draftRestored)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition ${
-                hasUnsavedChanges || draftRestored
-                  ? "bg-purple-600 text-white hover:bg-purple-700"
-                  : "bg-black/5 text-black/35 cursor-not-allowed dark:bg-white/10 dark:text-white/40"
-              }`}
-            >
-              <Save className="w-4 h-4" />
-              {saving ? "Saving Final..." : "Save as Final"}
-            </button>
+  onClick={() => {
+    if (isEditingTitle) {
+      setToast({ type: "warning", message: "Apply or cancel the title draft before finalizing." });
+      setTimeout(() => setToast(null), 3000);
+      return;
+    }
+    
+    // Show warning if changes will trigger audio regeneration
+    if (willRegenerateAudio()) {
+      setShowFinalizeWarning(true);
+    } else {
+      // No audio regeneration needed, proceed directly
+      finalizeChanges();
+    }
+  }}
+  disabled={saving || generatingAudio || (!hasUnsavedChanges && !draftRestored)}
+  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition ${
+    hasUnsavedChanges || draftRestored
+      ? "bg-purple-600 text-white hover:bg-purple-700"
+      : "bg-black/5 text-black/35 cursor-not-allowed dark:bg-white/10 dark:text-white/40"
+  }`}
+>
+  <Save className="w-4 h-4" />
+  {saving ? "Saving Final..." : "Save as Final"}
+</button>
           </div>
         </div>
       </div>
@@ -1657,16 +1682,17 @@ const exportScript = async (format = "pdf") => {
                             </div>
 
                             <button
-                              onClick={() => {
-                                const selected = pool.find((v) => getVoiceId(v) === currentId);
-                                previewVoice(currentId, selected?.name || "");
-                              }}
-                              disabled={!currentId || previewLoadingVoiceId === currentId}
-                              className="px-4 py-2 border border-purple-500 text-purple-600 dark:text-purple-300 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50"
-                              title={previewLoadingVoiceId === currentId ? "Generating preview..." : "Preview voice"}
-                            >
-                              <Play className={`w-5 h-5 ${previewLoadingVoiceId === currentId ? "animate-pulse" : ""}`} />
-                            </button>
+  onClick={() => {
+    const selected = pool.find((v) => getVoiceId(v) === currentId);
+    previewVoice(currentId, selected?.name || "");
+  }}
+  disabled={!currentId || previewLoadingVoiceId === currentId}
+  className={`inline-flex items-center justify-center gap-2 px-5 h-[44px] rounded-xl border border-purple-500 text-purple-600 font-semibold transition hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50 ${isRTL ? "flex-row-reverse" : ""}`}
+  title={previewLoadingVoiceId === currentId ? "Generating preview..." : "Preview voice"}
+>
+  <span>{previewLoadingVoiceId === currentId ? "Generating..." : "Preview"}</span>
+  <Play className={`w-4 h-4 ${previewLoadingVoiceId === currentId ? "animate-pulse" : ""}`} />
+</button>
                           </div>
                           {hasMoreVoices && (
                             <button
@@ -1842,6 +1868,68 @@ const exportScript = async (format = "pdf") => {
           </div>
         </div>
       )}
+
+      {/* Finalize Warning Modal */}
+{showFinalizeWarning && (
+  <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+    <div className="w-[min(92vw,480px)] rounded-[24px] border border-purple-200 bg-white p-6 shadow-[0_24px_56px_rgba(139,61,255,0.15)] dark:border-purple-400/20 dark:bg-neutral-900">
+      <div className="mb-5 flex items-start gap-4">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-purple-100 text-purple-700 ring-1 ring-purple-300 dark:bg-purple-500/15 dark:text-purple-300 dark:ring-purple-400/25">
+          <Volume2 className="h-6 w-6" />
+        </div>
+        <div className="space-y-1.5">
+          <h2 className="text-xl font-bold tracking-tight text-neutral-950 dark:text-white">
+            Regenerate Audio?
+          </h2>
+          <p className="text-sm leading-6 text-neutral-600 dark:text-white/70">
+            Saving as final will regenerate the entire podcast audio to apply your changes.
+            This may take a few moments.
+          </p>
+          <div className="mt-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-300">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>The following changes require audio regeneration:</span>
+            </div>
+            <ul className="mt-2 ml-6 list-disc space-y-0.5 text-xs">
+              {String(applyShowTitleToScript(
+                applySpeakerLabelRenames(script, originalSpeakers, speakers),
+                showTitle
+              )) !== String(originalScript || "") && (
+                <li>Script content has been modified</li>
+              )}
+              {!speakersEqual(speakers, originalSpeakers) && (
+                <li>Speaker names or voices have changed</li>
+              )}
+              {(String(introMusic || "") !== String(originalIntroMusic || "") ||
+                String(bodyMusic || "") !== String(originalBodyMusic || "") ||
+                String(outroMusic || "") !== String(originalOutroMusic || "")) && (
+                <li>Music tracks have been updated</li>
+              )}
+            </ul>
+          </div>
+        </div>
+      </div>
+      
+      <div className="flex gap-3">
+        <button
+          onClick={() => setShowFinalizeWarning(false)}
+          className="flex-1 rounded-xl border border-neutral-300 bg-white px-4 py-2.5 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-50 dark:border-white/15 dark:bg-white/5 dark:text-white dark:hover:bg-white/10"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={async () => {
+            setShowFinalizeWarning(false);
+            await finalizeChanges();
+          }}
+          className="flex-1 rounded-xl bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_10px_22px_rgba(139,61,255,0.25)] transition hover:bg-purple-700"
+        >
+          Generate Audio & Save
+        </button>
+      </div>
+    </div>
+  </div>
+)}
 
       <Toast toast={toast} onClose={() => setToast(null)} />
 {toastMsg && (
