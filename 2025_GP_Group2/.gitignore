@@ -1,0 +1,71 @@
+# ==========================
+# Python / Backend
+# ==========================
+
+venv/
+__pycache__/
+*.pyc
+
+# Flask runtime
+.flask_session/
+static/output.mp3
+
+# Environment files
+.env
+*.env
+.env.local
+*.env.*
+
+# Service account / private keys
+config/service_account.json
+
+# Logs
+*.log
+
+# ==========================
+# Node / React Frontend
+# ==========================
+
+# Node modules
+static/frontend/node_modules/
+node_modules/
+
+# Build outputs
+static/frontend/dist/
+dist/
+build/
+
+# Environment files (frontend)
+static/frontend/.env
+static/frontend/.env.local
+static/frontend/*.env
+static/frontend/.*.env
+
+# Temporary files
+static/frontend/.vite/
+static/frontend/.cache/
+static/frontend/.parcel-cache/
+*.tmp
+
+# ==========================
+# System files
+# ==========================
+
+.DS_Store
+Thumbs.db
+
+# Editor junk
+.vscode/
+.idea/
+
+# Flask session junk
+.flask_session/
+
+# Audio outputs
+static/output_*.mp3
+static/voice_output.mp3
+static/generated_audio/
+
+# Node junk
+static/frontend/node_modules/
+static/frontend/package-lock.json
