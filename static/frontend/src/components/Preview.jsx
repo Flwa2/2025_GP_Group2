@@ -4,6 +4,15 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, Mic2, Save } from "lucide-react";
 import WeCastAudioPlayer from "./WeCastAudioPlayer";
+import {
+  clearPendingPreviewDraft,
+  clearPendingPreviewSave,
+  getPendingPreviewDraft,
+  getPendingPreviewSave,
+  queuePendingPreviewSave,
+  storeAuthRedirectIntent,
+  storePendingPreviewDraft,
+} from "../utils/authRedirect";
 
 const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
@@ -117,7 +126,6 @@ export default function Preview() {
   const authToken = localStorage.getItem("token") || sessionStorage.getItem("token") || "";
   const isAuthenticated = !!authToken;
   const pendingSaveHandledRef = useRef(false);
-  const pendingSaveKey = "wecast:pendingPreviewSave";
   const previewNoticeKey = "wecast:previewSaveNotice";
 
   const transcriptRef = useRef(null);
@@ -186,19 +194,35 @@ export default function Preview() {
     return `#/${route}?${nextParams.toString()}`;
   };
 
-  const queuePendingSave = () => {
-    sessionStorage.setItem(
-      pendingSaveKey,
-      JSON.stringify({
-        id: episodeId || "",
-        from: fromSource || "",
-        requestedAt: Date.now(),
-      })
-    );
+  const queuePendingGuestSave = () => {
+    queuePendingPreviewSave({
+      id: episodeId || "",
+      from: fromSource || "",
+      requestedAt: Date.now(),
+    });
+
+    storeAuthRedirectIntent({
+      redirect: "preview",
+      id: episodeId || "",
+      from: fromSource || "",
+    });
+
+    if (!episodeId && hasPreviewContent) {
+      storePendingPreviewDraft({
+        url: audioUrl,
+        audioKey,
+        words,
+        title: displayTitle,
+        summary,
+        chapters,
+        language: podcastLanguage,
+        category,
+      });
+    }
   };
 
   const redirectForSaveAuth = (route = "signup") => {
-    queuePendingSave();
+    queuePendingGuestSave();
     setShowSaveAuthModal(false);
     window.location.hash = buildPreviewAuthHash(route);
   };
@@ -206,7 +230,14 @@ export default function Preview() {
   // load initial preview data
   useEffect(() => {
     if (episodeId) return;
-    const saved = sessionStorage.getItem("wecast_preview");
+    let saved = sessionStorage.getItem("wecast_preview");
+    if (!saved) {
+      const backupDraft = getPendingPreviewDraft();
+      if (backupDraft) {
+        saved = JSON.stringify(backupDraft);
+        sessionStorage.setItem("wecast_preview", saved);
+      }
+    }
     if (saved) {
       try {
         const p = JSON.parse(saved);
@@ -215,6 +246,7 @@ export default function Preview() {
         if (Array.isArray(p?.words)) setWords(p.words);
         if (p?.title) setTitle(p.title);
         if (p?.summary) setSummary(p.summary);
+        if (Array.isArray(p?.chapters)) setChapters(p.chapters);
         if (p?.language) setPodcastLanguage(p.language);
         if (p?.category) setCategory(p.category);
         if (p?.audioKey) {
@@ -659,11 +691,15 @@ export default function Preview() {
           previewNoticeKey,
           JSON.stringify({ type: "success", message: t("preview.saveSuccess") })
         );
-        sessionStorage.removeItem(pendingSaveKey);
+        clearPendingPreviewSave();
+        clearPendingPreviewDraft();
         const nextFrom = fromSource || "create";
         window.location.hash = `#/preview?id=${encodeURIComponent(data.podcastId)}&from=${encodeURIComponent(nextFrom)}`;
         return;
       }
+
+      clearPendingPreviewSave();
+      clearPendingPreviewDraft();
     } catch (e) {
       console.error("Save failed", e);
       setSaveMessageType("error");
@@ -677,23 +713,15 @@ export default function Preview() {
   useEffect(() => {
     if (!isAuthenticated || pendingSaveHandledRef.current) return;
 
-    const rawIntent = sessionStorage.getItem(pendingSaveKey);
-    if (!rawIntent) return;
-
-    let intent = {};
-    try {
-      intent = JSON.parse(rawIntent) || {};
-    } catch {
-      sessionStorage.removeItem(pendingSaveKey);
-      return;
-    }
+    const intent = getPendingPreviewSave();
+    if (!intent) return;
 
     if ((intent.id || "") !== (episodeId || "")) return;
     if ((intent.from || "") !== (fromSource || "")) return;
     if (!episodeId && !audioUrl) return;
 
     pendingSaveHandledRef.current = true;
-    sessionStorage.removeItem(pendingSaveKey);
+    clearPendingPreviewSave();
     handleSaveAll();
   }, [isAuthenticated, episodeId, fromSource, audioKey, audioUrl]);
 

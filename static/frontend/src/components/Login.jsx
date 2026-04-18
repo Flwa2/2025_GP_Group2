@@ -14,26 +14,22 @@ import {
   completePendingSocialRedirect,
 } from "../utils/socialAuth";
 import {
+  clearAuthRedirectIntent,
+  getAuthRedirectIntent,
+  readHashRedirectParams,
+  storeAuthRedirectIntent,
+} from "../utils/authRedirect";
+import {
   sendEmailVerification,
   signInWithEmailAndPassword,
   signOut,
 } from "firebase/auth";
 
 const REMEMBERED_LOGIN_KEY = "rememberedLoginIdentifier";
-  
-function getRedirectParams() {
-  const hash = window.location.hash || "";
-  const qs = hash.includes("?") ? hash.split("?")[1] : "";
-  const params = new URLSearchParams(qs);
-  return {
-    redirect: params.get("redirect") || "",
-    id: params.get("id") || "",
-    from: params.get("from") || "",
-  };
-}
 
 function redirectAfterAuth() {
-  const { redirect, id, from } = getRedirectParams();
+  const { redirect, id, from } = getAuthRedirectIntent();
+  clearAuthRedirectIntent();
   if (redirect === "edit") {
     window.location.hash = "#/edit";
   } else if (redirect === "create") {
@@ -141,6 +137,10 @@ export default function Login() {
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
   const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
+
+  useEffect(() => {
+    storeAuthRedirectIntent(readHashRedirectParams());
+  }, []);
 
   useEffect(() => {
     const rememberedLogin = localStorage.getItem(REMEMBERED_LOGIN_KEY);

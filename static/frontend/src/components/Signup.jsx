@@ -13,20 +13,16 @@ import {
     authenticateWithSocialProvider,
     completePendingSocialRedirect,
 } from "../utils/socialAuth";
+import {
+    clearAuthRedirectIntent,
+    getAuthRedirectIntent,
+    readHashRedirectParams,
+    storeAuthRedirectIntent,
+} from "../utils/authRedirect";
   
-function getRedirectParams() {
-    const hash = window.location.hash || "";
-    const qs = hash.includes("?") ? hash.split("?")[1] : "";
-    const params = new URLSearchParams(qs);
-    return {
-        redirect: params.get("redirect") || "",
-        id: params.get("id") || "",
-        from: params.get("from") || "",
-    };
-}
-
 function redirectAfterAuth() {
-    const { redirect, id, from } = getRedirectParams();
+    const { redirect, id, from } = getAuthRedirectIntent();
+    clearAuthRedirectIntent();
     if (redirect === "edit") {
         window.location.hash = "#/edit";
     } else if (redirect === "create") {
@@ -103,6 +99,10 @@ export default function Signup() {
     const [loading, setLoading] = useState(false);
     const [verificationEmail, setVerificationEmail] = useState("");
     const [verificationStatus, setVerificationStatus] = useState("sent");
+
+    useEffect(() => {
+        storeAuthRedirectIntent(readHashRedirectParams());
+    }, []);
 
     useEffect(() => {
         let cancelled = false;
