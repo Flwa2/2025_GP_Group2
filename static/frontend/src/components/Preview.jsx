@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, Save } from "lucide-react";
+import { ChevronLeft, Mic2, Save } from "lucide-react";
 import WeCastAudioPlayer from "./WeCastAudioPlayer";
 
 const API_BASE = import.meta.env.PROD
@@ -91,6 +91,10 @@ function formatMMSS(sec) {
 export default function Preview() {
   const { t, i18n } = useTranslation();
   const [audioUrl, setAudioUrl] = useState("");
+  const [audioKey, setAudioKey] = useState("");
+  const [coverUrl, setCoverUrl] = useState("");
+  const [coverThumbB64, setCoverThumbB64] = useState("");
+  const [coverImageFailed, setCoverImageFailed] = useState(false);
   const [words, setWords] = useState([]);
   const [title, setTitle] = useState("");
   const [currentTime, setCurrentTime] = useState(0);
@@ -105,22 +109,16 @@ export default function Preview() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
   const [saveMessageType, setSaveMessageType] = useState("info");
+  const [category, setCategory] = useState("");
   const [seriesTitle, setSeriesTitle] = useState("");
   const [episodeNumber, setEpisodeNumber] = useState(null);
   const [summaryLoadedFromDb, setSummaryLoadedFromDb] = useState(false);
-  const [coverB64, setCoverB64] = useState(null);
-  const [coverMime, setCoverMime] = useState("image/png");
   const [showSaveAuthModal, setShowSaveAuthModal] = useState(false);
   const authToken = localStorage.getItem("token") || sessionStorage.getItem("token") || "";
   const isAuthenticated = !!authToken;
   const pendingSaveHandledRef = useRef(false);
   const pendingSaveKey = "wecast:pendingPreviewSave";
   const previewNoticeKey = "wecast:previewSaveNotice";
-
-  const coverSrc = useMemo(() => {
-    if (!coverB64) return null;
-    return `data:${coverMime};base64,${coverB64}`;
-  }, [coverB64, coverMime]);
 
   const transcriptRef = useRef(null);
   const activeWordRef = useRef(null);
@@ -129,6 +127,7 @@ export default function Preview() {
   const transcriptCardRef = useRef(null);
   const transcriptHeaderRef = useRef(null);
   const transcriptFooterRef = useRef(null);
+  const chaptersRecoveryAttemptedRef = useRef(false);
 
   // user scroll control
   const [userInteracting, setUserInteracting] = useState(false);
@@ -137,16 +136,47 @@ export default function Preview() {
   const params = new URLSearchParams(window.location.hash.split("?")[1] || "");
   const episodeId = params.get("id");
   const fromSource = params.get("from") || sessionStorage.getItem("preview_from") || "";
-  const showGuestTryWeCastSave = !isAuthenticated && fromSource === "create" && !episodeId;
   const isFromDashboardPreview = fromSource === "episodes";
   const isFromStudioCreatePreview = fromSource === "studio_create";
   const useDashboardGlassTone = isFromDashboardPreview || isFromStudioCreatePreview;
   const dashboardShellClass = "w-full border-b border-black/10 bg-white/70 dark:bg-neutral-900/45 shadow-[0_10px_30px_rgba(0,0,0,0.08)] backdrop-blur-sm";
   const dashboardContentClass = "mx-auto w-full max-w-[1400px] px-4 pt-4 pb-8 bg-white/35 dark:bg-neutral-900/20 space-y-6 sm:px-6 sm:pb-10";
   const dashboardCardClass = "rounded-3xl border border-purple-200/90 dark:border-purple-400/30 bg-white/55 dark:bg-neutral-900/60 backdrop-blur-md shadow-sm";
+  const previewTitleCardClass = "overflow-hidden rounded-[28px] border border-[#eadcf6] bg-white/78 shadow-[0_12px_36px_rgba(15,23,42,0.10)] backdrop-blur-md dark:border-[#6f5a86]/30 dark:bg-neutral-900/42";
   const previewCardClass = dashboardCardClass;
   const [externalSeek, setExternalSeek] = useState(null);
-  const displayTitle = title || t("preview.title");
+  const displayTitle = title || t("episodes.untitledEpisode");
+  const resolvedCoverSrc = useMemo(() => {
+    if (!coverImageFailed && coverUrl) return coverUrl;
+    if (coverThumbB64) return `data:image/jpeg;base64,${coverThumbB64}`;
+    return "";
+  }, [coverImageFailed, coverThumbB64, coverUrl]);
+  const titleDir = useMemo(() => {
+    if (isLikelyArabic(displayTitle) || podcastLanguage === "ar") return "rtl";
+    return "ltr";
+  }, [displayTitle, podcastLanguage]);
+  const titleMeta = useMemo(() => {
+    if (category) return category;
+    if (seriesTitle && episodeNumber) {
+      return `${seriesTitle} · ${t("preview.episodeNumber", { number: episodeNumber })}`;
+    }
+    if (seriesTitle) return seriesTitle;
+    if (episodeNumber) return t("preview.episodeNumber", { number: episodeNumber });
+    return "";
+  }, [category, episodeNumber, seriesTitle, t]);
+  const hasPreviewContent = useMemo(
+    () =>
+      Boolean(
+        audioUrl ||
+          audioKey ||
+          words.length ||
+          title ||
+          summary ||
+          chapters.length
+      ),
+    [audioKey, audioUrl, chapters.length, summary, title, words.length]
+  );
+  const showPreviewSaveAction = !isFromDashboardPreview && hasPreviewContent;
 
   const buildPreviewAuthHash = (route = "signup") => {
     const nextParams = new URLSearchParams();
@@ -181,17 +211,31 @@ export default function Preview() {
       try {
         const p = JSON.parse(saved);
         if (p?.url) setAudioUrl(p.url);
+        if (p?.audioKey) setAudioKey(p.audioKey);
         if (Array.isArray(p?.words)) setWords(p.words);
         if (p?.title) setTitle(p.title);
         if (p?.summary) setSummary(p.summary);
         if (p?.language) setPodcastLanguage(p.language);
+        if (p?.category) setCategory(p.category);
+        if (p?.audioKey) {
+          fetch(`${API_BASE}/api/audio/last`, { credentials: "include" })
+            .then((r) => r.json())
+            .then((d) => {
+              if (d?.url) setAudioUrl(d.url);
+              if (d?.audioKey) setAudioKey(d.audioKey);
+            })
+            .catch(() => {});
+        }
       } catch {}
     }
 
     if (!saved) {
       fetch(`${API_BASE}/api/audio/last`, { credentials: "include" })
         .then((r) => r.json())
-        .then((d) => d?.url && setAudioUrl(d.url))
+        .then((d) => {
+          if (d?.url) setAudioUrl(d.url);
+          if (d?.audioKey) setAudioKey(d.audioKey);
+        })
         .catch(() => {});
 
       fetch(`${API_BASE}/api/transcript/last`, { credentials: "include" })
@@ -226,11 +270,15 @@ export default function Preview() {
     setChapters([]);
     setWords([]);
     setAudioUrl("");
+    setAudioKey("");
+    setCoverUrl("");
+    setCoverThumbB64("");
+    setCoverImageFailed(false);
     setTitle("");
-    setCoverB64(null);
-    setCoverMime("image/png");
+    setCategory("");
     setSeriesTitle("");
     setEpisodeNumber(null);
+    chaptersRecoveryAttemptedRef.current = false;
 
     const loadEpisode = async () => {
       try {
@@ -242,6 +290,13 @@ export default function Preview() {
 
         const podcast = data?.podcast || {};
         if (!isMounted) return;
+
+        if (podcast.audioKey) {
+          setAudioKey(podcast.audioKey);
+        }
+        setCoverImageFailed(false);
+        setCoverUrl(podcast.coverUrl || "");
+        setCoverThumbB64(podcast.coverThumbB64 || "");
 
         if (podcast.audioKey) {
           const audioRes = await fetch(`${API_BASE}/api/audio/${episodeId}`, {
@@ -265,11 +320,13 @@ export default function Preview() {
         const savedChapters = podcast.chapters;
         const podLang = podcast.language || "";
         const sumLang = podcast.summaryLanguage || "";
+        const savedCategory = podcast.category || "";
         const seriesName = podcast.seriesTitle || "";
         const episodeNo = podcast.episodeNumber ?? null;
 
         if (podLang) setPodcastLanguage(podLang);
         if (Array.isArray(savedChapters)) setChapters(savedChapters);
+        if (savedCategory) setCategory(savedCategory);
         if (seriesName) setSeriesTitle(seriesName);
         if (episodeNo) setEpisodeNumber(episodeNo);
 
@@ -295,31 +352,43 @@ export default function Preview() {
       } catch {}
     };
 
-    const loadCover = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/podcasts/${episodeId}/finalize`, {
-          credentials: "include",
-        });
-        const data = await res.json();
-        if (!res.ok) return;
-
-        if (!isMounted) return;
-
-        setCoverB64(data.coverArtBase64 || null);
-
-        const meta = data.coverArtMeta || {};
-        setCoverMime(meta.mimeType || "image/png");
-      } catch {}
-    };
-
     loadEpisode();
     loadTranscript();
-    loadCover();
 
     return () => {
       isMounted = false;
     };
   }, [episodeId]);
+
+  useEffect(() => {
+    if (!episodeId) return;
+    if (chaptersRecoveryAttemptedRef.current) return;
+    if (chapters.length > 0) return;
+    if (!Array.isArray(words) || words.length === 0) return;
+
+    let cancelled = false;
+    chaptersRecoveryAttemptedRef.current = true;
+
+    const ensureChapters = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/podcasts/${episodeId}/chapters/ensure`, {
+          method: "POST",
+          credentials: "include",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || cancelled) return;
+        if (Array.isArray(data?.chapters) && data.chapters.length > 0) {
+          setChapters(data.chapters);
+        }
+      } catch {}
+    };
+
+    ensureChapters();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [episodeId, chapters.length, words]);
 
   // generate summary for episode when transcript is ready and none saved
   useEffect(() => {
@@ -530,29 +599,54 @@ export default function Preview() {
     setSaveMessageType("info");
 
     try {
-      const savePath = episodeId
-        ? `${API_BASE}/api/podcasts/${episodeId}/save-all`
-        : `${API_BASE}/api/preview/save`;
+      const payload = {
+        title: displayTitle,
+        audioUrl,
+        audioKey,
+        summary,
+        chapters,
+        words,
+        language: podcastLanguage,
+        transcriptText,
+      };
 
-      const res = await fetch(savePath, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: displayTitle,
-          audioUrl,
-          summary,
-          chapters,
-          words,
-          language: podcastLanguage,
-          transcriptText,
-        }),
-      });
+      const createSnapshotSave = () =>
+        fetch(`${API_BASE}/api/preview/save`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+      let usedSnapshotFallback = false;
+      let res = null;
+
+      if (episodeId) {
+        res = await fetch(`${API_BASE}/api/podcasts/${episodeId}/save-all`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (res.status === 401) {
+          setShowSaveAuthModal(true);
+          return;
+        }
+
+        if (!res.ok && (res.status === 403 || res.status === 404) && !isFromDashboardPreview) {
+          usedSnapshotFallback = true;
+          res = await createSnapshotSave();
+        }
+      } else {
+        res = await createSnapshotSave();
+      }
 
       if (res.status === 401) {
         setShowSaveAuthModal(true);
         return;
       }
+
       if (!res.ok) throw new Error(`Save failed: ${res.status}`);
 
       const data = await res.json().catch(() => ({}));
@@ -560,7 +654,7 @@ export default function Preview() {
       setSaveMessageType("success");
       setSaveMessage(t("preview.saveSuccess"));
 
-      if (!episodeId && data?.podcastId) {
+      if ((!episodeId || usedSnapshotFallback) && data?.podcastId) {
         sessionStorage.setItem(
           previewNoticeKey,
           JSON.stringify({ type: "success", message: t("preview.saveSuccess") })
@@ -601,7 +695,7 @@ export default function Preview() {
     pendingSaveHandledRef.current = true;
     sessionStorage.removeItem(pendingSaveKey);
     handleSaveAll();
-  }, [isAuthenticated, episodeId, fromSource, audioUrl]);
+  }, [isAuthenticated, episodeId, fromSource, audioKey, audioUrl]);
 
   const handleBack = () => {
     // Preferred behavior: return exactly one navigation step back.
@@ -646,42 +740,85 @@ export default function Preview() {
           ? dashboardContentClass
           : "max-w-[1400px] mx-auto px-4 py-8 space-y-6 sm:px-6 sm:py-10"}
       >
-        <div>
-          <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-            <div className="flex items-start gap-3 sm:items-center sm:gap-4">
-              <button
-                onClick={handleBack}
-                className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition"
-                aria-label={t("preview.back")}
-                title={t("preview.back")}
-              >
-                <ChevronLeft className={`w-5 h-5 ${i18n.language === "ar" ? "rotate-180" : ""}`} />
-              </button>
-              {coverSrc ? (
-                <img
-                  src={coverSrc}
-                  alt="Cover"
-                  className="w-16 h-16 rounded-2xl object-cover border border-black/10"
-                />
-              ) : null}
-
-            <div className="min-w-0">
-                <h1 className="text-2xl font-extrabold leading-tight sm:text-3xl">
-                  {displayTitle}
-                </h1>
-                <p className="text-sm text-black/60 dark:text-white/60">
-                  {t("preview.subtitle")}
-                </p>
-              </div>
+        <div className="max-w-7xl space-y-5">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={handleBack}
+              className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition"
+              aria-label={t("preview.back")}
+              title={t("preview.back")}
+            >
+              <ChevronLeft className={`w-5 h-5 ${i18n.language === "ar" ? "rotate-180" : ""}`} />
+            </button>
+            <div>
+              <h1 className="text-xl font-bold text-black dark:text-white">
+                {t("preview.title")}
+              </h1>
+              <p className="text-sm text-black/60 dark:text-white/60">
+                {t("preview.subtitle")}
+              </p>
             </div>
-            {seriesTitle && episodeNumber ? (
-              <span className="inline-flex items-center gap-2 rounded-full border border-purple-200 bg-purple-50 px-3 py-1 text-xs font-semibold text-purple-700">
-                {seriesTitle}
-                <span className="inline-flex items-center justify-center rounded-full bg-purple-600 text-white px-2 py-0.5 text-[10px]">
-                  {t("preview.episodeNumber", { number: episodeNumber })}
-                </span>
-              </span>
-            ) : null}
+          </div>
+
+          <div className="pt-2">
+            <div className={previewTitleCardClass}>
+              {resolvedCoverSrc ? (
+                <div className="flex flex-col sm:min-h-[118px] sm:flex-row">
+                  <div className="min-h-[112px] w-full shrink-0 overflow-hidden bg-neutral-100/80 dark:bg-white/10 sm:w-[7.5rem] sm:border-r sm:border-black/10 md:w-32 dark:sm:border-white/10">
+                    <img
+                      src={resolvedCoverSrc}
+                      alt={`${displayTitle} cover`}
+                      className="h-full w-full object-cover object-center"
+                      onError={() => setCoverImageFailed(true)}
+                    />
+                  </div>
+
+                  <div className="flex min-w-0 flex-1 items-center bg-[linear-gradient(115deg,rgba(255,255,255,0.97)_0%,rgba(255,255,255,0.95)_48%,rgba(250,246,253,0.92)_76%,rgba(241,234,247,0.74)_100%)] p-6 dark:bg-[linear-gradient(115deg,rgba(23,23,26,0.92)_0%,rgba(23,23,26,0.9)_46%,rgba(40,32,52,0.82)_76%,rgba(72,57,95,0.58)_100%)]">
+                    <div className="flex w-full flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs uppercase tracking-wider text-black/55 dark:text-white/55">
+                          {t("preview.titleLabel")}
+                        </p>
+                        <h2
+                          dir={titleDir}
+                          className="mt-1.5 max-w-4xl break-words text-xl font-semibold leading-tight text-black dark:text-white"
+                        >
+                          {displayTitle}
+                        </h2>
+                      </div>
+
+                      {titleMeta && !category ? (
+                        <div className="flex items-center sm:justify-end">
+                          <span className="inline-flex max-w-full items-center rounded-full border border-black/5 bg-white/75 px-4 py-2 text-sm text-black/60 dark:border-white/10 dark:bg-white/10 dark:text-white/60">
+                            {titleMeta}
+                          </span>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-[linear-gradient(115deg,rgba(255,255,255,0.97)_0%,rgba(255,255,255,0.95)_48%,rgba(250,246,253,0.92)_76%,rgba(241,234,247,0.74)_100%)] p-6 dark:bg-[linear-gradient(115deg,rgba(23,23,26,0.92)_0%,rgba(23,23,26,0.9)_46%,rgba(40,32,52,0.82)_76%,rgba(72,57,95,0.58)_100%)]">
+                  <div className="flex min-w-0 items-center gap-4">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-black/5 bg-white/70 dark:border-white/10 dark:bg-purple-900/30">
+                      <Mic2 className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs uppercase tracking-wider text-black/55 dark:text-white/55">
+                        {t("preview.titleLabel")}
+                      </p>
+                      <h2
+                        dir={titleDir}
+                        className="mt-1.5 max-w-4xl break-words text-xl font-semibold leading-tight text-black dark:text-white"
+                      >
+                        {displayTitle}
+                      </h2>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
         {saveMessage && (
@@ -888,7 +1025,7 @@ export default function Preview() {
           </div>
         </div>
 
-        {showGuestTryWeCastSave ? (
+        {showPreviewSaveAction ? (
           <div className="flex justify-end pt-2">
             <button
               type="button"
