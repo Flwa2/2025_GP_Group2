@@ -17,7 +17,7 @@ import Preview from "./components/Preview";
 import Episodes from "./components/Episodes";
 import EditPodcast from "./components/editPodcast.jsx";
 import FinalizePublish from "./components/FinalizePublish";
-
+import Share from "./components/Share";
 
 
 function isAuthenticated() {
@@ -50,7 +50,7 @@ export default function App() {
   const isPreviewFromStudioSurface =
     hash.startsWith("#/preview") &&
     (hash.includes("from=episodes") || hash.includes("from=studio_create"));
-
+  const isShare = hash.startsWith("#/share");
   useEffect(() => {
     const sectionLinks = ['#about', '#episodes'];
     if (!sectionLinks.includes(hash)) {
@@ -96,6 +96,8 @@ export default function App() {
           <FinalizePublish />
         ) : isPreview ? (
           <Preview />
+        ) : isShare ? (
+          <Share />
         ) : (
           <>
             <HeroSection />
