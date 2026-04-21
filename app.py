@@ -29,6 +29,9 @@ from PIL import Image, UnidentifiedImageError
 import json
 import html
 from urllib.parse import quote
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 print("DEBUG in app.py:", db)
 
@@ -2190,6 +2193,15 @@ def api_cover_generate(podcast_id):
         },
         "title": title,  # keep title synced for step 7
     })
+    if not pdata.get("readyEmailSent"):
+        send_podcast_ready_email(user_id, title, podcast_id)
+        db.collection("podcasts").document(podcast_id).set(
+            {
+                "readyEmailSent": True,
+                "readyEmailSentAt": firestore.SERVER_TIMESTAMP,
+            },
+            merge=True,
+        )
 
     return jsonify(
         ok=True,
@@ -3831,7 +3843,6 @@ def save_preview_snapshot():
 
     return jsonify(ok=True, podcastId=podcast_id)
 
-
 @app.post("/api/save-music")
 def save_music():
     data = request.get_json() or {}
@@ -4204,6 +4215,87 @@ def firebase_email_login():
                 "Firebase service account matches the frontend Firebase project."
             )
         ), 401
+
+def _normalize_public_url(url: str) -> str:
+    return (url or "").strip()
+
+def send_podcast_ready_email(user_email, podcast_title, podcast_id):
+    try:
+        public_link = f"{os.getenv('FRONTEND_PUBLIC_URL')}/#/share/{podcast_id}"
+
+        msg = MIMEMultipart()
+        msg["From"] = f"{os.getenv('FROM_NAME')} <{os.getenv('FROM_EMAIL')}>"
+        msg["To"] = user_email
+        msg["Subject"] = "Your WeCast podcast is ready"
+
+        body = f"""
+Hi,
+
+Your podcast "{podcast_title}" has been generated successfully.
+
+You can access and download it here:
+{public_link}
+
+Thanks for using WeCast.
+"""
+        msg.attach(MIMEText(body, "plain"))
+
+        server = smtplib.SMTP(os.getenv("SMTP_HOST"), int(os.getenv("SMTP_PORT")))
+        server.starttls()
+        server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASS"))
+        server.send_message(msg)
+        server.quit()
+
+        print("Podcast ready email sent successfully")
+
+    except Exception as e:
+        print("Podcast ready email failed:", str(e))
+
+@app.get("/api/share/<podcast_id>")
+def get_shared_podcast(podcast_id):
+    try:
+        ref = db.collection("podcasts").document(podcast_id)
+        doc = ref.get()
+
+        if not doc.exists:
+            return jsonify({"error": "Podcast not found"}), 404
+
+        podcast = doc.to_dict() or {}
+
+        # Shared link must stop working if podcast is deleted
+        if str(podcast.get("status") or "").strip().lower() == "deleted":
+            return jsonify({"error": "Podcast not found"}), 404
+
+        # Fresh audio URL
+        audio_url = podcast.get("audioUrl", "")
+        audio_key = podcast.get("audioKey", "")
+        if audio_key:
+            try:
+                audio_url = generate_r2_signed_url(audio_key, expires_in=3600)
+            except Exception as e:
+                print("Share audio URL generation failed:", str(e))
+
+        # Public transcript
+        transcript_words = []
+        tdoc = ref.collection("transcripts").document("main").get()
+        if tdoc.exists:
+            transcript_words = (tdoc.to_dict() or {}).get("words") or []
+
+        return jsonify({
+            "id": podcast_id,
+            "title": podcast.get("title", ""),
+            "audioUrl": audio_url,
+            "summary": podcast.get("summary", ""),
+            "chapters": podcast.get("chapters", []),
+            "cover": podcast.get("coverThumbB64", ""),
+            "language": podcast.get("language", "en"),
+            "words": transcript_words,
+        })
+
+    except Exception as e:
+        print("Public share route error:", str(e))
+        return jsonify({"error": "Failed to load shared podcast"}), 500
+
 
 # ------------------------------------------------------------
 # Main
