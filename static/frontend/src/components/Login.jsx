@@ -5,7 +5,6 @@ import {
   auth,
   googleProvider,
   githubProvider,
-  actionCodeSettings,
   ensureFirebaseClientReady,
 } from "../firebaseClient";
 import { API_BASE } from "../utils/api";
@@ -20,7 +19,6 @@ import {
   storeAuthRedirectIntent,
 } from "../utils/authRedirect";
 import {
-  sendEmailVerification,
   signInWithEmailAndPassword,
   signOut,
 } from "firebase/auth";
@@ -119,7 +117,7 @@ function mapVerificationResendError(error) {
     return "We couldn't reach Firebase right now. Check your connection and try again.";
   }
 
-  return "We couldn't resend the verification email right now. Please try again.";
+  return error?.message || "We couldn't resend the verification email right now. Please try again.";
 }
 
 export default function Login() {
@@ -137,6 +135,23 @@ export default function Login() {
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
   const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
+
+  const sendCustomVerificationEmail = async (email) => {
+    const res = await fetch(`${API_BASE}/api/send-verification-email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ email }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(
+        data?.error ||
+          "We couldn't resend the verification email right now. Please try again."
+      );
+    }
+    return data;
+  };
 
   useEffect(() => {
     storeAuthRedirectIntent(readHashRedirectParams());
@@ -432,7 +447,7 @@ export default function Login() {
         return;
       }
 
-      const res = await fetch(`${API_BASE}/api/password-reset-email`, {
+      const res = await fetch(`${API_BASE}/api/send-password-reset-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -450,35 +465,6 @@ export default function Login() {
       setResetEmail(email);
       setResetSubmittedEmail(email);
       setResetRequestComplete(true);
-      return;
-/*
-
-      try {
-        await sendPasswordResetEmail(auth, email, actionCodeSettings);
-      } catch (firebaseError) {
-        const code = firebaseError?.code || "";
-
-        if (code === "auth/invalid-email") {
-          throw firebaseError;
-        }
-
-        const res = await fetch(`${API_BASE}/api/password-reset-email`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email }),
-        });
-        const data = await res.json().catch(() => ({}));
-
-        if (!res.ok) {
-          throw {
-            code: data?.code || code,
-            message: data?.error || firebaseError?.message || "We couldn’t send the reset email right now. Please try again.",
-          };
-        }
-      }
-
-      setInfo("Check your email for a password reset link. If it doesn’t appear, check your spam folder.");
-*/
     } catch (err) {
       console.error("RESET PASSWORD ERROR:", err);
       const code = err?.code || "";
@@ -520,7 +506,7 @@ export default function Login() {
         return;
       }
 
-      const res = await fetch(`${API_BASE}/api/password-reset-email`, {
+      const res = await fetch(`${API_BASE}/api/send-password-reset-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -612,7 +598,7 @@ export default function Login() {
         return;
       }
 
-      await sendEmailVerification(firebaseUser, actionCodeSettings);
+      await sendCustomVerificationEmail(normalizeEmail(identifier));
       await signOut(auth);
 
       sessionStorage.setItem("wecast:pendingVerificationEmail", identifier.trim());
@@ -658,7 +644,7 @@ export default function Login() {
         return;
       }
 
-      await sendEmailVerification(firebaseUser, actionCodeSettings);
+      await sendCustomVerificationEmail(email);
       await signOut(auth);
 
       sessionStorage.setItem("wecast:pendingVerificationEmail", email);

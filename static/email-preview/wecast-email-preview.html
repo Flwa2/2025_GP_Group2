@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="x-apple-disable-message-reformatting">
+    <title>WeCast Email Previews</title>
+    <style>
+      @media only screen and (max-width: 620px) {
+        .preview-wrap { padding: 24px 12px !important; }
+        .preview-shell { width: 100% !important; }
+        .preview-label { text-align: left !important; }
+        .wecast-shell { width: 100% !important; }
+        .wecast-card { border-radius: 24px !important; }
+        .wecast-pad { padding: 30px 22px !important; }
+        .wecast-title { font-size: 30px !important; line-height: 1.16 !important; }
+        .wecast-button { width: 100% !important; text-align: center !important; }
+      }
+    </style>
+  </head>
+  <body style="margin:0;padding:0;background:#eee9df;color:#141414;font-family:Inter,Segoe UI,Roboto,Arial,sans-serif;">
+    <div class="preview-wrap" style="padding:34px 16px 56px;">
+      <div class="preview-shell" style="width:860px;max-width:100%;margin:0 auto 28px;">
+        <h1 style="margin:0;color:#16131e;font-size:30px;line-height:1.2;font-weight:850;">WeCast email design previews</h1>
+        <p style="margin:10px 0 0;color:#625f57;font-size:15px;line-height:1.6;">
+          Preview-only page. All variants use the same shared design system: native-size logo mark, centered wordmark, clean SaaS card, consistent CTA styling, fallback link, support footer, and mobile-friendly spacing.
+        </p>
+      </div>
+      <div id="email-previews"></div>
+    </div>
+
+    <script>
+      const logoUrl = "../frontend/public/logo.png";
+      const supportEmail = "support@wecast.app";
+
+      const variants = [
+        {
+          label: "Variant 1: Verify Email",
+          eyebrow: "WeCast Account",
+          title: "Verify your email",
+          message: [
+            "Welcome to WeCast. Confirm your email address so we can keep your account secure and help you access your podcast workspace."
+          ],
+          buttonText: "Verify Email",
+          buttonUrl: "https://example.com/wecast-verify",
+          notice: "This secure link helps protect your WeCast account. If you did not request this email, you can safely ignore it."
+        },
+        {
+          label: "Variant 2: Reset Password",
+          eyebrow: "WeCast Account",
+          title: "Reset your password",
+          message: [
+            "We received a request to reset the password for your WeCast account.",
+            "Use the button below to choose a new password. If you did not request this, you can safely ignore this email."
+          ],
+          buttonText: "Reset Password",
+          buttonUrl: "https://example.com/wecast-reset",
+          notice: "For your security, this reset link should only be used by you. If you did not request it, no action is needed."
+        },
+        {
+          label: "Variant 3: Password Changed Confirmation",
+          eyebrow: "Security confirmation",
+          title: "Your password was changed",
+          message: [
+            "This confirms that the password for your WeCast account was changed successfully.",
+            "If this was you, no further action is needed. If this was not you, contact support immediately so we can help protect your account."
+          ],
+          buttonText: "Review Account Security",
+          buttonUrl: "https://example.com/wecast-account-security",
+          notice: "Keep your account secure by using a unique password and signing out of shared devices."
+        },
+        {
+          label: "Variant 4: Confirm New Email",
+          eyebrow: "Email change",
+          title: "Confirm your new email",
+          message: [
+            "A request was made to change the email address on your WeCast account.",
+            "Your current login email will remain active until this new email address is verified.",
+            "If you did not request this change, you can ignore this email."
+          ],
+          detailLabel: "Current account email",
+          detailLines: ["current@example.com"],
+          buttonText: "Confirm New Email",
+          buttonUrl: "https://example.com/wecast-confirm-new-email",
+          notice: "The account email will not change unless this new email address is confirmed."
+        },
+        {
+          label: "Variant 5: Email Change Requested",
+          eyebrow: "Security notice",
+          title: "A request was made to change your email",
+          message: [
+            "A request was made to change the email address on your WeCast account.",
+            "No change will happen unless the new email address is verified.",
+            "If this was not you, secure your account immediately."
+          ],
+          detailLabel: "Requested new email",
+          detailLines: ["new@example.com"],
+          buttonText: "Secure My Account",
+          buttonUrl: "https://example.com/wecast-secure-account",
+          notice: "Your current email remains active while this request is pending."
+        },
+        {
+          label: "Variant 6: Email Changed Successfully",
+          eyebrow: "Security confirmation",
+          title: "Your account email was changed",
+          message: [
+            "This confirms that the email address on your WeCast account was changed successfully.",
+            "If this was not you, contact support immediately so we can help protect your account."
+          ],
+          detailLabel: "Email change",
+          detailLines: [
+            "Previous email: old@example.com",
+            "New email: new@example.com"
+          ],
+          buttonText: "",
+          buttonUrl: "",
+          notice: "You may need to sign in again using the new email address."
+        }
+      ];
+
+      function escapeHtml(value) {
+        return String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function renderMessage(lines) {
+        return (lines || [])
+          .filter(Boolean)
+          .map((line) => `<p style="margin:0 0 12px;color:#4c5566;font-size:16px;line-height:1.75;font-weight:400;">${escapeHtml(line)}</p>`)
+          .join("");
+      }
+
+      function renderDetails(variant) {
+        if (!variant.detailLines || !variant.detailLines.length) return "";
+        const rows = variant.detailLines
+          .map((line) => `<tr><td style="padding:0 0 8px;color:#596171;font-size:14px;line-height:1.65;">${escapeHtml(line)}</td></tr>`)
+          .join("");
+
+        return `
+          <tr>
+            <td style="padding:24px 0 0;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f7f4ee;border:1px solid #e9ddca;border-radius:18px;">
+                <tr>
+                  <td style="padding:16px 18px 8px;">
+                    <div style="margin:0 0 10px;color:#7a5d1f;font-size:12px;line-height:1.2;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;">${escapeHtml(variant.detailLabel || "Details")}</div>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">${rows}</table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>`;
+      }
+
+      function renderButton(variant) {
+        if (!variant.buttonText || !variant.buttonUrl) return "";
+        const buttonText = escapeHtml(variant.buttonText);
+        const buttonUrl = escapeHtml(variant.buttonUrl);
+
+        return `
+          <tr>
+            <td align="center" style="padding:30px 0 0;">
+              <a class="wecast-button" href="${buttonUrl}" target="_blank" style="display:inline-block;background:#17131f;color:#ffffff;text-decoration:none;border-radius:16px;padding:15px 28px;font-size:16px;line-height:1;font-weight:800;box-shadow:0 12px 24px rgba(23,19,31,0.18);">${buttonText}</a>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:22px 0 0;">
+              <p style="margin:0;color:#747b8a;font-size:13px;line-height:1.65;">
+                If the button does not work, use this link:
+                <a href="${buttonUrl}" target="_blank" style="color:#5b2bd8;text-decoration:underline;font-weight:700;">Open secure link</a>
+              </p>
+            </td>
+          </tr>`;
+      }
+
+      function renderEmail(variant) {
+        return `
+          <div class="preview-shell" style="width:860px;max-width:100%;margin:0 auto 34px;">
+            <p class="preview-label" style="margin:0 0 12px;color:#5b2bd8;font-size:13px;font-weight:850;letter-spacing:0.12em;text-transform:uppercase;">${escapeHtml(variant.label)}</p>
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f5f1ea;margin:0;padding:0;border-radius:28px;">
+              <tr>
+                <td align="center" style="padding:40px 16px;">
+                  <table role="presentation" class="wecast-shell" width="600" cellspacing="0" cellpadding="0" border="0" style="width:600px;max-width:600px;">
+                    <tr>
+                      <td align="center" style="padding:0 0 18px;">
+                        <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:0 auto;">
+                          <tr>
+                            <td style="padding:0 10px 0 0;vertical-align:middle;">
+                              <img src="${logoUrl}" width="50" height="48" alt="WeCast" style="display:block;border:0;outline:none;text-decoration:none;width:50px;height:48px;">
+                            </td>
+                            <td style="vertical-align:middle;">
+                              <div style="color:#17131f;font-size:24px;line-height:1;font-weight:850;letter-spacing:0;">WeCast</div>
+                            </td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td class="wecast-card" style="background:#ffffff;border:1px solid #eadfcd;border-radius:32px;overflow:hidden;box-shadow:0 22px 60px rgba(61,47,25,0.12);">
+                        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                          <tr>
+                            <td style="height:8px;background:#5b2bd8;background:linear-gradient(90deg,#4f46e5 0%,#9b5cff 48%,#f0b84f 100%);font-size:0;line-height:0;">&nbsp;</td>
+                          </tr>
+                          <tr>
+                            <td class="wecast-pad" style="padding:42px 42px 34px;">
+                              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                                <tr>
+                                  <td align="center" style="padding:0 0 10px;">
+                                    <div style="display:inline-block;padding:7px 12px;border-radius:999px;background:#f7f1ff;color:#5b2bd8;font-size:12px;line-height:1.2;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;">${escapeHtml(variant.eyebrow)}</div>
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td align="center" style="padding:8px 0 0;">
+                                    <h1 class="wecast-title" style="margin:0;color:#15121f;font-size:38px;line-height:1.12;font-weight:800;letter-spacing:0;">${escapeHtml(variant.title)}</h1>
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td align="center" style="padding:18px 0 0;">${renderMessage(variant.message)}</td>
+                                </tr>
+                                ${renderDetails(variant)}
+                                ${renderButton(variant)}
+                                <tr>
+                                  <td style="padding:30px 0 0;">
+                                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#fbf8f2;border:1px solid #eee2cc;border-radius:18px;">
+                                      <tr>
+                                        <td style="padding:16px 18px;">
+                                          <p style="margin:0;color:#6d7480;font-size:13px;line-height:1.65;">${escapeHtml(variant.notice)}</p>
+                                        </td>
+                                      </tr>
+                                    </table>
+                                  </td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td align="center" style="padding:22px 20px 0;">
+                        <p style="margin:0;color:#7b735f;font-size:12px;line-height:1.7;">Need help? Contact <a href="mailto:${supportEmail}" style="color:#5b2bd8;text-decoration:underline;">${supportEmail}</a>.</p>
+                        <p style="margin:8px 0 0;color:#9a927f;font-size:12px;line-height:1.7;">WeCast sends account emails for security and sign-in actions.</p>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </div>`;
+      }
+
+      document.getElementById("email-previews").innerHTML = variants.map(renderEmail).join("");
+    </script>
+  </body>
+</html>

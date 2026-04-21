@@ -1067,6 +1067,21 @@ export default function Preview() {
             </button>
           </div>
         ) : null}
+        {episodeId ? (
+          <div className="flex justify-end pt-2">
+            <button
+              type="button"
+              onClick={() => {
+                const link = `https://wecast-frontend.onrender.com/#/share/${episodeId}`;
+                navigator.clipboard.writeText(link);
+                alert("Share link copied!");
+              }}
+              className="inline-flex items-center justify-center rounded-2xl bg-purple-600 px-5 py-3 text-sm font-semibold text-white transition hover:opacity-90"
+            >
+              Share Podcast
+            </button>
+          </div>
+        ) : null}
       </div>
       </div>
       <SavePreviewAuthModal

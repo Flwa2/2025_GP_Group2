@@ -1,10 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { createUserWithEmailAndPassword, sendEmailVerification, updateProfile } from "firebase/auth";
+import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import {
     auth,
     googleProvider,
     githubProvider,
-    actionCodeSettings,
     ensureFirebaseClientReady,
 } from "../firebaseClient";
 import { useTranslation } from "react-i18next";
@@ -72,22 +71,7 @@ function mapSignupError(error) {
 }
 
 function mapVerificationSendError(error) {
-    const code = error?.code || "";
-
-    if (code === "auth/unauthorized-domain") {
-        return "Your account was created, but this domain is not approved for Firebase action emails yet. Add it in Firebase Authentication > Settings > Authorized domains, then resend the verification email from login.";
-    }
-    if (code === "auth/too-many-requests") {
-        return "Your account was created, but we hit a temporary email limit. Go to login and resend the verification email in a moment.";
-    }
-    if (code === "auth/network-request-failed") {
-        return "Your account was created, but we couldn't send the verification email right now. Go to login and resend it when you're back online.";
-    }
-    if (code === "auth/app-not-authorized" || code === "auth/invalid-api-key") {
-        return "Your account was created, but Firebase email actions are not configured correctly for this app yet. Check the Firebase web app settings, then resend the verification email from login.";
-    }
-
-    return "Your account was created, but we couldn't send the verification email right now. Go to login and resend it to finish setup.";
+    return error?.message || "Your account was created, but we couldn't send the verification email right now. Go to login and resend it to finish setup.";
 }
 
 
@@ -179,6 +163,22 @@ const pwLabel = strengthLabels[passwordScore];
         return data;
     };
 
+    const sendCustomVerificationEmail = async (email) => {
+        const res = await fetch(`${API_BASE}/api/send-verification-email`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ email }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error(
+                data?.error || "We couldn't send the verification email right now. Please try again."
+            );
+        }
+        return data;
+    };
+
     const onChange = (e) =>
         setForm((f) => ({
             ...f,
@@ -246,7 +246,7 @@ const pwLabel = strengthLabels[passwordScore];
             }
 
             try {
-                await sendEmailVerification(cred.user, actionCodeSettings);
+                await sendCustomVerificationEmail(email);
             } catch (verificationError) {
                 console.error("SIGNUP VERIFICATION EMAIL ERROR:", verificationError);
                 await auth.signOut().catch(() => {});

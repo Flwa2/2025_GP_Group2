@@ -37,11 +37,6 @@ if (firebaseConfigIssue && typeof window !== "undefined") {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const actionCodeSettings = {
-  url: typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}#/login` : "http://localhost:5173/#/login",
-  handleCodeInApp: false,
-};
-
 const googleProvider = new GoogleAuthProvider();
 const githubProvider = new GithubAuthProvider();
 
@@ -62,7 +57,6 @@ export {
   auth,
   googleProvider,
   githubProvider,
-  actionCodeSettings,
   ensureFirebaseClientReady,
   firebaseConfigIssue,
 };

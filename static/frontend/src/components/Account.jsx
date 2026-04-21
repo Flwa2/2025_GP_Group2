@@ -1,7 +1,7 @@
 // src/components/Account.jsx
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { LogOut, Check, AlertCircle, AlertTriangle, Save, RefreshCcw, Bell, PlayCircle, Palette, Trash2 } from "lucide-react";
+import { LogOut, Check, AlertCircle, AlertTriangle, Save, RefreshCcw, Bell, PlayCircle, Palette, Trash2, Mail } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { API_BASE } from "../utils/api";
 import { DEFAULT_ACCOUNT_PREFERENCES, loadAccountPreferences, saveAccountPreferences } from "../utils/accountPreferences";
@@ -72,6 +72,10 @@ function formatAuthProviderLabel(provider) {
   }
 }
 
+function looksLikeEmail(value) {
+  return /\S+@\S+\.\S+/.test(String(value || "").trim());
+}
+
 const ACCOUNT_ACTION_BUTTON_CLASS =
   "inline-flex w-full items-center justify-center gap-2 rounded-xl px-6 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[11.5rem]";
 const ACCOUNT_SECONDARY_BUTTON_CLASS =
@@ -94,6 +98,10 @@ export default function Account() {
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [sendingResetLink, setSendingResetLink] = useState(false);
   const [showResetPasswordModal, setShowResetPasswordModal] = useState(false);
+  const [showEmailChangeModal, setShowEmailChangeModal] = useState(false);
+  const [requestingEmailChange, setRequestingEmailChange] = useState(false);
+  const [newEmail, setNewEmail] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
   const [authProvider, setAuthProvider] = useState("unknown");
   
   const [profile, setProfile] = useState({
@@ -128,6 +136,7 @@ export default function Account() {
   const normalizedAuthProvider = normalizeAuthProvider(authProvider);
   const providerLabel = formatAuthProviderLabel(normalizedAuthProvider);
   const canSendResetLink = normalizedAuthProvider === "password" && Boolean(String(profile.email || "").trim());
+  const canChangeEmail = normalizedAuthProvider === "password" && Boolean(String(profile.email || "").trim());
   const isProviderManaged = normalizedAuthProvider === "google" || normalizedAuthProvider === "github";
 
   useEffect(() => {
@@ -427,10 +436,11 @@ export default function Account() {
 
     setSendingResetLink(true);
     try {
-      const res = await fetch(`${API_BASE}/api/account/password-reset-link`, {
+      const res = await fetch(`${API_BASE}/api/send-password-reset-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
+        body: JSON.stringify({ email }),
       });
       const data = await res.json().catch(() => ({}));
 
@@ -442,7 +452,7 @@ export default function Account() {
       }
 
       setShowResetPasswordModal(false);
-      showToast(t("account.passwordSent", { email: data?.email || email }), "success");
+      showToast(t("account.passwordSent", { email }), "success");
     } catch (error) {
       const code = error?.code || "";
       let message = error?.message || t("account.passwordSendFailed");
@@ -456,6 +466,95 @@ export default function Account() {
       showToast(message, code === "auth/too-many-requests" ? "warning" : "error");
     } finally {
       setSendingResetLink(false);
+    }
+  }
+
+  function openEmailChangeModal() {
+    if (!canChangeEmail) return;
+    setNewEmail("");
+    setCurrentPassword("");
+    setShowEmailChangeModal(true);
+  }
+
+  function closeEmailChangeModal() {
+    if (requestingEmailChange) return;
+    setShowEmailChangeModal(false);
+    setNewEmail("");
+    setCurrentPassword("");
+  }
+
+  async function handleRequestEmailChange() {
+    const normalizedCurrentEmail = String(profile.email || "").trim().toLowerCase();
+    const normalizedNewEmail = String(newEmail || "").trim().toLowerCase();
+    const token = localStorage.getItem("token") || sessionStorage.getItem("token");
+
+    if (!token) {
+      showToast("Please sign in again before changing your email.", "error");
+      return;
+    }
+    if (!looksLikeEmail(normalizedNewEmail)) {
+      showToast("Enter a valid new email address.", "error");
+      return;
+    }
+    if (normalizedNewEmail === normalizedCurrentEmail) {
+      showToast("Enter a different email address to continue.", "error");
+      return;
+    }
+    if (!currentPassword.trim()) {
+      showToast("Enter your current password to confirm this change.", "error");
+      return;
+    }
+
+    setRequestingEmailChange(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/change-email-request`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          current_email: normalizedCurrentEmail,
+          new_email: normalizedNewEmail,
+          password: currentPassword,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(
+          data?.error ||
+            "We couldn't send the confirmation email right now. Please try again."
+        );
+      }
+
+      setShowEmailChangeModal(false);
+      setNewEmail("");
+      setCurrentPassword("");
+      showToast(
+        `Confirmation sent to ${data?.maskedNewEmail || normalizedNewEmail}.`,
+        "success"
+      );
+    } catch (error) {
+      const code = error?.code || "";
+      let message =
+        error?.message ||
+        "We couldn't send the confirmation email right now. Please try again.";
+
+      if (
+        code === "auth/wrong-password" ||
+        code === "auth/invalid-credential" ||
+        code === "auth/invalid-login-credentials"
+      ) {
+        message = "Your current password is incorrect.";
+      } else if (code === "auth/too-many-requests") {
+        message = "Too many attempts were made. Wait a moment, then try again.";
+      }
+
+      showToast(message, "error");
+    } finally {
+      setRequestingEmailChange(false);
     }
   }
 
@@ -771,6 +870,45 @@ export default function Account() {
             </div>
           </div>
 
+          <div className="rounded-2xl border border-black/10 bg-white/75 px-5 py-5 dark:border-white/10 dark:bg-white/[0.04]">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="font-semibold text-black dark:text-white">Change email</p>
+                <p className="text-sm text-gray-600 dark:text-gray-300">
+                  {canChangeEmail
+                    ? "Send a confirmation link to a new email address and update your account after you verify it."
+                    : isProviderManaged
+                      ? `Email changes are managed through ${providerLabel}.`
+                      : "Email changes are unavailable right now. Please sign in again first."}
+                </p>
+              </div>
+              {canChangeEmail ? (
+                <button
+                  type="button"
+                  onClick={openEmailChangeModal}
+                  disabled={requestingEmailChange}
+                  className={ACCOUNT_SECONDARY_BUTTON_CLASS}
+                >
+                  {requestingEmailChange ? (
+                    <>
+                      <span className="h-4 w-4 rounded-full border-2 border-current border-t-transparent animate-spin"></span>
+                      Sending...
+                    </>
+                  ) : (
+                    <>
+                      <Mail className="h-4 w-4" />
+                      Change email
+                    </>
+                  )}
+                </button>
+              ) : (
+                <span className={ACCOUNT_STATUS_PILL_CLASS}>
+                  {isProviderManaged ? `Managed by ${providerLabel}` : "Unavailable"}
+                </span>
+              )}
+            </div>
+          </div>
+
           <button
             type="button"
             onClick={handleLogout}
@@ -819,6 +957,17 @@ export default function Account() {
         cancelLabel={t("account.passwordModalCancel")}
         confirmLabel={t("account.passwordModalConfirm")}
         sendingLabel={t("account.passwordSending")}
+      />
+      <EmailChangeModal
+        open={showEmailChangeModal}
+        requesting={requestingEmailChange}
+        currentEmail={profile.email}
+        newEmail={newEmail}
+        currentPassword={currentPassword}
+        onNewEmailChange={setNewEmail}
+        onCurrentPasswordChange={setCurrentPassword}
+        onCancel={closeEmailChangeModal}
+        onConfirm={handleRequestEmailChange}
       />
       <DeleteAccountModal
         open={showDeleteModal}
@@ -907,6 +1056,98 @@ function PasswordResetModal({
                 </>
               ) : (
                 confirmLabel
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function EmailChangeModal({
+  open,
+  requesting,
+  currentEmail,
+  newEmail,
+  currentPassword,
+  onNewEmailChange,
+  onCurrentPasswordChange,
+  onCancel,
+  onConfirm,
+}) {
+  if (!open) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[10020] flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-[28px] border border-black/10 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-neutral-950">
+        <div className="flex items-start gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-200">
+            <Mail className="h-5 w-5" />
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-xl font-semibold text-black dark:text-white">Change email?</h3>
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              We&apos;ll send a confirmation link to your new address before WeCast updates your profile.
+            </p>
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              Current email: <span className="font-semibold text-black dark:text-white">{currentEmail || "Unavailable"}</span>
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 space-y-4">
+          <label className="flex flex-col gap-2">
+            <span className="form-label">New email</span>
+            <input
+              className="form-input"
+              type="email"
+              value={newEmail}
+              onChange={(event) => onNewEmailChange(event.target.value)}
+              placeholder="you@example.com"
+              autoFocus
+              disabled={requesting}
+            />
+          </label>
+
+          <label className="flex flex-col gap-2">
+            <span className="form-label">Current password</span>
+            <input
+              className="form-input"
+              type="password"
+              value={currentPassword}
+              onChange={(event) => onCurrentPasswordChange(event.target.value)}
+              placeholder="Enter your current password"
+              disabled={requesting}
+            />
+            <span className="form-help">
+              We ask for your password once more before sending the confirmation link.
+            </span>
+          </label>
+
+          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={requesting}
+              className="inline-flex items-center justify-center rounded-xl border border-black/15 px-5 py-3 text-sm font-semibold text-black transition hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/15 dark:text-white dark:hover:bg-white/10"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={requesting}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-black/90 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-black dark:hover:bg-white/90"
+            >
+              {requesting ? (
+                <>
+                  <span className="h-4 w-4 rounded-full border-2 border-current border-t-transparent animate-spin"></span>
+                  Sending...
+                </>
+              ) : (
+                "Send confirmation"
               )}
             </button>
           </div>

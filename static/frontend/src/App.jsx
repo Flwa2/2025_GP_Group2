@@ -17,6 +17,8 @@ import Preview from "./components/Preview";
 import Episodes from "./components/Episodes";
 import EditPodcast from "./components/editPodcast.jsx";
 import FinalizePublish from "./components/FinalizePublish";
+import EmailAction from "./components/EmailAction";
+import Share from "./components/Share";
 
 
 
@@ -43,6 +45,12 @@ export default function App() {
   const isCreate = hash.startsWith("#/create") && (hash.includes("guest=true") || isAuthenticated());
   const isCreateFromStudio = hash.startsWith("#/create") && hash.includes("from=studio");
   const isEdit = hash.startsWith('#/edit');
+  const isEmailAction =
+    hash.startsWith("#/email-action") ||
+    hash.startsWith("#/verify-email") ||
+    hash.startsWith("#/reset-password") ||
+    hash.startsWith("#/email-change-confirm");
+  const isShare = hash.startsWith("#/share");
   const isPreview = hash.startsWith("#/preview");
   const isEpisodes = hash.startsWith("#/episodes");
   const isFinalize = hash.startsWith("#/finalize");
@@ -67,6 +75,10 @@ export default function App() {
       <main className={(isEpisodes || isCreateFromStudio || isPreviewFromStudioSurface || isEditPodcast) ? "app-main pt-14 flex-1" : "app-main pt-16 flex-1"}>
         {isAccount ? (
           <Account />
+        ) : isEmailAction ? (
+          <EmailAction />
+        ) : isShare ? (
+          <Share />
         ) : isSignup ? (
           <Signup />
         ) : isLogin ? (

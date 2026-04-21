@@ -20,6 +20,7 @@ import os
 import re
 import requests
 import base64
+import secrets
 from firebase_admin import firestore
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta, timezone
@@ -29,6 +30,9 @@ from PIL import Image, UnidentifiedImageError
 import json
 import html
 from urllib.parse import quote
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 print("DEBUG in app.py:", db)
 
@@ -193,29 +197,40 @@ RECYCLE_BIN_RETENTION_DAYS = int(os.getenv("RECYCLE_BIN_RETENTION_DAYS", "30"))
 
 
 
-def create_token(user_id, email):
+def create_token(user_id, email, firebase_uid=""):
     payload = {
         "user_id": user_id,
         "email": email,
         "exp": datetime.utcnow() + timedelta(days=7),
     }
+    if firebase_uid:
+        payload["firebase_uid"] = firebase_uid
     token = jwt.encode(payload, app.config["SECRET_KEY"], algorithm="HS256")
     return token
 
 
-def get_current_user_email():
-    """Read JWT from Authorization header and return the email inside it."""
+def _decode_request_token():
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         return None
 
     token = auth_header.split(" ", 1)[1].strip()
     try:
-        payload = jwt.decode(token, app.config["SECRET_KEY"], algorithms=["HS256"])
-        return payload.get("email") or payload.get("user_id")
+        return jwt.decode(token, app.config["SECRET_KEY"], algorithms=["HS256"])
     except Exception as e:
         print("JWT decode failed:", e)
         return None
+
+
+def get_current_user_email():
+    """Read JWT from Authorization header and return the email inside it."""
+    payload = _decode_request_token() or {}
+    return payload.get("email") or payload.get("user_id")
+
+
+def get_current_user_firebase_uid():
+    payload = _decode_request_token() or {}
+    return (payload.get("firebase_uid") or "").strip()
 
 # ------------------------------------------------------------
 # Cloudflare R2 Config
@@ -394,17 +409,110 @@ def user_ids_match(left, right):
     return (left or "").strip().lower() == (right or "").strip().lower()
 
 
-def get_user_doc_by_candidates(user_id):
-    for candidate in user_id_candidates(user_id):
+def _normalize_email(value):
+    return (value or "").strip().lower()
+
+
+def get_user_doc_by_firebase_uid(firebase_uid):
+    normalized_uid = (firebase_uid or "").strip()
+    if not normalized_uid:
+        return None
+
+    direct_doc = db.collection("users").document(normalized_uid).get()
+    if direct_doc.exists:
+        return direct_doc
+
+    matches = list(
+        db.collection("users").where("firebaseUid", "==", normalized_uid).limit(1).stream()
+    )
+    if matches:
+        return matches[0]
+    return None
+
+
+def get_user_doc_by_candidates(user_id=None, firebase_uid="", email=""):
+    checked_direct_ids = set()
+    normalized_uid = (firebase_uid or "").strip()
+    if normalized_uid:
+        doc = get_user_doc_by_firebase_uid(normalized_uid)
+        if doc and doc.exists:
+            return doc
+        checked_direct_ids.add(normalized_uid)
+
+    direct_candidates = []
+    for raw in (email, user_id):
+        direct_candidates.extend(user_id_candidates(raw))
+
+    for candidate in direct_candidates:
+        if candidate in checked_direct_ids:
+            continue
+        checked_direct_ids.add(candidate)
         doc = db.collection("users").document(candidate).get()
         if doc.exists:
             return doc
+
+    query_emails = []
+    for raw in (email, user_id):
+        normalized_email = _normalize_email(raw)
+        if normalized_email and normalized_email not in query_emails:
+            query_emails.append(normalized_email)
+
+    for normalized_email in query_emails:
+        matches = list(
+            db.collection("users").where("email", "==", normalized_email).limit(1).stream()
+        )
+        if matches:
+            return matches[0]
     return None
+
+
+def get_current_user_identity():
+    current_email = _normalize_email(session.get("user_id") or get_current_user_email())
+    current_uid = (session.get("firebase_uid") or get_current_user_firebase_uid() or "").strip()
+    doc = get_user_doc_by_candidates(current_email, firebase_uid=current_uid, email=current_email)
+    data = doc.to_dict() or {} if doc and doc.exists else {}
+    resolved_email = _normalize_email(data.get("email") or current_email)
+    resolved_uid = (data.get("firebaseUid") or current_uid).strip()
+    return {
+        "email": resolved_email,
+        "firebaseUid": resolved_uid,
+        "doc": doc,
+        "data": data,
+    }
+
+
+def _prepare_user_storage(existing_doc, firebase_uid="", fallback_email=""):
+    existing_data = (
+        existing_doc.to_dict() or {}
+        if existing_doc and existing_doc.exists
+        else {}
+    )
+
+    if firebase_uid:
+        target_ref = db.collection("users").document(firebase_uid)
+        target_doc = target_ref.get()
+        target_data = target_doc.to_dict() or {} if target_doc.exists else {}
+        seed_data = {**existing_data, **target_data}
+        if fallback_email:
+            seed_data["email"] = fallback_email
+        seed_data["firebaseUid"] = firebase_uid
+        delete_ref = (
+            existing_doc.reference
+            if existing_doc and existing_doc.exists and existing_doc.reference.id != firebase_uid
+            else None
+        )
+        return target_ref, seed_data, delete_ref
+
+    if existing_doc and existing_doc.exists:
+        return existing_doc.reference, existing_data, None
+
+    return db.collection("users").document(fallback_email), existing_data, None
 
 
 def _wecast_frontend_url():
     base = (
-        os.getenv("WECAST_APP_URL")
+        os.getenv("FRONTEND_PUBLIC_URL")
+        or os.getenv("WECAST_APP_URL")
         or os.getenv("FRONTEND_URL")
         or ""
     ).strip()
@@ -447,6 +555,128 @@ def _firebase_web_api_key():
 
 def _password_reset_continue_url():
     return f"{_wecast_frontend_url()}/#/login"
+
+
+PASSWORD_RESET_ACTION_TTL_SECONDS = int(
+    os.getenv("WECAST_PASSWORD_RESET_TOKEN_TTL_SECONDS", "3600")
+)
+EMAIL_CHANGE_ACTION_TTL_SECONDS = int(
+    os.getenv("WECAST_EMAIL_CHANGE_TOKEN_TTL_SECONDS", "3600")
+)
+RECENT_AUTH_MAX_AGE_SECONDS = int(
+    os.getenv("WECAST_RECENT_AUTH_MAX_AGE_SECONDS", "900")
+)
+
+
+def _resend_is_configured():
+    return bool(
+        (os.getenv("RESEND_API_KEY") or "").strip()
+        and (
+            (os.getenv("RESEND_FROM_EMAIL") or "").strip()
+            or (os.getenv("FROM_EMAIL") or "").strip()
+        )
+    )
+
+
+def _build_email_action_url(mode, token):
+    base = _wecast_frontend_url().rstrip("/")
+    action_mode = (mode or "").strip()
+    action_path = "#/email-change-confirm" if action_mode == "change-email" else "#/email-action"
+    return (
+        f"{base}/{action_path}"
+        f"?mode={quote(action_mode, safe='')}"
+        f"&token={quote((token or '').strip(), safe='')}"
+    )
+
+
+def _issue_email_action_token(
+    action,
+    *,
+    email="",
+    firebase_uid="",
+    target_email="",
+    nonce="",
+    expires_in_seconds=3600,
+):
+    payload = {
+        "action": (action or "").strip(),
+        "email": _normalize_email(email),
+        "exp": datetime.utcnow() + timedelta(seconds=max(300, int(expires_in_seconds or 3600))),
+        "iat": datetime.utcnow(),
+    }
+    if firebase_uid:
+        payload["firebase_uid"] = (firebase_uid or "").strip()
+    if target_email:
+        payload["target_email"] = _normalize_email(target_email)
+    if nonce:
+        payload["nonce"] = (nonce or "").strip()
+    return jwt.encode(payload, app.config["SECRET_KEY"], algorithm="HS256")
+
+
+def _decode_email_action_token(token, expected_action):
+    payload = jwt.decode(
+        (token or "").strip(),
+        app.config["SECRET_KEY"],
+        algorithms=["HS256"],
+    )
+    action = (payload.get("action") or "").strip()
+    if expected_action and action != expected_action:
+        raise ValueError("This link is for a different action.")
+    return payload
+
+
+def _password_validation_error(password, confirm_password=None):
+    if confirm_password is not None and password != confirm_password:
+        return "Passwords do not match."
+
+    if len(password or "") < 8:
+        return "Password must be at least 8 characters long."
+
+    if (
+        not re.search(r"[A-Z]", password or "")
+        or not re.search(r"\d", password or "")
+        or not re.search(r"[^A-Za-z0-9]", password or "")
+    ):
+        return (
+            "Password must be at least 8 characters and include one uppercase letter, "
+            "one number, and one special symbol."
+        )
+
+    return ""
+
+
+def _merge_previous_emails(*groups, current_email=""):
+    current_normalized = _normalize_email(current_email)
+    merged = []
+    seen = set()
+    for group in groups:
+        values = group if isinstance(group, list) else [group]
+        for value in values:
+            normalized = _normalize_email(value)
+            if not normalized or normalized == current_normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            merged.append(normalized)
+    return merged
+
+
+def _mask_email(email):
+    normalized = _normalize_email(email)
+    if "@" not in normalized:
+        return normalized
+    local_part, _, domain = normalized.partition("@")
+    if len(local_part) <= 2:
+        local_mask = f"{local_part[:1]}*"
+    else:
+        local_mask = f"{local_part[:1]}{'*' * max(1, len(local_part) - 2)}{local_part[-1:]}"
+    return f"{local_mask}@{domain}"
+
+
+def _is_recent_auth(decoded_token, max_age_seconds=RECENT_AUTH_MAX_AGE_SECONDS):
+    auth_time = int(decoded_token.get("auth_time") or 0)
+    if not auth_time:
+        return False
+    return (datetime.utcnow() - datetime.utcfromtimestamp(auth_time)).total_seconds() <= max_age_seconds
 
 
 def _legacy_password_seed():
@@ -537,17 +767,18 @@ def _upsert_firebase_user_profile(
     if not normalized_email:
         raise ValueError("Email is required.")
 
-    existing_doc = get_user_doc_by_candidates(normalized_email)
-    existing_data = (
-        existing_doc.to_dict() or {}
-        if existing_doc and existing_doc.exists
-        else {}
+    existing_doc = get_user_doc_by_candidates(
+        normalized_email,
+        firebase_uid=firebase_uid,
+        email=normalized_email,
     )
-    user_ref = (
-        existing_doc.reference
-        if existing_doc and existing_doc.exists
-        else db.collection("users").document(normalized_email)
+    user_ref, existing_data, delete_ref = _prepare_user_storage(
+        existing_doc,
+        firebase_uid=firebase_uid,
+        fallback_email=normalized_email,
     )
+    if existing_data:
+        user_ref.set(existing_data, merge=True)
 
     existing_name = (
         existing_data.get("displayName")
@@ -604,6 +835,8 @@ def _upsert_firebase_user_profile(
             payload["avatarUrl"] = ""
 
     user_ref.set(payload, merge=True)
+    if delete_ref and delete_ref.path != user_ref.path:
+        delete_ref.delete()
     final_doc = user_ref.get()
     return final_doc.to_dict() or {}
 
@@ -704,19 +937,438 @@ def _build_password_reset_email(display_name, email, reset_link):
     return subject, text, html_body
 
 
-def _send_reset_email_via_resend(email, display_name, reset_link):
+def _build_email_change_confirmation_email(display_name, current_email, new_email, confirm_link):
+    safe_name = html.escape((display_name or "").strip() or "there")
+    safe_current_email = html.escape((current_email or "").strip())
+    safe_new_email = html.escape((new_email or "").strip())
+    safe_link = html.escape((confirm_link or "").strip(), quote=True)
+    safe_app_url = html.escape(_wecast_frontend_url(), quote=True)
+    safe_logo_url = html.escape(_wecast_logo_url(), quote=True)
+
+    subject = "Confirm your new WeCast email address"
+    text = (
+        f"Hi {display_name or 'there'},\n\n"
+        f"We received a request to change your WeCast email from {current_email} to {new_email}.\n"
+        f"Confirm the new address with this secure link:\n{confirm_link}\n\n"
+        "If you did not request this change, you can ignore this email.\n\n"
+        "WeCast"
+    )
+    html_body = f"""\
+<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f7efe2;font-family:Arial,'Helvetica Neue',Helvetica,sans-serif;color:#171717;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7efe2;padding:32px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;background:#fffaf0;border:1px solid #ead9b7;border-radius:24px;overflow:hidden;box-shadow:0 18px 40px rgba(23,23,23,0.08);">
+            <tr>
+              <td style="background:linear-gradient(180deg,#f6d35a 0%,#f7e6b3 100%);padding:28px 32px 18px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td style="vertical-align:middle;">
+                      <img src="{safe_logo_url}" alt="WeCast" width="42" height="42" style="display:block;border:0;outline:none;text-decoration:none;">
+                    </td>
+                    <td style="vertical-align:middle;padding-left:12px;">
+                      <div style="font-family:Georgia,'Times New Roman',serif;font-size:34px;line-height:1;color:#111111;font-weight:700;">WeCast</div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:34px 32px 16px;">
+                <div style="font-size:14px;line-height:1.5;color:#6b7280;">Email Change</div>
+                <h1 style="margin:10px 0 16px;font-size:34px;line-height:1.08;color:#111111;">Confirm your new email</h1>
+                <p style="margin:0 0 14px;font-size:16px;line-height:1.8;color:#374151;">Hi {safe_name},</p>
+                <p style="margin:0 0 14px;font-size:16px;line-height:1.8;color:#374151;">
+                  You asked to change your WeCast email from
+                  <span style="font-weight:600;color:#111111;">{safe_current_email}</span>
+                  to
+                  <span style="font-weight:600;color:#111111;">{safe_new_email}</span>.
+                </p>
+                <p style="margin:0 0 22px;font-size:16px;line-height:1.8;color:#374151;">
+                  Confirm this new address to finish the update.
+                </p>
+                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 22px;">
+                  <tr>
+                    <td align="center" bgcolor="#111111" style="border-radius:14px;">
+                      <a href="{safe_link}" style="display:inline-block;padding:15px 24px;font-size:16px;font-weight:700;line-height:1;color:#ffffff;text-decoration:none;">Confirm email</a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:0 0 14px;font-size:14px;line-height:1.8;color:#6b7280;">
+                  If the button doesnâ€™t work, copy and paste this link into your browser:
+                </p>
+                <p style="margin:0 0 20px;font-size:13px;line-height:1.7;word-break:break-word;color:#7c3aed;">
+                  <a href="{safe_link}" style="color:#7c3aed;text-decoration:none;">{safe_link}</a>
+                </p>
+                <div style="border-top:1px solid #ead9b7;margin-top:22px;padding-top:18px;">
+                  <p style="margin:0 0 10px;font-size:14px;line-height:1.7;color:#6b7280;">
+                    If you didnâ€™t request this change, ignore this email and keep using your current address.
+                  </p>
+                  <p style="margin:0;font-size:14px;line-height:1.7;color:#6b7280;">
+                    Need help? Visit
+                    <a href="{safe_app_url}" style="color:#111111;font-weight:600;text-decoration:none;"> WeCast</a>.
+                  </p>
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
+    return subject, text, html_body
+
+
+def _build_email_change_notice_email(display_name, old_email, new_email):
+    safe_name = html.escape((display_name or "").strip() or "there")
+    safe_old_email = html.escape((old_email or "").strip())
+    safe_new_email = html.escape((new_email or "").strip())
+    safe_app_url = html.escape(_wecast_frontend_url(), quote=True)
+
+    subject = "Your WeCast email address was changed"
+    text = (
+        f"Hi {display_name or 'there'},\n\n"
+        f"Your WeCast sign-in email was changed from {old_email} to {new_email}.\n"
+        "If you did not make this change, contact support immediately.\n\n"
+        f"WeCast: {safe_app_url}"
+    )
+    html_body = f"""\
+<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:24px;background:#f7efe2;font-family:Arial,'Helvetica Neue',Helvetica,sans-serif;color:#171717;">
+    <div style="max-width:620px;margin:0 auto;background:#fffaf0;border:1px solid #ead9b7;border-radius:24px;padding:32px;">
+      <div style="font-size:14px;line-height:1.5;color:#6b7280;">Security Notice</div>
+      <h1 style="margin:10px 0 16px;font-size:32px;line-height:1.12;color:#111111;">Your email was updated</h1>
+      <p style="margin:0 0 14px;font-size:16px;line-height:1.8;color:#374151;">Hi {safe_name},</p>
+      <p style="margin:0 0 14px;font-size:16px;line-height:1.8;color:#374151;">
+        Your WeCast sign-in email changed from
+        <span style="font-weight:600;color:#111111;">{safe_old_email}</span>
+        to
+        <span style="font-weight:600;color:#111111;">{safe_new_email}</span>.
+      </p>
+      <p style="margin:0;font-size:15px;line-height:1.8;color:#6b7280;">
+        If you did not make this change, contact support immediately through
+        <a href="{safe_app_url}" style="color:#111111;font-weight:600;text-decoration:none;"> WeCast</a>.
+      </p>
+    </div>
+  </body>
+</html>
+"""
+    return subject, text, html_body
+
+
+def _wecast_brand_name():
+    return (
+        os.getenv("WECAST_BRAND_NAME")
+        or os.getenv("RESEND_FROM_NAME")
+        or "WeCast"
+    ).strip() or "WeCast"
+
+
+def _wecast_support_email():
+    return (
+        os.getenv("WECAST_SUPPORT_EMAIL")
+        or os.getenv("RESEND_FROM_EMAIL")
+        or ""
+    ).strip()
+
+
+def _render_wecast_email(
+    *,
+    preheader,
+    eyebrow,
+    title,
+    greeting_name,
+    intro_lines,
+    action_label="",
+    action_link="",
+    detail_label="",
+    detail_lines=None,
+    support_lines=None,
+    accent_start="#f3c95b",
+    accent_end="#f8e7b3",
+):
+    brand_name = _wecast_brand_name()
+    app_url = _wecast_frontend_url()
+    logo_url = _wecast_logo_url()
+    support_email = _wecast_support_email()
+
+    safe_brand_name = html.escape(brand_name)
+    safe_preheader = html.escape((preheader or "").strip())
+    safe_eyebrow = html.escape((eyebrow or "").strip())
+    safe_title = html.escape((title or "").strip())
+    safe_greeting_name = html.escape((greeting_name or "").strip() or "there")
+    safe_action_label = html.escape((action_label or "").strip())
+    safe_action_link = html.escape((action_link or "").strip(), quote=True)
+    safe_logo_url = html.escape(logo_url, quote=True)
+    safe_detail_label = html.escape((detail_label or "").strip())
+    safe_accent_start = html.escape((accent_start or "#f3c95b").strip(), quote=True)
+    safe_accent_end = html.escape((accent_end or "#f8e7b3").strip(), quote=True)
+
+    intro_html = "".join(
+        (
+            f'<p style="margin:0 0 14px;font-size:16px;line-height:1.85;color:#3c4656;">'
+            f"{html.escape(str(line or '').strip())}</p>"
+        )
+        for line in (intro_lines or [])
+        if str(line or "").strip()
+    )
+
+    detail_html = ""
+    if detail_lines:
+        detail_rows = "".join(
+            (
+                "<tr>"
+                f'<td style="padding:0 0 8px;font-size:14px;line-height:1.7;color:#5c6472;">{html.escape(str(line or "").strip())}</td>'
+                "</tr>"
+            )
+            for line in detail_lines
+            if str(line or "").strip()
+        )
+        detail_html = f"""\
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;background:#fff8eb;border:1px solid #f0dfb5;border-radius:18px;">
+  <tr>
+    <td style="padding:18px 18px 10px;">
+      <div style="margin:0 0 10px;font-size:12px;line-height:1.3;letter-spacing:0.16em;text-transform:uppercase;color:#8b6b23;font-weight:700;">{safe_detail_label}</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        {detail_rows}
+      </table>
+    </td>
+  </tr>
+</table>
+"""
+
+    support_items = [line for line in (support_lines or []) if str(line or "").strip()]
+    if support_email:
+        support_items.append(f"Support email: {support_email}")
+    support_items.append(f"Open WeCast: {app_url}")
+    support_rows = "".join(
+        (
+            "<tr>"
+            f'<td style="padding:0 0 6px;font-size:13px;line-height:1.7;color:#697180;">{html.escape(str(line or "").strip())}</td>'
+            "</tr>"
+        )
+        for line in support_items
+    )
+    support_html = f"""\
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:24px;border-top:1px solid #ece1c5;">
+  <tr>
+    <td style="padding-top:18px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+        {support_rows}
+      </table>
+    </td>
+  </tr>
+</table>
+"""
+
+    action_html = ""
+    if safe_action_label and safe_action_link:
+        action_html = f"""\
+<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 18px;">
+  <tr>
+    <td align="center" bgcolor="#111111" style="border-radius:16px;">
+      <a href="{safe_action_link}" style="display:inline-block;padding:15px 26px;font-size:16px;font-weight:700;line-height:1;color:#ffffff;text-decoration:none;">{safe_action_label}</a>
+    </td>
+  </tr>
+</table>
+<p style="margin:0 0 12px;font-size:13px;line-height:1.75;color:#697180;">
+  If the button does not work, copy and paste this link into your browser:
+</p>
+<p style="margin:0 0 8px;font-size:13px;line-height:1.75;word-break:break-word;">
+  <a href="{safe_action_link}" style="color:#815c17;text-decoration:none;">{safe_action_link}</a>
+</p>
+"""
+
+    return f"""\
+<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#f6efe2;font-family:Arial,'Helvetica Neue',Helvetica,sans-serif;color:#171717;">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;">{safe_preheader}</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:linear-gradient(180deg,#f6efe2 0%,#fbf7ef 100%);padding:34px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#fffdf8;border:1px solid #eadfc9;border-radius:28px;overflow:hidden;box-shadow:0 24px 56px rgba(23,23,23,0.08);">
+            <tr>
+              <td style="padding:0;background:linear-gradient(135deg,{safe_accent_start} 0%,{safe_accent_end} 100%);">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td style="padding:28px 30px;">
+                      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                        <tr>
+                          <td style="vertical-align:middle;">
+                            <img src="{safe_logo_url}" alt="{safe_brand_name}" width="46" height="46" style="display:block;border:0;outline:none;text-decoration:none;border-radius:14px;">
+                          </td>
+                          <td style="padding-left:14px;vertical-align:middle;">
+                            <div style="font-size:13px;line-height:1.4;letter-spacing:0.18em;text-transform:uppercase;color:#6f5412;font-weight:700;">{safe_eyebrow}</div>
+                            <div style="font-family:Georgia,'Times New Roman',serif;font-size:33px;line-height:1.05;color:#18120b;font-weight:700;">{safe_brand_name}</div>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:34px 30px 30px;">
+                <div style="margin:0 0 10px;font-size:12px;line-height:1.3;letter-spacing:0.18em;text-transform:uppercase;color:#8b6b23;font-weight:700;">{safe_eyebrow}</div>
+                <h1 style="margin:0 0 18px;font-size:34px;line-height:1.12;color:#18120b;font-weight:800;">{safe_title}</h1>
+                <p style="margin:0 0 16px;font-size:16px;line-height:1.85;color:#3c4656;">Hi {safe_greeting_name},</p>
+                {intro_html}
+                {detail_html}
+                {action_html}
+                {support_html}
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
+
+
+def _build_password_reset_email(display_name, email, reset_link):
+    resolved_name = (display_name or "").strip() or "there"
+    resolved_email = (email or "").strip()
+    resolved_link = (reset_link or "").strip()
+    brand_name = _wecast_brand_name()
+
+    subject = f"Reset your {brand_name} password"
+    text = (
+        f"Hi {resolved_name},\n\n"
+        f"We received a request to reset your {brand_name} password.\n"
+        f"Use this secure link to choose a new password:\n{resolved_link}\n\n"
+        "If you did not request this, you can safely ignore this email.\n\n"
+        f"{brand_name}"
+    )
+    html_body = _render_wecast_email(
+        preheader=f"Reset your {brand_name} password securely.",
+        eyebrow="Password Reset",
+        title="Choose a new password",
+        greeting_name=resolved_name,
+        intro_lines=[
+            f"We received a request to reset the password for your account {resolved_email}.",
+            "Use the secure button below to create a new password and get back into your account.",
+        ],
+        action_label="Reset password",
+        action_link=resolved_link,
+        detail_label="Security reminder",
+        detail_lines=[
+            "If you did not request this reset, you can ignore this message.",
+            "For your safety, this link expires automatically after a short time.",
+        ],
+        support_lines=[
+            "Need help? Reply to this email or contact our support team.",
+        ],
+        accent_start="#f3c95b",
+        accent_end="#f8e7b3",
+    )
+    return subject, text, html_body
+
+
+def _build_email_change_confirmation_email(display_name, current_email, new_email, confirm_link):
+    resolved_name = (display_name or "").strip() or "there"
+    resolved_current_email = (current_email or "").strip()
+    resolved_new_email = (new_email or "").strip()
+    resolved_link = (confirm_link or "").strip()
+    brand_name = _wecast_brand_name()
+
+    subject = f"Confirm your new {brand_name} email address"
+    text = (
+        f"Hi {resolved_name},\n\n"
+        f"We received a request to change your {brand_name} email from {resolved_current_email} to {resolved_new_email}.\n"
+        f"Confirm the new address with this secure link:\n{resolved_link}\n\n"
+        "If you did not request this change, you can ignore this email.\n\n"
+        f"{brand_name}"
+    )
+    html_body = _render_wecast_email(
+        preheader=f"Confirm your new email address for {brand_name}.",
+        eyebrow="Email Change",
+        title="Confirm your new email",
+        greeting_name=resolved_name,
+        intro_lines=[
+            f"You requested a sign-in email change from {resolved_current_email} to {resolved_new_email}.",
+            "Confirm the new address below to finish the update and keep your account secure.",
+        ],
+        action_label="Confirm email",
+        action_link=resolved_link,
+        detail_label="Before you continue",
+        detail_lines=[
+            "Only click this button if you started the change from your WeCast profile.",
+            "If you did not request this, ignore the email and keep using your current address.",
+        ],
+        support_lines=[
+            "If this change was not requested by you, contact support as soon as possible.",
+        ],
+        accent_start="#9fd1ff",
+        accent_end="#dff0ff",
+    )
+    return subject, text, html_body
+
+
+def _build_email_change_notice_email(display_name, old_email, new_email):
+    resolved_name = (display_name or "").strip() or "there"
+    resolved_old_email = (old_email or "").strip()
+    resolved_new_email = (new_email or "").strip()
+    brand_name = _wecast_brand_name()
+
+    subject = f"Your {brand_name} email address was changed"
+    text = (
+        f"Hi {resolved_name},\n\n"
+        f"Your {brand_name} sign-in email was changed from {resolved_old_email} to {resolved_new_email}.\n"
+        "If you did not make this change, contact support immediately.\n\n"
+        f"{brand_name}: {_wecast_frontend_url()}"
+    )
+    html_body = _render_wecast_email(
+        preheader=f"Your {brand_name} email address has been updated.",
+        eyebrow="Security Notice",
+        title="Your email was updated",
+        greeting_name=resolved_name,
+        intro_lines=[
+            f"Your sign-in email changed from {resolved_old_email} to {resolved_new_email}.",
+            "If you made this change, no further action is needed.",
+        ],
+        detail_label="Did not request this?",
+        detail_lines=[
+            "If this update was not made by you, contact support immediately.",
+            "For safety, review your account activity and password after signing in.",
+        ],
+        support_lines=[
+            "This message was sent to your previous address so you can spot unauthorized changes quickly.",
+        ],
+        accent_start="#f0a49e",
+        accent_end="#fde3df",
+    )
+    return subject, text, html_body
+
+
+def _send_email_via_resend(*, to_email, subject, text_body, html_body):
     api_key = (os.getenv("RESEND_API_KEY") or "").strip()
-    from_email = (os.getenv("RESEND_FROM_EMAIL") or "").strip()
+    from_email = (
+        os.getenv("RESEND_FROM_EMAIL")
+        or os.getenv("FROM_EMAIL")
+        or ""
+    ).strip()
     if not api_key or not from_email:
         return False
 
-    from_name = (os.getenv("RESEND_FROM_NAME") or "WeCast").strip() or "WeCast"
+    from_name = (
+        os.getenv("RESEND_FROM_NAME")
+        or os.getenv("FROM_NAME")
+        or "WeCast"
+    ).strip() or "WeCast"
     reply_to = (os.getenv("WECAST_SUPPORT_EMAIL") or from_email).strip()
-    subject, text_body, html_body = _build_password_reset_email(display_name, email, reset_link)
 
     payload = {
         "from": f"{from_name} <{from_email}>",
-        "to": [email],
+        "to": [to_email],
         "subject": subject,
         "html": html_body,
         "text": text_body,
@@ -734,6 +1386,45 @@ def _send_reset_email_via_resend(email, display_name, reset_link):
     if not response.ok:
         raise RuntimeError(f"Resend email failed with status {response.status_code}")
     return True
+
+
+def _send_reset_email_via_resend(email, display_name, reset_link):
+    subject, text_body, html_body = _build_password_reset_email(display_name, email, reset_link)
+    return _send_email_via_resend(
+        to_email=email,
+        subject=subject,
+        text_body=text_body,
+        html_body=html_body,
+    )
+
+
+def _send_email_change_confirmation_via_resend(new_email, display_name, current_email, confirm_link):
+    subject, text_body, html_body = _build_email_change_confirmation_email(
+        display_name,
+        current_email,
+        new_email,
+        confirm_link,
+    )
+    return _send_email_via_resend(
+        to_email=new_email,
+        subject=subject,
+        text_body=text_body,
+        html_body=html_body,
+    )
+
+
+def _send_email_change_notice_via_resend(old_email, display_name, new_email):
+    subject, text_body, html_body = _build_email_change_notice_email(
+        display_name,
+        old_email,
+        new_email,
+    )
+    return _send_email_via_resend(
+        to_email=old_email,
+        subject=subject,
+        text_body=text_body,
+        html_body=html_body,
+    )
 
 
 def _send_reset_email_via_firebase(email):
@@ -782,7 +1473,7 @@ def prepare_password_reset_delivery(email, strict=False):
     from firebase_admin import auth as fb_auth
 
     normalized_email = (email or "").strip().lower()
-    doc = get_user_doc_by_candidates(normalized_email)
+    doc = get_user_doc_by_candidates(normalized_email, email=normalized_email)
     data = doc.to_dict() or {} if doc and doc.exists else {}
     stored_provider = normalize_auth_provider(
         data.get("authProvider"),
@@ -840,6 +1531,22 @@ def prepare_password_reset_delivery(email, strict=False):
             return {"status": "unavailable", "authProvider": auth_provider}
         return {"status": "hidden"}
 
+    firebase_uid = getattr(user_record, "uid", "") or data.get("firebaseUid", "")
+    if (not doc or not doc.exists) and firebase_uid:
+        try:
+            _upsert_firebase_user_profile(
+                email=normalized_email,
+                display_name=getattr(user_record, "display_name", None) or "",
+                auth_provider="password",
+                email_verified=bool(getattr(user_record, "email_verified", False)),
+                firebase_uid=firebase_uid,
+                mark_login=False,
+            )
+            doc = get_user_doc_by_candidates(normalized_email, firebase_uid=firebase_uid, email=normalized_email)
+            data = doc.to_dict() or {} if doc and doc.exists else data
+        except Exception as sync_error:
+            print(f"Password reset profile sync failed for {normalized_email}: {sync_error}")
+
     display_name = (
         data.get("displayName")
         or data.get("name")
@@ -847,25 +1554,30 @@ def prepare_password_reset_delivery(email, strict=False):
         or normalized_email.split("@")[0]
     ).strip()
 
-    try:
-        reset_link = _generate_firebase_password_reset_link(normalized_email)
-    except Exception as link_error:
-        print(f"Firebase password reset link generation failed for {normalized_email}: {link_error}")
-        return {
-            "status": "not_sent",
-            "delivery": "none",
-            "authProvider": "password",
-            "email": normalized_email,
-            "migratedFromLegacy": migrated_from_legacy,
-        }
-
     delivery = ""
+    pending_reset = None
 
-    try:
-        if _send_reset_email_via_resend(normalized_email, display_name, reset_link):
-            delivery = "resend"
-    except Exception as send_error:
-        print(f"Resend password reset email failed for {normalized_email}: {send_error}")
+    if _resend_is_configured():
+        nonce = secrets.token_urlsafe(24)
+        reset_token = _issue_email_action_token(
+            "password_reset",
+            email=normalized_email,
+            firebase_uid=firebase_uid,
+            nonce=nonce,
+            expires_in_seconds=PASSWORD_RESET_ACTION_TTL_SECONDS,
+        )
+        reset_link = _build_email_action_url("reset-password", reset_token)
+        pending_reset = {
+            "nonce": nonce,
+            "email": normalized_email,
+            "requestedAt": datetime.utcnow().isoformat(),
+            "expiresAt": (datetime.utcnow() + timedelta(seconds=PASSWORD_RESET_ACTION_TTL_SECONDS)).isoformat(),
+        }
+        try:
+            if _send_reset_email_via_resend(normalized_email, display_name, reset_link):
+                delivery = "resend"
+        except Exception as send_error:
+            print(f"Resend password reset email failed for {normalized_email}: {send_error}")
 
     if not delivery:
         try:
@@ -884,9 +1596,12 @@ def prepare_password_reset_delivery(email, strict=False):
                 "last_password_reset_request": datetime.utcnow().isoformat(),
                 "last_password_reset_delivery": delivery,
             }
-            firebase_uid = getattr(user_record, "uid", "") or data.get("firebaseUid", "")
             if firebase_uid:
                 merge_payload["firebaseUid"] = firebase_uid
+            if delivery == "resend" and pending_reset:
+                merge_payload["pendingPasswordReset"] = pending_reset
+            else:
+                merge_payload["pendingPasswordReset"] = firestore.DELETE_FIELD
 
             doc.reference.set(merge_payload, merge=True)
 
@@ -905,6 +1620,89 @@ def prepare_password_reset_delivery(email, strict=False):
         "email": normalized_email,
         "migratedFromLegacy": migrated_from_legacy,
     }
+
+
+def _validate_pending_password_reset(token):
+    payload = _decode_email_action_token(token, "password_reset")
+    firebase_uid = (payload.get("firebase_uid") or "").strip()
+    email = _normalize_email(payload.get("email"))
+    nonce = (payload.get("nonce") or "").strip()
+    doc = get_user_doc_by_candidates(email, firebase_uid=firebase_uid, email=email)
+    if not doc or not doc.exists:
+        raise ValueError("This reset link is no longer valid.")
+
+    data = doc.to_dict() or {}
+    pending = data.get("pendingPasswordReset") or {}
+    if not nonce or (pending.get("nonce") or "").strip() != nonce:
+        raise ValueError("This reset link has expired. Request a new one.")
+
+    return doc, data, payload
+
+
+def _validate_pending_email_change(token):
+    payload = _decode_email_action_token(token, "email_change")
+    firebase_uid = (payload.get("firebase_uid") or "").strip()
+    email = _normalize_email(payload.get("email"))
+    target_email = _normalize_email(payload.get("target_email"))
+    nonce = (payload.get("nonce") or "").strip()
+    doc = get_user_doc_by_candidates(email, firebase_uid=firebase_uid, email=email)
+    if not doc or not doc.exists:
+        raise ValueError("This email change link is no longer valid.")
+
+    data = doc.to_dict() or {}
+    pending = data.get("pendingEmailChange") or {}
+    if not nonce or (pending.get("nonce") or "").strip() != nonce:
+        raise ValueError("This email change link has expired. Request a new one.")
+    if target_email and _normalize_email(pending.get("newEmail")) != target_email:
+        raise ValueError("This email change request no longer matches your latest update.")
+
+    return doc, data, payload
+
+
+def _apply_email_change_to_records(doc, data, firebase_uid, old_email, new_email):
+    user_ref, seed_data, delete_ref = _prepare_user_storage(
+        doc,
+        firebase_uid=firebase_uid,
+        fallback_email=new_email,
+    )
+    if seed_data:
+        user_ref.set(seed_data, merge=True)
+
+    previous_emails = _merge_previous_emails(
+        data.get("previousEmails") or [],
+        old_email,
+        current_email=new_email,
+    )
+
+    user_ref.set(
+        {
+            "email": new_email,
+            "emailVerified": True,
+            "firebaseUid": firebase_uid,
+            "previousEmails": previous_emails,
+            "pendingEmailChange": firestore.DELETE_FIELD,
+            "updatedAt": firestore.SERVER_TIMESTAMP,
+            "last_email_change_at": datetime.utcnow().isoformat(),
+        },
+        merge=True,
+    )
+
+    if delete_ref and delete_ref.path != user_ref.path:
+        delete_ref.delete()
+
+    for podcast_doc in db.collection("podcasts").where("userId", "==", old_email).stream():
+        podcast_doc.reference.set(
+            {
+                "userId": new_email,
+                "ownerEmail": new_email,
+                "ownerUid": firebase_uid,
+                "lastOwnerEmailChangeAt": firestore.SERVER_TIMESTAMP,
+            },
+            merge=True,
+        )
+
+    final_doc = user_ref.get()
+    return final_doc.to_dict() or {}
 
 # ------------------------------------------------------------
 # API Clients (OpenAI + ElevenLabs)
@@ -2190,6 +2988,16 @@ def api_cover_generate(podcast_id):
         },
         "title": title,  # keep title synced for step 7
     })
+    if not pdata.get("readyEmailSent"):
+        email_sent = send_podcast_ready_email(user_id, title, podcast_id)
+        if email_sent:
+            db.collection("podcasts").document(podcast_id).set(
+                {
+                    "readyEmailSent": True,
+                    "readyEmailSentAt": firestore.SERVER_TIMESTAMP,
+                },
+                merge=True,
+            )
 
     return jsonify(
         ok=True,
@@ -2477,18 +3285,17 @@ def api_me():
     Uses the session user_id set during /api/login or /api/social-login.
     Refreshes avatarUrl from R2 if avatarKey exists.
     """
-    user_id = session.get("user_id") or get_current_user_email()
+    identity = get_current_user_identity()
+    user_id = identity.get("email")
+    doc = identity.get("doc")
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
     try:
-        user_ref = db.collection("users").document(user_id)
-        doc = user_ref.get()
-
-        if not doc.exists:
+        if not doc or not doc.exists:
             return jsonify(error="User not found"), 404
 
-        data = doc.to_dict() or {}
+        data = identity.get("data") or {}
         avatar_url = data.get("avatarUrl", "")
         avatar_key = data.get("avatarKey", "")
 
@@ -2521,12 +3328,17 @@ def api_me():
 @app.post("/api/profile/update")
 def api_profile_update():
     """Update user profile information"""
-    user_id = session.get("user_id") or get_current_user_email()
+    identity = get_current_user_identity()
+    user_id = identity.get("email")
+    firebase_uid = identity.get("firebaseUid")
+    existing_doc = identity.get("doc")
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
-    user_ref = db.collection("users").document(user_id)
-    existing_doc = user_ref.get()
+    if not existing_doc or not existing_doc.exists:
+        return jsonify(error="User not found"), 404
+
+    user_ref = existing_doc.reference
     existing_data = existing_doc.to_dict() or {}
     old_avatar_key = (existing_data.get("avatarKey") or "").strip()
 
@@ -2553,7 +3365,7 @@ def api_profile_update():
             
             try:
                 signed_url, avatar_key = _persist_avatar_to_r2(
-                    user_id=user_id,
+                    user_id=firebase_uid or user_id,
                     image_bytes=image_bytes,
                     mime_type=avatar_file.content_type,
                 )
@@ -2624,16 +3436,16 @@ def api_profile_update():
 
 @app.get("/api/profile/avatar")
 def api_profile_avatar():
-    user_id = session.get("user_id") or get_current_user_email()
+    identity = get_current_user_identity()
+    user_id = identity.get("email")
+    doc = identity.get("doc")
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
-    user_ref = db.collection("users").document(user_id)
-    doc = user_ref.get()
-    if not doc.exists:
+    if not doc or not doc.exists:
         return jsonify(error="User not found"), 404
 
-    data = doc.to_dict() or {}
+    data = identity.get("data") or {}
     avatar_key = data.get("avatarKey") or ""
 
     if not avatar_key:
@@ -2648,7 +3460,11 @@ def api_profile_avatar():
 
 @app.delete("/api/account")
 def api_delete_account():
-    user_id = session.get("user_id") or get_current_user_email()
+    identity = get_current_user_identity()
+    user_id = identity.get("email")
+    firebase_uid = identity.get("firebaseUid")
+    doc = identity.get("doc")
+    data = identity.get("data") or {}
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
@@ -2666,7 +3482,13 @@ def api_delete_account():
 
     try:
         deleted_podcast_ids = set()
-        for candidate in user_id_candidates(user_id):
+        podcast_candidates = [user_id]
+        for previous_email in data.get("previousEmails") or []:
+            normalized_previous = _normalize_email(previous_email)
+            if normalized_previous and normalized_previous not in podcast_candidates:
+                podcast_candidates.append(normalized_previous)
+
+        for candidate in podcast_candidates:
             try:
                 for doc in db.collection("podcasts").where("userId", "==", candidate).stream():
                     if doc.id in deleted_podcast_ids:
@@ -2677,7 +3499,16 @@ def api_delete_account():
                 print(f"Podcast deletion error for {candidate}: {podcast_error}")
 
         deleted_user_docs = 0
-        for candidate in user_id_candidates(user_id):
+        user_doc_candidates = set(user_id_candidates(user_id))
+        if firebase_uid:
+            user_doc_candidates.add(firebase_uid)
+        if doc and doc.exists:
+            user_doc_candidates.add(doc.reference.id)
+        for previous_email in data.get("previousEmails") or []:
+            for candidate in user_id_candidates(previous_email):
+                user_doc_candidates.add(candidate)
+
+        for candidate in user_doc_candidates:
             try:
                 user_ref = db.collection("users").document(candidate)
                 user_doc = user_ref.get()
@@ -2706,16 +3537,17 @@ def api_delete_account():
 
 @app.post("/api/account/password-reset-link")
 def api_account_password_reset_link():
-    user_id = session.get("user_id") or get_current_user_email()
+    identity = get_current_user_identity()
+    user_id = identity.get("email")
+    doc = identity.get("doc")
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
     try:
-        doc = get_user_doc_by_candidates(user_id)
         if not doc or not doc.exists:
             return jsonify(error="User not found"), 404
 
-        data = doc.to_dict() or {}
+        data = identity.get("data") or {}
         email = (data.get("email") or user_id or "").strip().lower()
         if not email or not is_reasonably_valid_email(email):
             return jsonify(error="A valid account email is required before sending a reset link."), 400
@@ -2756,6 +3588,602 @@ def api_password_reset_email():
     except Exception as e:
         print(f"Password reset email request error: {e}")
         return jsonify(error="We couldn't process the password reset email."), 500
+
+
+@app.post("/api/password-reset/validate")
+def api_password_reset_validate():
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    if not token:
+        return jsonify(error="Missing reset token."), 400
+
+    try:
+        doc, user_data, _ = _validate_pending_password_reset(token)
+        resolved_email = _normalize_email((user_data.get("email") or "").strip())
+        if not resolved_email and doc and doc.exists:
+            resolved_email = _normalize_email(doc.reference.id)
+        return jsonify(ok=True, email=resolved_email)
+    except Exception as e:
+        print(f"Password reset validation error: {e}")
+        return jsonify(error="This reset link is invalid or has expired."), 400
+
+
+@app.post("/api/password-reset/confirm")
+def api_password_reset_confirm():
+    from firebase_admin import auth as fb_auth
+
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    new_password = data.get("newPassword") or ""
+    confirm_password = data.get("confirmPassword") or ""
+
+    if not token:
+        return jsonify(error="Missing reset token."), 400
+
+    password_error = _password_validation_error(new_password, confirm_password)
+    if password_error:
+        return jsonify(error=password_error), 400
+
+    try:
+        doc, user_data, payload = _validate_pending_password_reset(token)
+        firebase_uid = (user_data.get("firebaseUid") or payload.get("firebase_uid") or "").strip()
+
+        if firebase_uid:
+            fb_auth.update_user(firebase_uid, password=new_password)
+
+        doc.reference.set(
+            {
+                "password_hash": generate_password_hash(new_password),
+                "authProvider": "password",
+                "failed_attempts": 0,
+                "lock_until": None,
+                "pendingPasswordReset": firestore.DELETE_FIELD,
+                "last_password_reset_completed": datetime.utcnow().isoformat(),
+            },
+            merge=True,
+        )
+
+        return jsonify(ok=True, email=_normalize_email(user_data.get("email")))
+    except Exception as e:
+        print(f"Password reset confirmation error: {e}")
+        return jsonify(error="This reset link is invalid, expired, or already used."), 400
+
+
+def _email_service_failure_response(result, default_message):
+    missing = result.get("missing") or []
+    if missing:
+        return jsonify(error="Email delivery is not configured.", missing=missing), 503
+    return jsonify(error=default_message), 502
+
+
+@app.post("/api/send-verification-email")
+def api_send_verification_email():
+    from firebase_admin import auth as fb_auth
+    from services.email_service import send_verification_email
+
+    data = request.get_json(silent=True) or {}
+    email = _normalize_email(data.get("email"))
+
+    if not is_reasonably_valid_email(email):
+        return jsonify(error="Please enter a valid email address."), 400
+
+    try:
+        result = send_verification_email(email)
+        if result.get("ok"):
+            return jsonify(ok=True)
+        return _email_service_failure_response(
+            result,
+            "We couldn't send the verification email right now.",
+        )
+    except fb_auth.UserNotFoundError:
+        return jsonify(ok=True)
+    except Exception as e:
+        print(f"Custom verification email failed: {type(e).__name__}")
+        return jsonify(error="We couldn't send the verification email right now."), 500
+
+
+@app.post("/api/send-password-reset-email")
+def api_send_password_reset_email():
+    from firebase_admin import auth as fb_auth
+    from services.email_service import (
+        send_password_reset_email,
+        validate_email_environment,
+    )
+    from services.firebase_action_links import generate_password_reset_link
+    import traceback
+
+    def debug_error(step, exc, status=500):
+        frame = traceback.extract_tb(exc.__traceback__)[-1] if exc.__traceback__ else None
+        payload = {
+            "ok": False,
+            "step": step,
+            "errorType": type(exc).__name__,
+            "message": str(exc)[:180],
+            "function": frame.name if frame else "",
+            "line": frame.lineno if frame else None,
+        }
+        print(
+            "Password reset debug failure:",
+            f"step={payload['step']}",
+            f"errorType={payload['errorType']}",
+            f"function={payload['function']}",
+            f"line={payload['line']}",
+        )
+        return jsonify(payload), status
+
+    try:
+        data = request.get_json(silent=True) or {}
+    except Exception as e:
+        return debug_error("request_body", e, 400)
+
+    email = _normalize_email(data.get("email"))
+
+    if not is_reasonably_valid_email(email):
+        return jsonify(
+            ok=False,
+            step="email_validation",
+            errorType="InvalidEmail",
+            message="Please enter a valid email address.",
+        ), 400
+
+    config = validate_email_environment()
+    if not config.get("ready"):
+        return jsonify(
+            ok=False,
+            step="smtp_config",
+            errorType="MissingEnvironment",
+            message="Email delivery is not configured.",
+            missing=config.get("missing") or [],
+        ), 503
+
+    try:
+        action_url = generate_password_reset_link(email)
+    except fb_auth.UserNotFoundError:
+        return jsonify(ok=True)
+    except Exception as e:
+        if "RESET_PASSWORD_EXCEED_LIMIT" not in str(e).upper():
+            return debug_error("firebase_reset_link", e, 500)
+
+        try:
+            doc = get_user_doc_by_candidates(email, email=email)
+            user_record = fb_auth.get_user_by_email(email)
+            firebase_uid = (getattr(user_record, "uid", "") or "").strip()
+            if not doc or not doc.exists:
+                return jsonify(ok=True)
+
+            nonce = secrets.token_urlsafe(24)
+            reset_token = _issue_email_action_token(
+                "password_reset",
+                email=email,
+                firebase_uid=firebase_uid,
+                nonce=nonce,
+                expires_in_seconds=PASSWORD_RESET_ACTION_TTL_SECONDS,
+            )
+            action_url = _build_email_action_url("reset-password", reset_token)
+            doc.reference.set(
+                {
+                    "pendingPasswordReset": {
+                        "nonce": nonce,
+                        "email": email,
+                        "requestedAt": datetime.utcnow().isoformat(),
+                        "expiresAt": (
+                            datetime.utcnow()
+                            + timedelta(seconds=PASSWORD_RESET_ACTION_TTL_SECONDS)
+                        ).isoformat(),
+                    },
+                    "firebaseUid": firebase_uid,
+                    "last_password_reset_request": datetime.utcnow().isoformat(),
+                    "last_password_reset_delivery": "smtp_internal_fallback",
+                },
+                merge=True,
+            )
+            print("Password reset debug: using internal fallback after Firebase reset limit")
+        except fb_auth.UserNotFoundError:
+            return jsonify(ok=True)
+        except Exception as fallback_error:
+            return debug_error("firebase_reset_limit_fallback", fallback_error, 500)
+
+    try:
+        result = send_password_reset_email(email, action_url=action_url)
+    except Exception as e:
+        return debug_error("email_send_call", e, 500)
+
+    if result.get("ok"):
+        return jsonify(ok=True)
+
+    return jsonify(
+        ok=False,
+        step=result.get("step") or "email_send_call",
+        errorType=result.get("errorType") or "UnknownError",
+        message=result.get("error") or "Email send failed.",
+        function=result.get("function") or "",
+        line=result.get("line"),
+        missing=result.get("missing") or [],
+    ), 503 if result.get("step") in {"env", "smtp_config"} else 500
+
+
+@app.post("/api/change-email-request")
+def api_change_email_request():
+    from firebase_admin import auth as fb_auth
+    from services.email_service import (
+        send_confirm_new_email,
+        send_email_change_requested,
+        validate_email_environment,
+    )
+
+    identity = get_current_user_identity()
+    session_email = _normalize_email(identity.get("email"))
+    firebase_uid = (identity.get("firebaseUid") or "").strip()
+    doc = identity.get("doc")
+    user_data = identity.get("data") or {}
+
+    if not session_email:
+        return jsonify(error="Not logged in"), 401
+    if not doc or not doc.exists:
+        return jsonify(error="User not found"), 404
+    if normalize_auth_provider(user_data.get("authProvider"), user_data.get("password_hash")) != "password":
+        return jsonify(error="Email changes are only available for email/password accounts."), 409
+
+    data = request.get_json(silent=True) or {}
+    current_email = _normalize_email(data.get("current_email") or data.get("currentEmail"))
+    new_email = _normalize_email(data.get("new_email") or data.get("newEmail"))
+    password = data.get("password") or ""
+
+    if current_email != session_email:
+        return jsonify(error="This request does not match your signed-in account."), 403
+    if not is_reasonably_valid_email(current_email):
+        return jsonify(error="Please enter a valid current email address."), 400
+    if not is_reasonably_valid_email(new_email):
+        return jsonify(error="Please enter a valid new email address."), 400
+    if new_email == current_email:
+        return jsonify(error="Enter a different email address to continue."), 400
+    if not password:
+        return jsonify(error="Enter your current password to continue."), 400
+
+    stored_hash = user_data.get("password_hash")
+    if not stored_hash or not check_password_hash(stored_hash, password):
+        return jsonify(error="Your current password could not be verified."), 401
+
+    env_status = validate_email_environment()
+    if not env_status.get("ready"):
+        return jsonify(
+            error="Email delivery is not configured.",
+            missing=env_status.get("missing") or [],
+        ), 503
+
+    try:
+        if not firebase_uid:
+            try:
+                firebase_user = fb_auth.get_user_by_email(current_email)
+            except fb_auth.UserNotFoundError:
+                firebase_user = _provision_legacy_password_user(current_email, doc, user_data)
+            firebase_uid = firebase_user.uid
+            doc.reference.set({"firebaseUid": firebase_uid}, merge=True)
+
+        existing_doc = get_user_doc_by_candidates(new_email, email=new_email)
+        existing_data = (
+            existing_doc.to_dict() or {}
+            if existing_doc and existing_doc.exists
+            else {}
+        )
+        if existing_doc and existing_doc.exists:
+            existing_uid = (existing_data.get("firebaseUid") or "").strip()
+            if existing_doc.reference.path != doc.reference.path and existing_uid != firebase_uid:
+                return jsonify(error="That email address is already in use."), 409
+
+        try:
+            existing_user = fb_auth.get_user_by_email(new_email)
+            if existing_user.uid != firebase_uid:
+                return jsonify(error="That email address is already in use."), 409
+        except fb_auth.UserNotFoundError:
+            pass
+
+        nonce = secrets.token_urlsafe(24)
+        action_token = _issue_email_action_token(
+            "email_change",
+            email=current_email,
+            firebase_uid=firebase_uid,
+            target_email=new_email,
+            nonce=nonce,
+            expires_in_seconds=EMAIL_CHANGE_ACTION_TTL_SECONDS,
+        )
+        confirm_link = _build_email_action_url("change-email", action_token)
+        expires_at = datetime.utcnow() + timedelta(seconds=EMAIL_CHANGE_ACTION_TTL_SECONDS)
+
+        doc.reference.set(
+            {
+                "pendingEmailChange": {
+                    "nonce": nonce,
+                    "currentEmail": current_email,
+                    "newEmail": new_email,
+                    "requestedAt": datetime.utcnow().isoformat(),
+                    "expiresAt": expires_at.isoformat(),
+                },
+                "firebaseUid": firebase_uid,
+            },
+            merge=True,
+        )
+
+        confirm_result = send_confirm_new_email(
+            new_email,
+            current_email=current_email,
+            action_url=confirm_link,
+        )
+        alert_result = send_email_change_requested(
+            current_email,
+            new_email=new_email,
+        )
+        if not confirm_result.get("ok") or not alert_result.get("ok"):
+            doc.reference.set({"pendingEmailChange": firestore.DELETE_FIELD}, merge=True)
+            failed_result = confirm_result if not confirm_result.get("ok") else alert_result
+            return _email_service_failure_response(
+                failed_result,
+                "We couldn't send the email change confirmation right now.",
+            )
+
+        return jsonify(
+            ok=True,
+            maskedCurrentEmail=_mask_email(current_email),
+            maskedNewEmail=_mask_email(new_email),
+        )
+    except Exception as e:
+        print(f"Custom email change request failed: {type(e).__name__}")
+        return jsonify(error="We couldn't start the email change right now."), 500
+
+
+@app.post("/api/confirm-email-change")
+def api_confirm_email_change():
+    from firebase_admin import auth as fb_auth
+    from services.email_service import send_email_changed_success
+
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or request.args.get("token") or "").strip()
+    if not token:
+        return jsonify(error="Missing email change token."), 400
+
+    try:
+        doc, user_data, payload = _validate_pending_email_change(token)
+        pending = user_data.get("pendingEmailChange") or {}
+        firebase_uid = (user_data.get("firebaseUid") or payload.get("firebase_uid") or "").strip()
+        old_email = _normalize_email(pending.get("currentEmail") or user_data.get("email") or payload.get("email"))
+        new_email = _normalize_email(pending.get("newEmail") or payload.get("target_email"))
+
+        if not firebase_uid:
+            return jsonify(error="This email change link is missing required account data."), 409
+        if not old_email or not new_email:
+            return jsonify(error="This email change link is missing required account data."), 400
+
+        try:
+            existing_user = fb_auth.get_user_by_email(new_email)
+            if existing_user.uid != firebase_uid:
+                return jsonify(error="That email address is already in use."), 409
+        except fb_auth.UserNotFoundError:
+            pass
+
+        fb_auth.update_user(firebase_uid, email=new_email, email_verified=True)
+        _apply_email_change_to_records(
+            doc,
+            user_data,
+            firebase_uid,
+            old_email,
+            new_email,
+        )
+
+        notification_sent = True
+        try:
+            result = send_email_changed_success(old_email, new_email=new_email)
+            notification_sent = bool(result.get("ok"))
+        except Exception as notice_error:
+            notification_sent = False
+            print(f"Email change success notice failed: {type(notice_error).__name__}")
+
+        active_session_uid = (session.get("firebase_uid") or "").strip()
+        active_session_email = _normalize_email(session.get("user_id"))
+        if active_session_uid == firebase_uid or active_session_email == old_email:
+            session["user_id"] = new_email
+            session["firebase_uid"] = firebase_uid
+            session.modified = True
+
+        return jsonify(
+            ok=True,
+            maskedOldEmail=_mask_email(old_email),
+            maskedNewEmail=_mask_email(new_email),
+            notificationSent=notification_sent,
+        )
+    except Exception as e:
+        print(f"Custom email change confirmation failed: {type(e).__name__}")
+        return jsonify(error="This email change link is invalid, expired, or already used."), 400
+
+
+@app.post("/api/account/email-change/request")
+def api_account_email_change_request():
+    from firebase_admin import auth as fb_auth
+
+    identity = get_current_user_identity()
+    current_email = identity.get("email")
+    firebase_uid = identity.get("firebaseUid")
+    doc = identity.get("doc")
+    user_data = identity.get("data") or {}
+
+    if not current_email:
+        return jsonify(error="Not logged in"), 401
+    if not doc or not doc.exists:
+        return jsonify(error="User not found"), 404
+    if normalize_auth_provider(user_data.get("authProvider"), user_data.get("password_hash")) != "password":
+        return jsonify(error="Email changes are only available for email/password accounts."), 409
+    if not firebase_uid:
+        return jsonify(error="Please sign in again before changing your email."), 409
+    if not _resend_is_configured():
+        return jsonify(error="Custom email delivery is not configured yet. Add the Resend settings first."), 503
+
+    data = request.get_json(silent=True) or {}
+    new_email = _normalize_email(data.get("newEmail"))
+    id_token = (data.get("idToken") or "").strip()
+
+    if not is_reasonably_valid_email(new_email):
+        return jsonify(error="Enter a valid new email address."), 400
+    if new_email == current_email:
+        return jsonify(error="Enter a different email address to continue."), 400
+    if not id_token:
+        return jsonify(error="Please sign in again and try the email change one more time."), 401
+
+    try:
+        decoded = fb_auth.verify_id_token(id_token)
+    except Exception as verify_error:
+        print(f"Email change re-auth verification failed: {verify_error}")
+        return jsonify(error="Please sign in again before changing your email."), 401
+
+    if (decoded.get("uid") or "").strip() != firebase_uid:
+        return jsonify(error="This sign-in session does not match your WeCast account."), 401
+    if not _is_recent_auth(decoded):
+        return jsonify(error="For security, confirm your password again and retry the email change."), 401
+
+    existing_doc = get_user_doc_by_candidates(new_email, email=new_email)
+    existing_data = existing_doc.to_dict() or {} if existing_doc and existing_doc.exists else {}
+    if existing_doc and existing_doc.exists and (existing_data.get("firebaseUid") or "").strip() != firebase_uid:
+        return jsonify(error="That email address is already in use."), 409
+
+    try:
+        existing_user = fb_auth.get_user_by_email(new_email)
+        if existing_user.uid != firebase_uid:
+            return jsonify(error="That email address is already in use."), 409
+    except fb_auth.UserNotFoundError:
+        pass
+
+    display_name = (
+        user_data.get("displayName")
+        or user_data.get("name")
+        or current_email.split("@", 1)[0]
+    ).strip()
+    nonce = secrets.token_urlsafe(24)
+    action_token = _issue_email_action_token(
+        "email_change",
+        email=current_email,
+        firebase_uid=firebase_uid,
+        target_email=new_email,
+        nonce=nonce,
+        expires_in_seconds=EMAIL_CHANGE_ACTION_TTL_SECONDS,
+    )
+    confirm_link = _build_email_action_url("change-email", action_token)
+
+    try:
+        _send_email_change_confirmation_via_resend(
+            new_email,
+            display_name,
+            current_email,
+            confirm_link,
+        )
+    except Exception as send_error:
+        print(f"Email change confirmation send failed for {current_email}: {send_error}")
+        return jsonify(error="We couldn't send the confirmation email right now. Please try again."), 500
+
+    doc.reference.set(
+        {
+            "pendingEmailChange": {
+                "nonce": nonce,
+                "currentEmail": current_email,
+                "newEmail": new_email,
+                "requestedAt": datetime.utcnow().isoformat(),
+                "expiresAt": (datetime.utcnow() + timedelta(seconds=EMAIL_CHANGE_ACTION_TTL_SECONDS)).isoformat(),
+            },
+            "firebaseUid": firebase_uid,
+        },
+        merge=True,
+    )
+
+    return jsonify(
+        ok=True,
+        currentEmail=current_email,
+        newEmail=new_email,
+        maskedNewEmail=_mask_email(new_email),
+    )
+
+
+@app.post("/api/account/email-change/validate")
+def api_account_email_change_validate():
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    if not token:
+        return jsonify(error="Missing email change token."), 400
+
+    try:
+        _, user_data, _ = _validate_pending_email_change(token)
+        pending = user_data.get("pendingEmailChange") or {}
+        current_email = _normalize_email(pending.get("currentEmail") or user_data.get("email"))
+        new_email = _normalize_email(pending.get("newEmail"))
+        return jsonify(
+            ok=True,
+            currentEmail=current_email,
+            newEmail=new_email,
+            maskedNewEmail=_mask_email(new_email),
+        )
+    except Exception as e:
+        print(f"Email change validation error: {e}")
+        return jsonify(error="This email change link is invalid or has expired."), 400
+
+
+@app.post("/api/account/email-change/confirm")
+def api_account_email_change_confirm():
+    from firebase_admin import auth as fb_auth
+
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    if not token:
+        return jsonify(error="Missing email change token."), 400
+
+    try:
+        doc, user_data, payload = _validate_pending_email_change(token)
+        pending = user_data.get("pendingEmailChange") or {}
+        firebase_uid = (user_data.get("firebaseUid") or payload.get("firebase_uid") or "").strip()
+        old_email = _normalize_email(pending.get("currentEmail") or user_data.get("email") or payload.get("email"))
+        new_email = _normalize_email(pending.get("newEmail") or payload.get("target_email"))
+
+        if not firebase_uid:
+            return jsonify(error="Please sign in again before confirming this email change."), 409
+        if not old_email or not new_email:
+            return jsonify(error="This email change link is missing required account data."), 400
+
+        try:
+            existing_user = fb_auth.get_user_by_email(new_email)
+            if existing_user.uid != firebase_uid:
+                return jsonify(error="That email address is already in use."), 409
+        except fb_auth.UserNotFoundError:
+            pass
+
+        fb_auth.update_user(firebase_uid, email=new_email, email_verified=True)
+        final_user_data = _apply_email_change_to_records(
+            doc,
+            user_data,
+            firebase_uid,
+            old_email,
+            new_email,
+        )
+
+        display_name = (
+            final_user_data.get("displayName")
+            or final_user_data.get("name")
+            or new_email.split("@", 1)[0]
+        ).strip()
+        try:
+            _send_email_change_notice_via_resend(old_email, display_name, new_email)
+        except Exception as notice_error:
+            print(f"Old email notification failed for {old_email}: {notice_error}")
+
+        active_session_uid = (session.get("firebase_uid") or "").strip()
+        active_session_email = _normalize_email(session.get("user_id"))
+        if active_session_uid == firebase_uid or active_session_email == old_email:
+            session["user_id"] = new_email
+            session["firebase_uid"] = firebase_uid
+            session.modified = True
+
+        return jsonify(
+            ok=True,
+            oldEmail=old_email,
+            newEmail=new_email,
+        )
+    except Exception as e:
+        print(f"Email change confirmation error: {e}")
+        return jsonify(error="This email change link is invalid, expired, or already used."), 400
 @app.get("/api/podcast/<podcast_id>")
 def api_get_podcast(podcast_id):
     """Fetch full podcast data for editing"""
@@ -3949,10 +5377,11 @@ def signup():
             }
         ), 400
 
-    user_ref = db.collection("users").document(email)
-    if user_ref.get().exists:
+    existing_user_doc = get_user_doc_by_candidates(email, email=email)
+    if existing_user_doc and existing_user_doc.exists:
         return jsonify({"error": "This email is already in use."}), 409
 
+    user_ref = db.collection("users").document(email)
     password_hash = generate_password_hash(password)
 
     user_ref.set(
@@ -3976,6 +5405,7 @@ def signup():
 
     token = create_token(email, email)
     session["user_id"] = email
+    session["firebase_uid"] = ""
     session.modified = True
 
     return (
@@ -4011,8 +5441,8 @@ def login():
     if "@" in identifier:
         email_candidates = [identifier, identifier.lower()]
         for candidate in email_candidates:
-            doc = users.document(candidate).get()
-            if doc.exists:
+            doc = get_user_doc_by_candidates(candidate, email=candidate)
+            if doc and doc.exists:
                 user_data = doc.to_dict() or {}
                 user_email = user_data.get("email") or candidate
                 break
@@ -4038,9 +5468,11 @@ def login():
     if not stored_hash or not check_password_hash(stored_hash, password):
         return jsonify({"error": "Invalid email/username or password"}), 401
 
-    token = create_token(user_email, user_email)
+    firebase_uid = (user_data.get("firebaseUid") or "").strip()
+    token = create_token(user_email, user_email, firebase_uid=firebase_uid)
     
     session["user_id"] = user_email
+    session["firebase_uid"] = firebase_uid
     session.modified = True
 
     return (
@@ -4073,31 +5505,17 @@ def reset_password_direct():
     if new_password != confirm_password:
         return jsonify(error="Passwords do not match."), 400
 
-    if len(new_password) < 8:
-        return jsonify(error="Password must be at least 8 characters long."), 400
+    password_error = _password_validation_error(new_password, confirm_password)
+    if password_error:
+        return jsonify(error=password_error), 400
 
-    if (
-        not re.search(r"[A-Z]", new_password)
-        or not re.search(r"\d", new_password)
-        or not re.search(r"[^A-Za-z0-9]", new_password)
-    ):
-        return jsonify(
-            {
-                "error": (
-                    "Password must be at least 8 characters and include one "
-                    "uppercase letter, one number, and one special symbol."
-                )
-            }
-        ), 400
+    doc = get_user_doc_by_candidates(email, email=email)
 
-    user_ref = db.collection("users").document(email)
-    doc = user_ref.get()
-
-    if not doc.exists:
+    if not doc or not doc.exists:
         return jsonify(error="Email is not registered."), 404
 
     new_hash = generate_password_hash(new_password)
-    user_ref.update(
+    doc.reference.update(
         {
             "password_hash": new_hash,
             "failed_attempts": 0,
@@ -4136,9 +5554,11 @@ def social_login():
         )
 
 
-        token = create_token(email, email)
+        firebase_uid = (decoded.get("uid") or "").strip()
+        token = create_token(email, email, firebase_uid=firebase_uid)
 
         session["user_id"] = email
+        session["firebase_uid"] = firebase_uid
         session.modified = True
 
         return jsonify(
@@ -4187,8 +5607,10 @@ def firebase_email_login():
             mark_login=True,
         )
 
-        token = create_token(email, email)
+        firebase_uid = (decoded.get("uid") or "").strip()
+        token = create_token(email, email, firebase_uid=firebase_uid)
         session["user_id"] = email
+        session["firebase_uid"] = firebase_uid
         session.modified = True
 
         return jsonify(
@@ -4204,6 +5626,136 @@ def firebase_email_login():
                 "Firebase service account matches the frontend Firebase project."
             )
         ), 401
+
+
+def _podcast_share_url(podcast_id):
+    safe_id = quote(str(podcast_id or "").strip(), safe="")
+    return f"{_wecast_frontend_url()}/#/share/{safe_id}"
+
+
+def send_podcast_ready_email(user_email, podcast_title, podcast_id):
+    user_email = _normalize_email(user_email)
+    if not user_email or not is_reasonably_valid_email(user_email):
+        return False
+
+    title = (podcast_title or "Untitled Podcast").strip() or "Untitled Podcast"
+    public_link = _podcast_share_url(podcast_id)
+    subject = "Your WeCast podcast is ready"
+    text_body = (
+        "Hi,\n\n"
+        f'Your podcast "{title}" has been generated successfully.\n\n'
+        "You can access and download it here:\n"
+        f"{public_link}\n\n"
+        "Thanks for using WeCast.\n"
+    )
+    html_body = _render_wecast_email(
+        preheader="Your podcast has been generated successfully.",
+        eyebrow="Podcast ready",
+        title="Your podcast is ready",
+        greeting_name=user_email.split("@", 1)[0],
+        intro_lines=[
+            f'Your podcast "{title}" has been generated successfully.',
+            "You can open, play, and share it from the link below.",
+        ],
+        action_label="Open podcast",
+        action_link=public_link,
+        detail_label="Share link",
+        detail_lines=[public_link],
+    )
+
+    try:
+        if _send_email_via_resend(
+            to_email=user_email,
+            subject=subject,
+            text_body=text_body,
+            html_body=html_body,
+        ):
+            print("Podcast ready email sent successfully via Resend")
+            return True
+    except Exception as e:
+        print("Podcast ready Resend email failed:", str(e))
+
+    smtp_host = (os.getenv("SMTP_HOST") or "").strip()
+    from_email = (
+        os.getenv("FROM_EMAIL")
+        or os.getenv("RESEND_FROM_EMAIL")
+        or ""
+    ).strip()
+    if not smtp_host or not from_email:
+        print("Podcast ready email skipped: email delivery is not configured")
+        return False
+
+    try:
+        smtp_port = int((os.getenv("SMTP_PORT") or "587").strip())
+    except ValueError:
+        smtp_port = 587
+
+    try:
+        msg = MIMEMultipart()
+        from_name = (os.getenv("FROM_NAME") or os.getenv("RESEND_FROM_NAME") or "WeCast").strip()
+        msg["From"] = f"{from_name} <{from_email}>"
+        msg["To"] = user_email
+        msg["Subject"] = subject
+        msg.attach(MIMEText(text_body, "plain"))
+
+        server = smtplib.SMTP(smtp_host, smtp_port)
+        server.starttls()
+        smtp_user = (os.getenv("SMTP_USER") or "").strip()
+        smtp_pass = os.getenv("SMTP_PASS") or ""
+        if smtp_user and smtp_pass:
+            server.login(smtp_user, smtp_pass)
+        server.send_message(msg)
+        server.quit()
+
+        print("Podcast ready email sent successfully via SMTP")
+        return True
+    except Exception as e:
+        print("Podcast ready SMTP email failed:", str(e))
+        return False
+
+
+@app.get("/api/share/<podcast_id>")
+def get_shared_podcast(podcast_id):
+    try:
+        ref = db.collection("podcasts").document(podcast_id)
+        doc = ref.get()
+
+        if not doc.exists:
+            return jsonify({"error": "Podcast not found"}), 404
+
+        podcast = doc.to_dict() or {}
+
+        if str(podcast.get("status") or "").strip().lower() == "deleted":
+            return jsonify({"error": "Podcast not found"}), 404
+
+        audio_url = podcast.get("audioUrl", "")
+        audio_key = podcast.get("audioKey", "")
+        if audio_key:
+            try:
+                audio_url = build_r2_asset_url(audio_key, expires_in=3600)
+            except Exception as e:
+                print("Share audio URL generation failed:", str(e))
+
+        transcript_words = []
+        tdoc = ref.collection("transcripts").document("main").get()
+        if tdoc.exists:
+            transcript_words = (tdoc.to_dict() or {}).get("words") or []
+
+        return jsonify({
+            "id": podcast_id,
+            "title": podcast.get("title", ""),
+            "audioUrl": audio_url,
+            "summary": podcast.get("summary", ""),
+            "chapters": podcast.get("chapters", []),
+            "cover": podcast.get("coverThumbB64", ""),
+            "language": podcast.get("language", "en"),
+            "words": transcript_words,
+        })
+
+    except Exception as e:
+        print("Public share route error:", str(e))
+        return jsonify({"error": "Failed to load shared podcast"}), 500
+
 
 # ------------------------------------------------------------
 # Main

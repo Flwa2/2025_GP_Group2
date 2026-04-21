@@ -1,4 +1,13 @@
 {
+  "scripts": {
+    "dev": "npm --prefix static/frontend run dev",
+    "dev:frontend": "npm --prefix static/frontend run dev",
+    "dev:backend": "python app.py",
+    "dev:shell": "powershell -NoExit -ExecutionPolicy Bypass -File .\\scripts\\Enter-WeCastShell.ps1",
+    "dev:status": "powershell -ExecutionPolicy Bypass -File .\\scripts\\Enter-WeCastShell.ps1 -StatusOnly",
+    "build": "npm --prefix static/frontend run build",
+    "preview": "npm --prefix static/frontend run preview"
+  },
   "dependencies": {
     "i18next": "^25.6.3",
     "i18next-browser-languagedetector": "^8.2.0",
