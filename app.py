@@ -316,24 +316,33 @@ def delete_from_r2_quietly(object_key: str, label: str = "R2 cleanup"):
         print(f"{label} warning: {exc}")
 
 
-def resolve_podcast_media_urls(data, *, include_audio: bool = True, include_cover: bool = True):
+def resolve_podcast_media_urls(data, *, include_audio: bool = True, include_cover: bool = True, prefer_long_lived: bool = True):
+    """
+    Resolve podcast media URLs, preferring long-lived public URLs when available.
+    prefer_long_lived=True: Use R2_PUBLIC_BASE_URL (no expiry) if set, else signed (3600s)
+    prefer_long_lived=False: Always use signed URL (dev/debug use case)
+    """
     payload = dict(data or {})
+
+    def get_asset_url(key, expires_in=3600):
+        if not key or not str(key).strip():
+            return ""
+        try:
+            return build_r2_asset_url(str(key).strip(), expires_in=expires_in)
+        except Exception as exc:
+            print(f"Asset URL generation failed for key '{key}': {exc}")
+            return ""
 
     if include_audio:
         audio_key = str(payload.get("audioKey") or "").strip()
         if audio_key:
-            try:
-                payload["audioUrl"] = build_r2_asset_url(audio_key, expires_in=3600)
-            except Exception as exc:
-                print(f"Audio URL refresh failed: {exc}")
+            # Prefer long-lived public URL for production stability
+            payload["audioUrl"] = get_asset_url(audio_key, expires_in=24*3600 if prefer_long_lived else 3600)
 
     if include_cover:
         cover_key = str(payload.get("coverPath") or "").strip()
         if cover_key:
-            try:
-                payload["coverUrl"] = build_r2_asset_url(cover_key, expires_in=3600)
-            except Exception as exc:
-                print(f"Cover URL refresh failed: {exc}")
+            payload["coverUrl"] = get_asset_url(cover_key, expires_in=24*3600 if prefer_long_lived else 3600)
 
     return payload
 
@@ -4227,10 +4236,12 @@ def api_get_podcast(podcast_id):
 
     edit_draft = _serialize_edit_draft(_edit_draft_ref(podcast_id).get())
 
+    # Prefer long-lived URLs for edit view too
     resolved_podcast_data = resolve_podcast_media_urls(
         podcast_data,
         include_audio=True,
         include_cover=True,
+        prefer_long_lived=True
     )
 
     # Return all data the edit page needs
@@ -4912,9 +4923,11 @@ def get_audio(podcast_id):
         return jsonify(error="Audio not found"), 404
 
     try:
-        signed_url = build_r2_asset_url(audio_key, expires_in=3600)
-        return jsonify(url=signed_url)
+        audio_url = build_r2_asset_url(audio_key)
+        print(f"DEBUG AUDIO {podcast_id}: {audio_url} (public={bool(R2_PUBLIC_BASE_URL)})")
+        return jsonify(url=audio_url)
     except Exception as e:
+        print(f"DEBUG AUDIO ERROR {podcast_id}: {e}")
         return jsonify(error=str(e)), 500
     
 @app.get("/api/transcript/last")
@@ -5025,7 +5038,8 @@ def get_podcast(podcast_id):
     if data.get("userId") != user_id:
         return jsonify(error="Forbidden"), 403
 
-    podcast_payload = resolve_podcast_media_urls(data, include_audio=True, include_cover=True)
+    # Always prefer long-lived URLs for production stability
+    podcast_payload = resolve_podcast_media_urls(data, include_audio=True, include_cover=True, prefer_long_lived=True)
     return jsonify(ok=True, podcast={**podcast_payload, "id": podcast_id})
 
 
