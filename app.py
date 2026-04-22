@@ -337,12 +337,16 @@ def resolve_podcast_media_urls(data, *, include_audio: bool = True, include_cove
         audio_key = str(payload.get("audioKey") or "").strip()
         if audio_key:
             # Prefer long-lived public URL for production stability
-            payload["audioUrl"] = get_asset_url(audio_key, expires_in=24*3600 if prefer_long_lived else 3600)
+            resolved_audio_url = get_asset_url(audio_key, expires_in=24*3600 if prefer_long_lived else 3600)
+            if resolved_audio_url:
+                payload["audioUrl"] = resolved_audio_url
 
     if include_cover:
         cover_key = str(payload.get("coverPath") or "").strip()
         if cover_key:
-            payload["coverUrl"] = get_asset_url(cover_key, expires_in=24*3600 if prefer_long_lived else 3600)
+            resolved_cover_url = get_asset_url(cover_key, expires_in=24*3600 if prefer_long_lived else 3600)
+            if resolved_cover_url:
+                payload["coverUrl"] = resolved_cover_url
 
     return payload
 

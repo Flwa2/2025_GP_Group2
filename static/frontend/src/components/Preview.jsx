@@ -55,7 +55,7 @@ const generateSimpleSummary = (words) => {
 
 const isLikelyArabic = (text = "") => /[\u0600-\u06FF]/.test(text);
 
-const generateSummary = async (words, podcastId, language) => {
+const generateSummary = async (words, podcastId, language, authHeaders = {}) => {
   if (!words || words.length === 0) return "";
 
   const transcript = words.map((w) => w.w).join(" ");
@@ -67,7 +67,7 @@ const generateSummary = async (words, podcastId, language) => {
   try {
     const response = await fetch(`${API_BASE}/api/summarize`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders },
       body: JSON.stringify({
         text: transcript,
         podcastId,
@@ -124,6 +124,10 @@ export default function Preview() {
   const [summaryLoadedFromDb, setSummaryLoadedFromDb] = useState(false);
   const [showSaveAuthModal, setShowSaveAuthModal] = useState(false);
   const authToken = localStorage.getItem("token") || sessionStorage.getItem("token") || "";
+  const authHeaders = useMemo(
+    () => (authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    [authToken]
+  );
   const isAuthenticated = !!authToken;
   const pendingSaveHandledRef = useRef(false);
   const previewNoticeKey = "wecast:previewSaveNotice";
@@ -315,6 +319,7 @@ export default function Preview() {
     const loadEpisode = async () => {
       try {
         const res = await fetch(`${API_BASE}/api/podcasts/${episodeId}`, {
+          headers: authHeaders,
           credentials: "include",
         });
         const data = await res.json();
@@ -330,20 +335,28 @@ export default function Preview() {
         setCoverUrl(podcast.coverUrl || "");
         setCoverThumbB64(podcast.coverThumbB64 || "");
 
+        let restoredAudioUrl = "";
         if (podcast.audioKey) {
           const audioRes = await fetch(`${API_BASE}/api/audio/${episodeId}`, {
+            headers: authHeaders,
             credentials: "include",
           });
-          const audioData = await audioRes.json();
+          const audioData = await audioRes.json().catch(() => ({}));
 
           if (audioRes.ok && audioData?.url) {
-            setAudioUrl(audioData.url);
+            restoredAudioUrl = audioData.url;
           }
-        } else if (podcast.audioUrl) {
+        }
+
+        if (!restoredAudioUrl && podcast.audioUrl) {
           const baseUrl = podcast.audioUrl.startsWith("http")
             ? podcast.audioUrl
             : `${API_BASE}${podcast.audioUrl}`;
-          setAudioUrl(baseUrl);
+          restoredAudioUrl = baseUrl;
+        }
+
+        if (restoredAudioUrl) {
+          setAudioUrl(restoredAudioUrl);
         }
 
         if (podcast.title) setTitle(podcast.title);
@@ -375,6 +388,7 @@ export default function Preview() {
     const loadTranscript = async () => {
       try {
         const res = await fetch(`${API_BASE}/api/podcasts/${episodeId}/transcript`, {
+          headers: authHeaders,
           credentials: "include",
         });
         const data = await res.json();
@@ -390,7 +404,7 @@ export default function Preview() {
     return () => {
       isMounted = false;
     };
-  }, [episodeId]);
+  }, [episodeId, authHeaders]);
 
   useEffect(() => {
     if (!episodeId) return;
@@ -405,6 +419,7 @@ export default function Preview() {
       try {
         const res = await fetch(`${API_BASE}/api/podcasts/${episodeId}/chapters/ensure`, {
           method: "POST",
+          headers: authHeaders,
           credentials: "include",
         });
         const data = await res.json().catch(() => ({}));
@@ -420,7 +435,7 @@ export default function Preview() {
     return () => {
       cancelled = true;
     };
-  }, [episodeId, chapters.length, words]);
+  }, [episodeId, chapters.length, words, authHeaders]);
 
   // generate summary for episode when transcript is ready and none saved
   useEffect(() => {
@@ -436,7 +451,7 @@ export default function Preview() {
         if (isLikelyArabic(transcriptText) && langToUse !== "ar") {
           langToUse = "ar";
         }
-        const newSummary = await generateSummary(words, episodeId, langToUse);
+        const newSummary = await generateSummary(words, episodeId, langToUse, authHeaders);
         setSummary(newSummary);
       } catch (e) {
         console.error("Summary generation failed:", e);
@@ -446,7 +461,7 @@ export default function Preview() {
     };
 
     generate();
-  }, [episodeId, words, summaryLoadedFromDb, podcastLanguage]);
+  }, [episodeId, words, summaryLoadedFromDb, podcastLanguage, authHeaders]);
 
   // generate summary for non-episode preview only
   useEffect(() => {
@@ -463,7 +478,7 @@ export default function Preview() {
           langToUse = "ar";
         }
 
-        const newSummary = await generateSummary(words, episodeId, langToUse);
+        const newSummary = await generateSummary(words, episodeId, langToUse, authHeaders);
         setSummary(newSummary);
 
         try {
@@ -483,7 +498,7 @@ export default function Preview() {
     };
 
     loadOrGenerate();
-  }, [episodeId, words, podcastLanguage]);
+  }, [episodeId, words, podcastLanguage, authHeaders]);
 
   // find active word
   const activeIndex = useMemo(() => {
@@ -646,7 +661,7 @@ export default function Preview() {
         fetch(`${API_BASE}/api/preview/save`, {
           method: "POST",
           credentials: "include",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders },
           body: JSON.stringify(payload),
         });
 
@@ -657,7 +672,7 @@ export default function Preview() {
         res = await fetch(`${API_BASE}/api/podcasts/${episodeId}/save-all`, {
           method: "POST",
           credentials: "include",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders },
           body: JSON.stringify(payload),
         });
 
