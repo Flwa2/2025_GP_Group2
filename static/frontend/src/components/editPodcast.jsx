@@ -217,6 +217,7 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
       : null,
     filters.language ? { key: "language", label: `Language: ${filters.language}` } : null,
     filters.tone ? { key: "tone", label: `Tone: ${filters.tone}` } : null,
+    filters.pitch ? { key: "pitch", label: `Pitch: ${filters.pitch}` } : null,
   ].filter(Boolean);
 
   return (
@@ -240,6 +241,7 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
             />
           </div>
 
+          {/* Gender and Language row */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">Gender</label>
@@ -274,7 +276,10 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
                 <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
               </div>
             </div>
+          </div>
 
+          {/* Tone and Pitch row */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">Tone</label>
               <div className="relative">
@@ -286,6 +291,23 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
                   <option value="">All Tones</option>
                   {toneOptions.map(tone => (
                     <option key={tone} value={tone}>{tone}</option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Pitch</label>
+              <div className="relative">
+                <select
+                  value={filters.pitch || ""}
+                  onChange={(e) => setFilters({ ...filters, pitch: e.target.value })}
+                  className="w-full appearance-none pr-10 px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900 text-black dark:text-white border-neutral-300 dark:border-white/15 [color-scheme:light] dark:[color-scheme:dark]"
+                >
+                  <option value="">All Pitches</option>
+                  {PITCH_VALUES.map((pitch) => (
+                    <option key={pitch} value={pitch}>{pitch}</option>
                   ))}
                 </select>
                 <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
@@ -313,12 +335,14 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
             </div>
           )}
 
-          <button
-            onClick={() => setFilters({ q: "", gender: "__all__", language: "", tone: "", pitch: "" })}
-            className="text-sm text-purple-600 hover:text-purple-700"
-          >
-            Clear Filters
-          </button>
+  {activeChips.length > 0 && (
+  <button
+    onClick={() => setFilters({ q: "", gender: "__all__", language: "", tone: "", pitch: "" })}
+    className="px-3 py-1.5 rounded-md border border-purple-500 bg-transparent text-purple-600 font-medium text-sm transition hover:bg-purple-50 dark:text-purple-400 dark:border-purple-400 dark:hover:bg-purple-900/20"
+  >
+    Clear Filters
+  </button>
+)}
         </div>
 
         <div className="mt-6 flex justify-end">
@@ -429,6 +453,14 @@ export default function EditPodcast() {
 
   // Helper function to get voice ID (matching CreatePro)
   const getVoiceId = (v) => v?.providerVoiceId || v?.id || v?.docId || "";
+ const defaultVoiceForGender = (gender, usedIds, voicesList) => {
+  if (!gender) return "";
+  const available = voicesList.find(v => 
+    (v.gender?.toLowerCase() === gender.toLowerCase()) && 
+    !usedIds.has(getVoiceId(v))
+  );
+  return available ? getVoiceId(available) : "";
+};
   const buildEditableSnapshot = ({
     nextShowTitle = showTitle,
     nextScript = script,
@@ -1619,7 +1651,50 @@ const exportScript = async (format = "pdf") => {
   placeholder="Enter speaker name"
 />
 </div>
+{/* Gender Selection */}
+<div>
+  <label className="block text-sm font-medium mb-2">{t("create.speakers.gender")}</label>
+  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <div>
+      <select
+        value={speaker.gender}
+        onChange={(e) => {
+          setSpeakers((arr) => {
+            const gender = e.target.value;
+            const next = [...arr];
 
+            // Voices used by OTHER speakers
+            const usedIds = new Set(
+              next
+                .filter((_, idx) => idx !== index)
+                .map((s) => s.voiceId)
+                .filter(Boolean)
+            );
+
+            const voiceId = defaultVoiceForGender(gender, usedIds, voices);
+
+            next[index] = {
+              ...next[index],
+              gender,
+              voiceId,
+            };
+
+            return next;
+          });
+          setSpeakerVoiceVisibleCounts((prev) => ({
+            ...prev,
+            [index]: VOICE_PAGE_SIZE,
+          }));
+        }}
+        dir={isRTL ? "rtl" : "ltr"}
+        className={`form-input select-input [color-scheme:light] dark:[color-scheme:dark] ${isRTL ? "text-right" : "text-left"} w-full px-3 py-2 rounded-lg ${studioFieldClass}`}
+      >
+        <option value="Male">{t("create.speakers.genderMale")}</option>
+        <option value="Female">{t("create.speakers.genderFemale")}</option>
+      </select>
+    </div>
+  </div>
+</div>
                     <div>
                       <label className="block text-sm font-medium mb-2">Voice Selection</label>
                       {loadingVoices ? (
@@ -1721,85 +1796,151 @@ const exportScript = async (format = "pdf") => {
           </div>
         )}
 
-        {/* Music Tab */}
+ {/* Music Tab */}
 {activeTab === "music" && (
-          <><div className={`${studioGlassCardClass} p-5 sm:p-6 space-y-6`}>
-               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                 {Object.entries(MUSIC_CATEGORIES).map(([key, tracks]) => (
-                   <button
-                     key={key}
-                     onClick={() => {
-                       setCategory(key);
-                       setAvailableTracks(tracks);
-                     } }
-                     className={`p-4 rounded-lg border text-center transition ${category === key
-                         ? "border-purple-500 bg-purple-50 dark:bg-purple-900/20"
-                         : "border-purple-200/90 dark:border-purple-400/25 bg-white/70 dark:bg-neutral-900/55 hover:border-purple-300 dark:hover:border-purple-400/40"}`}
-                   >
-                     <Disc className="w-8 h-8 mx-auto mb-2 text-gray-600 dark:text-white/70" />
-                     <span className="font-medium capitalize">{key}</span>
-                   </button>
-                 ))}
-               </div>
+  <div className={`${studioGlassCardClass} p-6`}>
+    <h2 className="text-xl font-bold flex items-center gap-2 mb-2">
+      <span className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-purple-100 text-purple-600 dark:bg-purple-900/40">
+        <Headphones className="w-4 h-4" />
+      </span>
+      <span>Select your Transition Music</span>
+    </h2>
 
-               {category && (
-                 <div className="space-y-4">
-                   {[
-                     { label: "Intro Music", value: introMusic, setter: setIntroMusic },
-                     { label: "Body Music", value: bodyMusic, setter: setBodyMusic },
-                     { label: "Outro Music", value: outroMusic, setter: setOutroMusic },
-                   ].map((item) => (
-                     <div key={item.label} className={`${studioGlassCardClass} p-4 sm:p-5 flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center`}>
-                       <span className="font-medium">{item.label}</span>
-                       <div className="flex flex-wrap gap-2 justify-end">
-                         <select
-                           value={item.value}
-                           onChange={(e) => item.setter(e.target.value)}
-                           className={`px-3 py-2 rounded-lg min-w-[200px] ${studioFieldClass} [color-scheme:light] dark:[color-scheme:dark]`}
-                         >
-                           <option value="">Select track</option>
-                           {availableTracks.map((track) => (
-                             <option key={track.file} value={track.file}>
-                               {track.name}
-                             </option>
-                           ))}
-                         </select>
-                         <button
-                           onClick={() => {
-                             if (item.value) {
-                               // Stop current audio if playing
-                               if (window.currentAudio) {
-                                 window.currentAudio.pause();
-                                 window.currentAudio.currentTime = 0;
-                               }
+    <p className="text-sm text-black/60 dark:text-white/60 mt-2 mb-6">
+      Choose music to enhance your podcast. Select a category and pick tracks for intro, body, and outro.
+    </p>
 
-                               // Create and play new audio
-                               const audio = new Audio(`${API_BASE}/static/music/${item.value}`);
-                               window.currentAudio = audio;
-                               audio.play().catch(e => console.error("Playback failed:", e));
+    {/* CATEGORY SELECT */}
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
+      {Object.keys(MUSIC_CATEGORIES).map((cat) => {
+        const isActive = category === cat;
 
-                               // Show toast
-                               setToast({ type: "success", message: `Playing ${item.label}` });
-                               setTimeout(() => setToast(null), 2000);
-                             }
-                           } }
-                           disabled={!item.value}
-                           className="px-3 py-2 border border-purple-500 text-purple-600 dark:text-purple-300 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50"
-                           title={`Preview ${item.label}`}
-                         >
-                           <Play className="w-5 h-5" />
-                         </button>
-                       </div>
-                     </div>
-                   ))}
-                 </div>
-               )}
-             </div>
-              <div className="flex justify-end gap-3 mt-6">
+        const labelText =
+          cat === "dramatic"
+            ? "Dramatic"
+            : cat === "chill"
+              ? "Chill"
+              : cat === "classics"
+                ? "Classics"
+                : "Arabic";
+
+        const description =
+          cat === "dramatic"
+            ? "Powerful, epic tracks for serious moments"
+            : cat === "arabic"
+              ? "Traditional Arabic melodies and instruments"
+              : cat === "chill"
+                ? "Smooth, calming background ambience"
+                : "Timeless classical pieces";
+
+        return (
+          <label
+            key={cat}
+            onClick={() => {
+              if (category !== cat) {
+                setCategory(cat);
+                setAvailableTracks(MUSIC_CATEGORIES[cat]);
+                setIntroMusic("");
+                setBodyMusic("");
+                setOutroMusic("");
+                setMusicPreview(null);
+              }
+            }}
+            className={`cursor-pointer group relative w-full p-5 rounded-2xl border transition ${
+              isActive
+                ? "border-purple-500/80 bg-white/95 text-black backdrop-blur-sm shadow-[0_16px_32px_rgba(124,58,237,0.12)] dark:bg-neutral-900 dark:text-white dark:border-purple-400/70"
+                : "border-purple-200/90 bg-white/82 text-black backdrop-blur-sm shadow-[0_10px_24px_rgba(15,23,42,0.08)] hover:border-purple-300/95 hover:bg-white/92 dark:bg-neutral-900 dark:text-white dark:border-white/15 dark:hover:border-purple-400/70 dark:hover:bg-neutral-900"
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <input
+                type="radio"
+                checked={isActive}
+                readOnly
+                className="accent-purple-600 mt-1"
+              />
+
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-purple-100 text-purple-600 dark:bg-purple-900/50">
+                    <Music2 className="w-3 h-3" />
+                  </span>
+
+                  <div className="flex flex-col">
+                    <span className="font-semibold">{labelText}</span>
+                    <p className="text-xs text-black/60 dark:text-white/60 mt-0.5">
+                      {description}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {isActive && (
+              <span className="absolute top-3 right-4 inline-flex items-center gap-1 rounded-full bg-purple-100 text-purple-600 dark:bg-purple-900/60 px-2.5 py-1 text-[11px] font-semibold">
+                <Check className="w-3 h-3" />
+                Selected
+              </span>
+            )}
+          </label>
+        );
+      })}
     </div>
-               </>
-  
-  
+
+    {/* TRACK LIST */}
+    {category && availableTracks.length > 0 && (
+      <div className="mt-8 space-y-4">
+        {["Intro Music", "Body Music", "Outro Music"].map((label, index) => (
+          <div key={label} className="flex items-center justify-between border p-3 rounded-xl dark:border-neutral-700">
+            <span className="font-medium">{label}</span>
+
+            <div className="flex items-center gap-3">
+              <select
+                className="p-2 rounded-lg border dark:bg-neutral-800 dark:border-neutral-700"
+                value={
+                  index === 0 ? introMusic : index === 1 ? bodyMusic : outroMusic
+                }
+                onChange={(e) => {
+                  if (index === 0) setIntroMusic(e.target.value);
+                  if (index === 1) setBodyMusic(e.target.value);
+                  if (index === 2) setOutroMusic(e.target.value);
+                }}
+              >
+                <option value="">Select track</option>
+                {availableTracks.map((track) => (
+                  <option key={track.file} value={track.file}>{track.name}</option>
+                ))}
+              </select>
+
+              <button
+                className={`px-4 py-2 rounded-xl border flex items-center gap-2 text-sm font-semibold
+                  ${(index === 0 && !introMusic) ||
+                    (index === 1 && !bodyMusic) ||
+                    (index === 2 && !outroMusic)
+                    ? "opacity-40 cursor-not-allowed border-neutral-300 dark:border-neutral-700 text-neutral-400"
+                    : "border-purple-500 text-purple-600 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20"
+                  }`}
+                onClick={() => {
+                  const selected =
+                    index === 0 ? introMusic : index === 1 ? bodyMusic : outroMusic;
+                  if (selected) {
+                    setMusicPreview(`${API_BASE}/static/music/${selected}`);
+                  }
+                }}
+              >
+                <Play className="w-4 h-4" />
+                <span>Preview</span>
+              </button>
+            </div>
+          </div>
+        ))}
+
+        {musicPreview && (
+          <audio autoPlay src={musicPreview} onEnded={() => setMusicPreview(null)} />
+        )}
+      </div>
+    )}
+  </div>
 )}
 
       </div>
