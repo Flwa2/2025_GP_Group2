@@ -266,8 +266,10 @@ app.config.update(
 )
 Session(app)
 
-# Load .env variables configuring ffmpeg for pydub
-load_dotenv()
+# Load .env variables configuring ffmpeg for pydub (explicit path: repo root)
+_ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
+load_dotenv(dotenv_path=_ENV_PATH, override=False)
+print("DEBUG .env loaded?", os.path.exists(_ENV_PATH), "path=", _ENV_PATH)
 
 import boto3
 from botocore.client import Config
@@ -2548,16 +2550,22 @@ def _apply_email_change_to_records(doc, data, firebase_uid, old_email, new_email
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 # ElevenLabs client for multi speaker TTS
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-print("ELEVENLABS_API_KEY present?", bool(ELEVENLABS_API_KEY))
+ELEVENLABS_API_KEY = (os.getenv("ELEVENLABS_API_KEY") or "").strip()
+print("ELEVENLABS_API_KEY present?", bool(ELEVENLABS_API_KEY), "length=", len(ELEVENLABS_API_KEY))
 
-if not ELEVENLABS_API_KEY:
-    raise RuntimeError(
-        "ELEVENLABS_API_KEY is missing. Add it to .env next to app.py:\n"
-        "ELEVENLABS_API_KEY=xi_************************"
-    )
+def _elevenlabs_key_ready() -> bool:
+    return bool(ELEVENLABS_API_KEY)
 
-voice_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+def _elevenlabs_not_configured_response():
+    return jsonify(error="ElevenLabs API key is not configured."), 500
+
+def _elevenlabs_headers(extra=None):
+    headers = {"xi-api-key": ELEVENLABS_API_KEY}
+    if extra:
+        headers.update(extra)
+    return headers
+
+voice_client = ElevenLabs(api_key=ELEVENLABS_API_KEY) if _elevenlabs_key_ready() else None
 
 def _chat_completion_with_fallback(messages, temperature=0.7, models=None):
     """
@@ -3278,6 +3286,338 @@ def eleven_tts_with_timestamps(text: str, voice_id: str, model_id: str = "eleven
 def health():
     return jsonify(status="ok")
 
+
+def _json_safe_voice_labels(labels: dict) -> dict:
+    """Serialize ElevenLabs-style labels for API clients (JSON-friendly)."""
+    out: dict = {}
+    for k, raw in (labels or {}).items():
+        if raw is None or k is None:
+            continue
+        key = str(k)
+        if isinstance(raw, dict):
+            continue
+        if isinstance(raw, list):
+            out[key] = [str(x) for x in raw if x is not None]
+        else:
+            out[key] = str(raw)
+    return out
+
+
+def _coerce_voice_language_list(labels: dict, legacy_langs=None) -> list:
+    """Build a deduped language list from ElevenLabs labels.language / labels.languages and legacy fields."""
+    langs: list = []
+
+    def _add_many(val):
+        if val is None:
+            return
+        if isinstance(val, list):
+            for x in val:
+                if x is not None:
+                    langs.append(str(x).strip())
+        elif isinstance(val, str):
+            for part in val.replace(";", ",").replace("|", ",").split(","):
+                p = part.strip()
+                if p:
+                    langs.append(p)
+
+    _add_many(legacy_langs)
+
+    if isinstance(labels, dict):
+        _add_many(labels.get("languages"))
+        one = labels.get("language") or labels.get("Language")
+        _add_many(one)
+
+    seen: set = set()
+    out: list = []
+    for x in langs:
+        if not x:
+            continue
+        key = x.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(x)
+    return out
+
+
+def _normalize_elevenlabs_voice_item(v: dict) -> dict:
+    """Map a raw ElevenLabs API (or compatible) voice dict to /api/voices item shape."""
+    voice_id = str(v.get("voice_id") or v.get("voiceId") or v.get("id") or "").strip()
+    raw_labels = v.get("labels") or {}
+    if not isinstance(raw_labels, dict):
+        raw_labels = {}
+    gender = str(v.get("gender") or raw_labels.get("gender") or "").strip()
+    labels_out = _json_safe_voice_labels(raw_labels)
+    if gender:
+        labels_out["gender"] = gender
+
+    languages = _coerce_voice_language_list(raw_labels, v.get("languages"))
+
+    tone_raw = raw_labels.get("tone")
+    if tone_raw is None:
+        tone_raw = v.get("tone")
+    if isinstance(tone_raw, str):
+        tone = [tone_raw] if tone_raw.strip() else []
+    elif isinstance(tone_raw, list):
+        tone = [str(x) for x in tone_raw if x is not None]
+    else:
+        tone = []
+
+    pitch = str(raw_labels.get("pitch") or v.get("pitch") or "").strip()
+
+    return {
+        "docId": voice_id,
+        "id": voice_id,
+        "providerVoiceId": voice_id,
+        "provider": "ElevenLabs",
+        "name": str(v.get("name") or ""),
+        "gender": gender,
+        "description": str(v.get("description") or ""),
+        "pitch": pitch,
+        "languages": languages,
+        "tone": tone,
+        "labels": labels_out,
+        "category": str(v.get("category") or ""),
+        "preview_url": str(v.get("preview_url") or ""),
+    }
+
+
+def _normalize_shared_library_voice(v: dict) -> dict:
+    """Map ElevenLabs GET /v1/shared-voices voice to /api/voices item shape."""
+    voice_id = str(v.get("voice_id") or "").strip()
+    langs: list = []
+    if v.get("language"):
+        langs.append(str(v["language"]).strip())
+    for vl in v.get("verified_languages") or []:
+        if isinstance(vl, dict) and vl.get("language"):
+            s = str(vl["language"]).strip()
+            if s:
+                langs.append(s)
+    seen: set = set()
+    deduped: list = []
+    for x in langs:
+        if not x:
+            continue
+        k = x.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        deduped.append(x)
+
+    descriptive = str(v.get("descriptive") or "").strip()
+    tone = [descriptive] if descriptive else []
+
+    label_src = {
+        "gender": v.get("gender"),
+        "accent": v.get("accent"),
+        "age": v.get("age"),
+        "descriptive": descriptive or None,
+        "use_case": v.get("use_case"),
+        "language": v.get("language"),
+        "locale": v.get("locale"),
+    }
+    labels_out = _json_safe_voice_labels(label_src)
+
+    return {
+        "docId": voice_id,
+        "id": voice_id,
+        "providerVoiceId": voice_id,
+        "provider": "ElevenLabs",
+        "name": str(v.get("name") or ""),
+        "gender": str(v.get("gender") or ""),
+        "description": str(v.get("description") or ""),
+        "pitch": "",
+        "languages": deduped,
+        "tone": tone,
+        "labels": labels_out,
+        "category": str(v.get("category") or ""),
+        "preview_url": str(v.get("preview_url") or ""),
+        "locale": str(v.get("locale") or "") if v.get("locale") is not None else "",
+    }
+
+
+def _shared_voices_query_params_from_request():
+    """Build query param list for ElevenLabs GET /v1/shared-voices from Flask request."""
+    try:
+        page = int(request.args.get("page") or 0)
+    except Exception:
+        page = 0
+    try:
+        page_size = int(request.args.get("page_size") or 50)
+    except Exception:
+        page_size = 50
+    page = max(0, page)
+    page_size = max(1, min(page_size, 100))
+
+    params: list = [("page", page), ("page_size", page_size)]
+
+    def _add(name: str, val):
+        if val is None:
+            return
+        s = str(val).strip()
+        if s:
+            params.append((name, s))
+
+    _add("search", request.args.get("search"))
+    _add("gender", request.args.get("gender"))
+    _add("language", request.args.get("language"))
+    _add("locale", request.args.get("locale"))
+    _add("accent", request.args.get("accent"))
+    _add("age", request.args.get("age"))
+
+    cat = (request.args.get("category") or "").strip().lower()
+    if cat in ("professional", "famous", "high_quality"):
+        params.append(("category", cat))
+
+    for uc in request.args.getlist("use_cases"):
+        u = (uc or "").strip()
+        if u:
+            params.append(("use_cases", u))
+    for d in request.args.getlist("descriptives"):
+        u = (d or "").strip()
+        if u:
+            params.append(("descriptives", u))
+
+    return params, page, page_size
+
+
+def _fetch_elevenlabs_shared_voices_from_request():
+    """Fetch shared voice library page from ElevenLabs using backend key only."""
+    if not _elevenlabs_key_ready():
+        return None, None, None, _elevenlabs_not_configured_response()
+
+    qparams, page, page_size = _shared_voices_query_params_from_request()
+    try:
+        r = requests.get(
+            "https://api.elevenlabs.io/v1/shared-voices",
+            headers=_elevenlabs_headers(),
+            params=qparams,
+            timeout=45,
+        )
+        if r.status_code == 401:
+            return None, None, None, (
+                jsonify(
+                    count=0,
+                    items=[],
+                    has_more=False,
+                    total_count=0,
+                    page=page,
+                    page_size=page_size,
+                    error="ElevenLabs authentication failed (401). Check ELEVENLABS_API_KEY.",
+                ),
+                502,
+            )
+        if not r.ok:
+            return None, None, None, (
+                jsonify(
+                    count=0,
+                    items=[],
+                    has_more=False,
+                    total_count=0,
+                    page=page,
+                    page_size=page_size,
+                    error=f"ElevenLabs shared-voices error {r.status_code}: {r.text[:300]}",
+                ),
+                502,
+            )
+        data = r.json() or {}
+        print(
+            "[shared-voices] key_present=%s key_len=%s page=%s size=%s status=%s keys=%s"
+            % (bool(ELEVENLABS_API_KEY), len(ELEVENLABS_API_KEY), page, page_size, r.status_code, list(data.keys()))
+        )
+        voices = data.get("voices") or []
+        items = [_normalize_shared_library_voice(v) for v in voices if v.get("voice_id")]
+        has_more = bool(data.get("has_more"))
+        try:
+            total_count = int(data.get("total_count") or 0)
+        except Exception:
+            total_count = 0
+        payload = dict(
+            count=len(items),
+            items=items,
+            has_more=has_more,
+            total_count=total_count,
+            page=page,
+            page_size=page_size,
+        )
+        return payload, page, page_size, None
+    except Exception as e:
+        print("ElevenLabs shared-voices fetch ERROR:", e)
+        return None, None, None, (jsonify(error=str(e), count=0, items=[], has_more=False), 500)
+
+
+@app.get("/api/voices/elevenlabs")
+def api_voices_elevenlabs():
+    """Dedicated ElevenLabs shared-voice endpoint used by Create flow."""
+    payload, _, _, err = _fetch_elevenlabs_shared_voices_from_request()
+    if err:
+        return err
+    return jsonify(payload)
+
+
+@app.get("/api/voices/library-options")
+def api_voices_library_options():
+    """Sample shared voices (paginated) to build filter dropdown options — no API key in response."""
+    if not _elevenlabs_key_ready():
+        return _elevenlabs_not_configured_response()
+    headers = _elevenlabs_headers()
+    url = "https://api.elevenlabs.io/v1/shared-voices"
+    languages: dict = {}
+    locales: dict = {}
+    accents: dict = {}
+    ages: dict = {}
+    use_cases: dict = {}
+    categories: dict = {}
+
+    def _take_display(raw: str, bucket: dict):
+        s = str(raw or "").strip()
+        if not s:
+            return
+        low = s.lower()
+        if low not in bucket:
+            bucket[low] = s
+
+    try:
+        for pg in (0, 1):
+            r = requests.get(
+                url,
+                headers=headers,
+                params=[("page", pg), ("page_size", 100)],
+                timeout=45,
+            )
+            if not r.ok:
+                print("[library-options] shared-voices error", r.status_code, r.text[:200])
+                break
+            data = r.json() or {}
+            for v in data.get("voices") or []:
+                _take_display(v.get("language"), languages)
+                _take_display(v.get("locale"), locales)
+                _take_display(v.get("accent"), accents)
+                _take_display(v.get("age"), ages)
+                _take_display(v.get("use_case"), use_cases)
+                _take_display(v.get("category"), categories)
+                for vl in v.get("verified_languages") or []:
+                    if isinstance(vl, dict):
+                        _take_display(vl.get("language"), languages)
+                        _take_display(vl.get("locale"), locales)
+                        _take_display(vl.get("accent"), accents)
+    except Exception as e:
+        print("[library-options] ERROR:", e)
+        return jsonify(error=str(e)), 500
+
+    def _sorted_vals(d: dict):
+        return sorted(d.values(), key=lambda x: x.lower())
+
+    return jsonify(
+        languages=_sorted_vals(languages),
+        locales=_sorted_vals(locales),
+        accents=_sorted_vals(accents),
+        ages=_sorted_vals(ages),
+        use_cases=_sorted_vals(use_cases),
+        categories=_sorted_vals(categories),
+    )
+
+
 @app.get("/api/voices")
 def api_voices():
     provider_q = (request.args.get("provider") or "").strip().lower()
@@ -3289,6 +3629,8 @@ def api_voices():
     #allow larger lists but prevent overly heavy responses.
     limit = max(0, min(limit, 1000))
 
+    library_flag = str(request.args.get("library") or "").strip().lower() in ("1", "true", "yes")
+
     def _gender_matches(value: str):
         if not gender_q:
             return True
@@ -3297,33 +3639,19 @@ def api_voices():
             return False
         return v == gender_q
 
-    def _normalize_eleven_voice(v: dict):
-        voice_id = v.get("voice_id") or v.get("voiceId") or v.get("id") or ""
-        labels = v.get("labels") or {}
-        gender = v.get("gender") or labels.get("gender") or ""
-        return {
-            "docId": voice_id,
-            "id": voice_id,
-            "providerVoiceId": voice_id,
-            "provider": "ElevenLabs",
-            "name": v.get("name") or "",
-            "gender": gender,
-            "description": v.get("description") or "",
-            "pitch": labels.get("pitch") or "",
-            "languages": labels.get("languages") or [],
-            "tone": labels.get("tone") or [],
-            "labels": {"gender": gender},
-            "preview_url": v.get("preview_url") or "",
-        }
-
     # If caller explicitly requests ElevenLabs, fetch live list directly.
     if provider_q == "elevenlabs":
-        if not ELEVENLABS_API_KEY:
-            return jsonify(count=0, items=[], error="Missing ELEVENLABS_API_KEY"), 500
+        if not _elevenlabs_key_ready():
+            return jsonify(count=0, items=[], error="ElevenLabs API key is not configured."), 500
+        if library_flag:
+            payload, _, _, err = _fetch_elevenlabs_shared_voices_from_request()
+            if err:
+                return err
+            return jsonify(payload)
         try:
             r = requests.get(
                 "https://api.elevenlabs.io/v1/voices",
-                headers={"xi-api-key": ELEVENLABS_API_KEY},
+                headers=_elevenlabs_headers(),
                 timeout=30,
             )
             if not r.ok:
@@ -3333,7 +3661,7 @@ def api_voices():
                     error=f"ElevenLabs voices error {r.status_code}: {r.text[:300]}",
                 ), 502
             voices = (r.json() or {}).get("voices") or []
-            items = [_normalize_eleven_voice(v) for v in voices if (v.get("voice_id") or v.get("id"))]
+            items = [_normalize_elevenlabs_voice_item(v) for v in voices if (v.get("voice_id") or v.get("id"))]
             if gender_q:
                 items = [x for x in items if _gender_matches(x.get("gender"))]
             if limit > 0:
@@ -3358,6 +3686,9 @@ def api_voices():
             pitch = v.get("pitch") or v.get("Pitch") or ""
             languages = v.get("languages") or v.get("Languages") or []
             tone = v.get("tone") or v.get("Tone") or []
+            stored_labels = v.get("labels") or v.get("Labels") or {}
+            if not isinstance(stored_labels, dict):
+                stored_labels = {}
 
             provider_voice_id = (
                 v.get("providerVoiceId")
@@ -3368,19 +3699,43 @@ def api_voices():
                 or d.id
             )
 
+            labels_out = _json_safe_voice_labels(stored_labels)
+            if gender:
+                labels_out["gender"] = gender
+            if isinstance(languages, str) and languages.strip():
+                lang_legacy: list = [languages.strip()]
+            elif isinstance(languages, list):
+                lang_legacy = languages
+            else:
+                lang_legacy = []
+            lang_list = _coerce_voice_language_list(stored_labels, lang_legacy)
+            if not lang_list:
+                top_lang = v.get("language") or v.get("Language")
+                if isinstance(top_lang, str) and top_lang.strip():
+                    lang_list = _coerce_voice_language_list(stored_labels, [top_lang.strip()])
+                elif isinstance(top_lang, list):
+                    lang_list = _coerce_voice_language_list(stored_labels, top_lang)
+            if isinstance(tone, list):
+                tone_list = [str(x) for x in tone if x is not None]
+            elif isinstance(tone, str) and tone.strip():
+                tone_list = [tone.strip()]
+            else:
+                tone_list = []
+
             out = {
                 "docId": d.id,
-                "id": provider_voice_id,           
-                "providerVoiceId": provider_voice_id,    
+                "id": provider_voice_id,
+                "providerVoiceId": provider_voice_id,
                 "provider": provider,
                 "name": name,
                 "gender": gender,
                 "description": description,
                 "pitch": pitch,
-                "languages": languages if isinstance(languages, list) else [],
-                "tone": tone if isinstance(tone, list) else [],
-                "labels": {"gender": gender},  
-                "preview_url": v.get("preview_url") or "",     
+                "languages": lang_list,
+                "tone": tone_list,
+                "labels": labels_out,
+                "category": str(v.get("category") or v.get("Category") or ""),
+                "preview_url": v.get("preview_url") or "",
             }
             if _gender_matches(gender):
                 items.append(out)
@@ -3389,13 +3744,13 @@ def api_voices():
             return jsonify(count=len(items), items=items)
 
         # Fallback to ElevenLabs if Firestore has no voices
-        if not ELEVENLABS_API_KEY:
-            return jsonify(count=0, items=[], error="Missing ELEVENLABS_API_KEY"), 500
+        if not _elevenlabs_key_ready():
+            return jsonify(count=0, items=[], error="ElevenLabs API key is not configured."), 500
 
         try:
             r = requests.get(
                 "https://api.elevenlabs.io/v1/voices",
-                headers={"xi-api-key": ELEVENLABS_API_KEY},
+                headers=_elevenlabs_headers(),
                 timeout=30,
             )
             if not r.ok:
@@ -3408,22 +3763,8 @@ def api_voices():
             data = r.json() or {}
             voices = data.get("voices") or []
             for v in voices:
-                voice_id = v.get("voice_id") or v.get("voiceId") or v.get("id") or ""
-                labels = v.get("labels") or {}
-                gender = v.get("gender") or labels.get("gender") or ""
-                out = {
-                    "docId": voice_id,
-                    "id": voice_id,
-                    "providerVoiceId": voice_id,
-                    "provider": "ElevenLabs",
-                    "name": v.get("name") or "",
-                    "gender": gender,
-                    "description": v.get("description") or "",
-                    "pitch": labels.get("pitch") or "",
-                    "languages": labels.get("languages") or [],
-                    "tone": labels.get("tone") or [],
-                    "labels": {"gender": gender},
-                }
+                out = _normalize_elevenlabs_voice_item(v)
+                gender = out.get("gender") or ""
                 if _gender_matches(gender):
                     items.append(out)
 
@@ -3445,17 +3786,16 @@ def api_voice_preview():
     if len(text) > 120:
         text = text[:120].strip()
 
-    if not ELEVENLABS_API_KEY:
-        return jsonify(error="Missing ELEVENLABS_API_KEY"), 500
+    if not _elevenlabs_key_ready():
+        return _elevenlabs_not_configured_response()
 
     if not incoming:
         return jsonify(error="Missing voiceId"), 400
 
-    headers = {
-        "xi-api-key": ELEVENLABS_API_KEY,
+    headers = _elevenlabs_headers({
         "Accept": "audio/mpeg",
         "Content-Type": "application/json",
-    }
+    })
 
     def _synthesize_preview(candidate_voice_id: str):
         url = (
@@ -3480,7 +3820,7 @@ def api_voice_preview():
         try:
             vr = requests.get(
                 "https://api.elevenlabs.io/v1/voices",
-                headers={"xi-api-key": ELEVENLABS_API_KEY},
+                headers=_elevenlabs_headers(),
                 timeout=20,
             )
             if not vr.ok:

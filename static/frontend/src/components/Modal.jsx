@@ -1,6 +1,13 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useId } from "react";
+import { createPortal } from "react-dom";
 
-export default function Modal({ open, title, onClose, children, footer, isRTL }) {
+const getPortalTarget = () => {
+  if (typeof document === "undefined") return null;
+  return document.body && document.body.nodeType === 1 ? document.body : null;
+};
+
+export default function Modal({ open, title, onClose, children, footer, isRTL, dense = false }) {
+  const titleId = useId();
   useEffect(() => {
     if (!open) return;
     if (typeof document === "undefined" || !document.body) return;
@@ -21,38 +28,60 @@ export default function Modal({ open, title, onClose, children, footer, isRTL })
 
   if (!open) return null;
 
-  return (
+  const overlay = (
     <div
-      className="wecast-overlay flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      className="wecast-overlay grid place-items-center bg-black/70 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
-      onMouseDown={onClose}
+      aria-labelledby={titleId}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose?.();
+      }}
     >
       <div
-        className="w-full max-w-[560px] rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xl overflow-hidden"
-        onMouseDown={(e) => e.stopPropagation()}
+        className="flex w-[min(92vw,560px)] max-h-[min(90dvh,90vh)] min-w-0 flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-2xl dark:border-neutral-800 dark:bg-neutral-900 dark:shadow-black/30"
+        onClick={(e) => e.stopPropagation()}
         dir={isRTL ? "rtl" : "ltr"}
       >
-        <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-neutral-200/70 dark:border-neutral-800/70">
-          <h3 className="font-extrabold text-black dark:text-white">{title}</h3>
+        <div
+          className={`flex shrink-0 items-center justify-between border-b border-neutral-200/70 dark:border-neutral-800/70 ${
+            dense ? "gap-2 px-4 py-3" : "gap-3 px-5 py-4"
+          }`}
+        >
+          <h3 id={titleId} className="min-w-0 font-extrabold text-black dark:text-white">
+            {title}
+          </h3>
           <button
             type="button"
             onClick={onClose}
-            className="w-9 h-9 grid place-items-center rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-xl transition hover:bg-black/5 dark:hover:bg-white/5"
             aria-label="Close"
           >
             ✕
           </button>
         </div>
 
-        <div className="p-5">{children}</div>
+        <div
+          className={`min-h-0 flex-auto overflow-y-auto overflow-x-hidden overscroll-contain [scrollbar-width:thin] ${
+            dense ? "px-4 py-3 sm:py-3" : "px-5 py-4 sm:py-5"
+          }`}
+        >
+          {children}
+        </div>
 
         {footer ? (
-          <div className="px-5 py-4 border-t border-neutral-200/70 dark:border-neutral-800/70 flex items-center justify-end gap-3">
+          <div
+            className={`flex shrink-0 items-center justify-end border-t border-neutral-200/70 dark:border-neutral-800/70 ${
+              dense ? "gap-2 px-4 py-3" : "gap-3 px-5 py-4"
+            }`}
+          >
             {footer}
           </div>
         ) : null}
       </div>
     </div>
   );
+
+  const portalTarget = getPortalTarget();
+  return portalTarget ? createPortal(overlay, portalTarget) : overlay;
 }

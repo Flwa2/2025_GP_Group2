@@ -63,12 +63,16 @@ const getVoiceToneTags = (voice) => {
     const explicit = [
         ...splitList(voice?.tone),
         ...splitList(voice?.labels?.tone),
+        ...splitList(voice?.labels?.descriptive),
     ];
 
     const haystack = [
         String(voice?.name || ""),
         String(voice?.description || ""),
         String(voice?.labels?.description || ""),
+        String(voice?.labels?.descriptive || ""),
+        String(voice?.category || ""),
+        String(voice?.labels?.use_case || ""),
     ]
         .join(" ")
         .toLowerCase();
@@ -95,12 +99,223 @@ const getVoicePitchTag = (voice) => {
         String(voice?.name || ""),
         String(voice?.description || ""),
         String(voice?.labels?.description || ""),
+        String(voice?.labels?.descriptive || ""),
     ]
         .join(" ")
         .toLowerCase();
 
     const inferred = PITCH_RULES.find((rule) => rule.keys.some((k) => haystack.includes(k)));
     return inferred?.pitch || "";
+};
+
+const FACET_SPLIT = /[,;/|]/;
+
+const isNeutralGenderValue = (value) => {
+    const g = String(value || "").trim().toLowerCase();
+    return g.includes("neutral") || g.includes("netural");
+};
+
+/** Normalize gender for filter matching (ElevenLabs uses male/female). */
+const normalizeGenderToken = (value) => {
+    const s = String(value || "").trim().toLowerCase();
+    if (!s || s === "__all__" || isNeutralGenderValue(s)) return "";
+    if (s === "m" || s === "male" || s === "man" || s === "masculine") return "male";
+    if (s === "f" || s === "female" || s === "woman" || s === "feminine") return "female";
+    return s;
+};
+
+const pushFacetTokens = (raw, bucket) => {
+    if (raw == null) return;
+    if (Array.isArray(raw)) {
+        raw.forEach((x) => pushFacetTokens(x, bucket));
+        return;
+    }
+    if (typeof raw === "string") {
+        raw
+            .split(FACET_SPLIT)
+            .map((x) => x.trim())
+            .filter(Boolean)
+            .forEach((x) => bucket.push(x));
+        return;
+    }
+    const s = String(raw).trim();
+    if (s) bucket.push(s);
+};
+
+/** Display strings per voice for language dropdown (preserves casing from API). */
+const collectLanguageDisplaysFromVoice = (v) => {
+    const acc = [];
+    pushFacetTokens(v?.languages, acc);
+    if (v?.labels && typeof v.labels === "object") {
+        pushFacetTokens(v.labels.languages, acc);
+        pushFacetTokens(v.labels.language, acc);
+        pushFacetTokens(v.labels.Language, acc);
+    }
+    return acc;
+};
+
+/** Lowercased language tokens for matching (BCP-47 friendly). */
+const languageMatchTokensForVoice = (v) => {
+    const seen = new Set();
+    const out = [];
+    for (const d of collectLanguageDisplaysFromVoice(v)) {
+        const low = String(d).trim().toLowerCase();
+        if (!low || seen.has(low)) continue;
+        seen.add(low);
+        out.push(low);
+    }
+    return out;
+};
+
+const languageFilterMatches = (selectedLower, voiceLangTokens) => {
+    if (!selectedLower) return true;
+    if (!voiceLangTokens.length) return true;
+    return voiceLangTokens.some(
+        (t) =>
+            t === selectedLower ||
+            t.startsWith(`${selectedLower}-`) ||
+            selectedLower.startsWith(`${t}-`)
+    );
+};
+
+const facetTokensLower = (v, ...keys) => {
+    const bucket = [];
+    for (const key of keys) {
+        if (v?.labels && typeof v.labels === "object") pushFacetTokens(v.labels[key], bucket);
+    }
+    return Array.from(new Set(bucket.map((x) => String(x).trim().toLowerCase()).filter(Boolean)));
+};
+
+const useCaseTokensForVoice = (v) => {
+    const bucket = [];
+    pushFacetTokens(v?.category, bucket);
+    if (v?.labels && typeof v.labels === "object") {
+        pushFacetTokens(v.labels.use_case, bucket);
+        pushFacetTokens(v.labels.usecase, bucket);
+    }
+    return Array.from(new Set(bucket.map((x) => String(x).trim().toLowerCase()).filter(Boolean)));
+};
+
+const collectUseCaseDisplaysFromVoice = (v) => {
+    const acc = [];
+    pushFacetTokens(v?.category, acc);
+    if (v?.labels && typeof v.labels === "object") {
+        pushFacetTokens(v.labels.use_case, acc);
+        pushFacetTokens(v.labels.usecase, acc);
+    }
+    return acc;
+};
+
+const voiceSearchHaystack = (v) => {
+    const parts = [v?.name, v?.description, v?.category];
+    if (v?.labels && typeof v.labels === "object") {
+        for (const val of Object.values(v.labels)) {
+            if (typeof val === "string") parts.push(val);
+            else if (Array.isArray(val)) val.forEach((x) => parts.push(String(x)));
+        }
+    }
+    return parts
+        .map((s) => String(s || "").toLowerCase())
+        .join(" ");
+};
+
+const uniqueSortedDisplay = (displays) =>
+    Array.from(new Set(displays.map((x) => String(x).trim()).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b, undefined, { sensitivity: "base" })
+    );
+
+const mergeDisplayOptionsFromVoices = (voicesList, extract) => {
+    const byLower = new Map();
+    for (const v of voicesList) {
+        for (const disp of extract(v)) {
+            const d = String(disp).trim();
+            if (!d) continue;
+            const low = d.toLowerCase();
+            if (!byLower.has(low)) byLower.set(low, d);
+        }
+    }
+    return Array.from(byLower.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+};
+
+const VOICE_LIBRARY_PAGE_SIZE = 50;
+/** ElevenLabs shared-voices API only accepts these category filters; other values are applied client-side. */
+const SHARED_LIBRARY_CATEGORY_API = new Set(["professional", "famous", "high_quality"]);
+
+const emptyAppliedVoiceFilters = () => ({
+    search: "",
+    gender: "",
+    language: "",
+    accent: "",
+    age: "",
+    category: "",
+    tone: "",
+    pitch: "",
+});
+
+const filtersModalToApplied = (f) => ({
+    search: String(f.q || "").trim(),
+    gender: f.gender === "__all__" ? "" : normalizeGenderToken(f.gender || ""),
+    language: String(f.language || "").trim(),
+    accent: String(f.accent || "").trim(),
+    age: String(f.age || "").trim(),
+    category: String(f.category || "").trim(),
+    tone: String(f.tone || "").trim(),
+    pitch: String(f.pitch || "").trim(),
+});
+
+const appliedFiltersToModalPatch = (a) => ({
+    q: a.search || "",
+    gender: a.gender || "__all__",
+    language: a.language || "",
+    category: a.category || "",
+    tone: a.tone || "",
+    pitch: a.pitch || "",
+    accent: a.accent || "",
+    age: a.age || "",
+});
+
+const buildLibraryUrlSearchParams = (applied, page, pageSize = VOICE_LIBRARY_PAGE_SIZE) => {
+    const p = new URLSearchParams();
+    p.set("provider", "ElevenLabs");
+    p.set("library", "true");
+    p.set("page", String(page));
+    p.set("page_size", String(Math.min(100, Math.max(1, pageSize))));
+    if (applied.search) p.set("search", applied.search);
+    if (applied.gender) p.set("gender", applied.gender);
+    if (applied.language) p.set("language", applied.language);
+    if (applied.accent) p.set("accent", applied.accent);
+    if (applied.age) p.set("age", applied.age);
+    if (applied.category && SHARED_LIBRARY_CATEGORY_API.has(applied.category.toLowerCase())) {
+        p.set("category", applied.category.toLowerCase());
+    }
+    if (applied.tone) p.append("descriptives", applied.tone);
+    return p;
+};
+
+const clientRefineVoicesByTonePitch = (items, tone, pitch) => {
+    const t = String(tone || "").trim().toLowerCase();
+    const p = String(pitch || "").trim().toLowerCase();
+    if (!t && !p) return items;
+    return items.filter((v) => {
+        if (p) {
+            const vp = getVoicePitchTag(v);
+            if (vp !== p) return false;
+        }
+        if (t) {
+            const tags = getVoiceToneTags(v).map((x) => String(x).toLowerCase());
+            if (!tags.includes(t)) return false;
+        }
+        return true;
+    });
+};
+
+const clientRefineLibraryVoices = (items, applied) => {
+    let out = clientRefineVoicesByTonePitch(items, applied.tone, applied.pitch);
+    const c = String(applied.category || "").trim().toLowerCase();
+    if (c && !SHARED_LIBRARY_CATEGORY_API.has(c)) {
+        out = out.filter((v) => String(v.category || "").toLowerCase() === c);
+    }
+    return out;
 };
 
 const STYLE_LIMITS = {
@@ -244,177 +459,339 @@ export default function CreatePro() {
     const [speakersCount, setSpeakersCount] = useState(0);
     const [speakers, setSpeakers] = useState([]);
 
-// ElevenLabs voices (load once)
-const [voices, setVoices] = useState([]);
-const [loadingVoices, setLoadingVoices] = useState(true);
+// ElevenLabs shared Voice Library — seed for default picks; per-speaker lists from API
+const [librarySeedVoices, setLibrarySeedVoices] = useState([]);
+const [loadingLibrarySeed, setLoadingLibrarySeed] = useState(true);
+const [libraryFilterOptions, setLibraryFilterOptions] = useState({
+    languages: [],
+    locales: [],
+    accents: [],
+    ages: [],
+    use_cases: [],
+    categories: [],
+});
 
-// filters per speaker
+const [speakerVoiceLibrary, setSpeakerVoiceLibrary] = useState({});
+const [speakerVoiceAppliedFilters, setSpeakerVoiceAppliedFilters] = useState({});
+const [modalLibraryPreview, setModalLibraryPreview] = useState({});
+const [voiceLibraryWarning, setVoiceLibraryWarning] = useState("");
+const [elevenLabsAuthFailed, setElevenLabsAuthFailed] = useState(false);
+
+// filters per speaker (modal draft)
 const [speakerVoiceFilters, setSpeakerVoiceFilters] = useState({});
-// { [index]: { open:false, q:"", gender:"", language:"", tone:"", pitch:"" } }
-const [speakerVoiceVisibleCounts, setSpeakerVoiceVisibleCounts] = useState({});
-const VOICE_PAGE_SIZE = 100;
+// { [index]: { open, q, gender, language, category, tone, pitch, accent, age } }
+
+const speakerLibInitRef = useRef(new Set());
+const speakerVoiceLibraryRef = useRef({});
+const speakerVoiceAppliedFiltersRef = useRef({});
 
 const getVoiceId = (v) => v?.providerVoiceId || v?.id || v?.docId || "";
 
-// Load ALL voices once
-useEffect(() => {
-  async function loadVoices() {
-    try {
-      setLoadingVoices(true);
-
-      const params = new URLSearchParams();
-      params.set("provider", "ElevenLabs");
-      params.set("limit", "500");
-
-      const url = `${API_BASE}/api/voices?${params.toString()}`;
-      const res = await fetch(url, { credentials: "include" });
-
-      console.log("GET /api/voices status:", res.status);
-
-      const data = await res.json();
-      console.log("GET /api/voices response:", data);
-
-      if (!res.ok) {
-        throw new Error(data?.error || `Failed to load voices (${res.status})`);
-      }
-
-      const raw =
-        Array.isArray(data?.items) ? data.items :
-        Array.isArray(data?.voices) ? data.voices :
-        Array.isArray(data?.data?.items) ? data.data.items :
-        Array.isArray(data?.data?.voices) ? data.data.voices :
-        Array.isArray(data) ? data :
-        [];
-
-      setVoices(raw);
-    } catch (e) {
-      console.error("Failed to load voices", e);
-      setVoices([]);
-    } finally {
-      setLoadingVoices(false);
-    }
-  }
-
-  loadVoices();
+const fetchFallbackVoices = useCallback(async () => {
+    const params = new URLSearchParams();
+    params.set("limit", "300");
+    const res = await fetch(`${API_BASE}/api/voices?${params.toString()}`, { credentials: "include" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `Fallback voices failed (${res.status})`);
+    return Array.isArray(data?.items) ? data.items : [];
 }, []);
 
-// Ensure each speaker has filters (NOW speakers is defined)
+const fetchLibraryItemsPage = useCallback(async (applied, page, pageSize = VOICE_LIBRARY_PAGE_SIZE) => {
+    if (elevenLabsAuthFailed) {
+        throw new Error("ElevenLabs API key is invalid or unauthorized.");
+    }
+    const params = buildLibraryUrlSearchParams(applied, page, pageSize);
+    const url = `${API_BASE}/api/voices/elevenlabs?${params.toString()}`;
+    const res = await fetch(url, { credentials: "include" });
+    const data = await res.json().catch(() => ({}));
+    console.log("[library-voices] page", page, "response keys:", data && typeof data === "object" ? Object.keys(data) : data);
+    if (!res.ok) {
+        const msg = data?.error || `Failed to load voices (${res.status})`;
+        if (String(msg).includes("401") || res.status === 401) {
+            setElevenLabsAuthFailed(true);
+        }
+        throw new Error(msg);
+    }
+    const raw = Array.isArray(data.items) ? data.items : [];
+    return {
+        items: raw,
+        hasMore: !!data.has_more,
+        totalCount: typeof data.total_count === "number" ? data.total_count : raw.length,
+    };
+}, [elevenLabsAuthFailed]);
+
+const applyVoiceLibraryForSpeaker = useCallback(
+    async (speakerIndex, applied) => {
+        setSpeakerVoiceAppliedFilters((prev) => ({ ...prev, [speakerIndex]: { ...applied } }));
+        setSpeakerVoiceLibrary((prev) => ({
+            ...prev,
+            [speakerIndex]: {
+                rawItems: [],
+                hasMore: false,
+                totalCount: 0,
+                loading: true,
+                nextPage: null,
+                error: null,
+            },
+        }));
+        try {
+            const r = await fetchLibraryItemsPage(applied, 0);
+            setSpeakerVoiceLibrary((prev) => ({
+                ...prev,
+                [speakerIndex]: {
+                    rawItems: r.items,
+                    hasMore: r.hasMore,
+                    totalCount: r.totalCount,
+                    loading: false,
+                    nextPage: r.hasMore ? 1 : null,
+                    error: null,
+                },
+            }));
+        } catch (e) {
+            console.error(e);
+            let fallbackItems = [];
+            try {
+                fallbackItems = await fetchFallbackVoices();
+            } catch (fallbackErr) {
+                console.error("fallback voices", fallbackErr);
+            }
+            if (String(e?.message || e).toLowerCase().includes("401") || String(e?.message || e).toLowerCase().includes("unauthorized")) {
+                setElevenLabsAuthFailed(true);
+            }
+            setVoiceLibraryWarning("Unable to load ElevenLabs voices. Showing default voices.");
+            setSpeakerVoiceLibrary((prev) => ({
+                ...prev,
+                [speakerIndex]: {
+                    rawItems: fallbackItems,
+                    hasMore: false,
+                    totalCount: fallbackItems.length,
+                    loading: false,
+                    nextPage: null,
+                    error: fallbackItems.length ? null : (e.message || String(e)),
+                },
+            }));
+        }
+    },
+    [fetchFallbackVoices, fetchLibraryItemsPage]
+);
+
+const appendVoiceLibraryPageForSpeaker = useCallback(
+    async (speakerIndex) => {
+        const st = speakerVoiceLibraryRef.current[speakerIndex];
+        const applied = speakerVoiceAppliedFiltersRef.current[speakerIndex] || emptyAppliedVoiceFilters();
+        if (!st?.hasMore || st.nextPage == null || st.loading) return;
+        const page = st.nextPage;
+        setSpeakerVoiceLibrary((prev) => ({
+            ...prev,
+            [speakerIndex]: { ...(prev[speakerIndex] || {}), loading: true, error: null },
+        }));
+        try {
+            const r = await fetchLibraryItemsPage(applied, page);
+            setSpeakerVoiceLibrary((prev) => {
+                const cur = prev[speakerIndex] || {};
+                return {
+                    ...prev,
+                    [speakerIndex]: {
+                        rawItems: [...(cur.rawItems || []), ...r.items],
+                        hasMore: r.hasMore,
+                        totalCount: r.totalCount,
+                        loading: false,
+                        nextPage: r.hasMore ? page + 1 : null,
+                        error: null,
+                    },
+                };
+            });
+        } catch (e) {
+            console.error(e);
+            setSpeakerVoiceLibrary((prev) => ({
+                ...prev,
+                [speakerIndex]: {
+                    ...(prev[speakerIndex] || {}),
+                    loading: false,
+                    error: e.message || String(e),
+                },
+            }));
+        }
+    },
+    [fetchLibraryItemsPage]
+);
+
 useEffect(() => {
-  setSpeakerVoiceFilters((prev) => {
-    const next = { ...prev };
-
-    speakers.forEach((_, i) => {
-      if (!next[i]) next[i] = { open: false, q: "", gender: "", language: "", tone: "", pitch: "" };
-    });
-
-    Object.keys(next).forEach((k) => {
-      const idx = Number(k);
-      if (idx >= speakers.length) delete next[k];
-    });
-
-    return next;
-  });
-}, [speakers]);
+    speakerVoiceLibraryRef.current = speakerVoiceLibrary;
+}, [speakerVoiceLibrary]);
 
 useEffect(() => {
-  setSpeakerVoiceVisibleCounts((prev) => {
-    const next = { ...prev };
-    speakers.forEach((_, i) => {
-      if (!next[i]) next[i] = VOICE_PAGE_SIZE;
-    });
-    Object.keys(next).forEach((k) => {
-      const idx = Number(k);
-      if (idx >= speakers.length) delete next[k];
-    });
-    return next;
-  });
+    speakerVoiceAppliedFiltersRef.current = speakerVoiceAppliedFilters;
+}, [speakerVoiceAppliedFilters]);
+
+useEffect(() => {
+    let cancelled = false;
+    (async () => {
+        try {
+            const params = buildLibraryUrlSearchParams(emptyAppliedVoiceFilters(), 0, 100);
+            const res = await fetch(`${API_BASE}/api/voices/elevenlabs?${params.toString()}`, { credentials: "include" });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data?.error || `Seed voices ${res.status}`);
+            if (!cancelled) setLibrarySeedVoices(Array.isArray(data.items) ? data.items : []);
+        } catch (e) {
+            console.error("library seed", e);
+            try {
+                const fallback = await fetchFallbackVoices();
+                if (!cancelled) {
+                    setLibrarySeedVoices(fallback);
+                    setVoiceLibraryWarning("Unable to load ElevenLabs voices. Showing default voices.");
+                }
+            } catch {
+                if (!cancelled) setLibrarySeedVoices([]);
+            }
+        } finally {
+            if (!cancelled) setLoadingLibrarySeed(false);
+        }
+    })();
+    return () => {
+        cancelled = true;
+    };
+}, [fetchFallbackVoices]);
+
+useEffect(() => {
+    (async () => {
+        try {
+            const res = await fetch(`${API_BASE}/api/voices/library-options`, { credentials: "include" });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return;
+            setLibraryFilterOptions({
+                languages: Array.isArray(data.languages) ? data.languages : [],
+                locales: Array.isArray(data.locales) ? data.locales : [],
+                accents: Array.isArray(data.accents) ? data.accents : [],
+                ages: Array.isArray(data.ages) ? data.ages : [],
+                use_cases: Array.isArray(data.use_cases) ? data.use_cases : [],
+                categories: Array.isArray(data.categories) ? data.categories : [],
+            });
+        } catch (e) {
+            console.error("library-options", e);
+        }
+    })();
+}, []);
+
+useEffect(() => {
+    const n = speakers.length;
+    for (const k of [...speakerLibInitRef.current]) {
+        if (k >= n) speakerLibInitRef.current.delete(k);
+    }
 }, [speakers.length]);
 
-// Group voices by gender (supports backend labels too)
-const voiceGroups = useMemo(() => {
-  const groups = { male: [], female: [], other: [] };
+useEffect(() => {
+    speakers.forEach((_, i) => {
+        if (speakerLibInitRef.current.has(i)) return;
+        speakerLibInitRef.current.add(i);
+        applyVoiceLibraryForSpeaker(i, emptyAppliedVoiceFilters());
+    });
+}, [speakers.length, applyVoiceLibraryForSpeaker]);
 
-  voices.forEach((v) => {
-    const g = String(v.gender || v.labels?.gender || v.labels?.Gender || "").toLowerCase();
-    if (g === "male") groups.male.push(v);
-    else if (g === "female") groups.female.push(v);
-    else groups.other.push(v);
-  });
-
-  return groups;
-}, [voices]);
-
-// default voice assignment (returns providerVoiceId)
-const defaultVoiceForGender = useCallback((gender = "Male", usedIds = new Set()) => {
-  const isFemale = String(gender || "").toLowerCase() === "female";
-  const key = isFemale ? "female" : "male";
-
-  const pool = voiceGroups[key].length ? voiceGroups[key] : voices;
-  if (!pool.length) return "";
-
-  const unusedInPool = pool.find((v) => {
-    const id = getVoiceId(v);
-    return id && !usedIds.has(id);
-  });
-  if (unusedInPool) return getVoiceId(unusedInPool);
-
-  const unusedAny = voices.find((v) => {
-    const id = getVoiceId(v);
-    return id && !usedIds.has(id);
-  });
-  if (unusedAny) return getVoiceId(unusedAny);
-
-  return getVoiceId(pool[0]) || getVoiceId(voices[0]) || "";
-}, [voiceGroups, voices]);
-
-// Filter voices for a specific speaker (frontend)
-const getFilteredVoicesForSpeaker = (speakerIndex) => {
-  const f = speakerVoiceFilters[speakerIndex] || { q: "", gender: "", language: "", tone: "", pitch: "" };
-  const isNeutralGender = (value) => {
-    const g = String(value || "").trim().toLowerCase();
-    return g.includes("neutral") || g.includes("netural");
-  };
-  const speakerGenderRaw = String(speakers?.[speakerIndex]?.gender || "").trim().toLowerCase();
-  const speakerGender = isNeutralGender(speakerGenderRaw) ? "" : speakerGenderRaw;
-  const selectedGender = String(f.gender || "").trim().toLowerCase();
-  const effectiveGender = (selectedGender === "__all__" || isNeutralGender(selectedGender))
-    ? ""
-    : String(selectedGender || speakerGender || "").trim().toLowerCase();
-  const toListLower = (value) => {
-    if (Array.isArray(value)) return value.map((x) => String(x).trim().toLowerCase()).filter(Boolean);
-    if (typeof value === "string") {
-      return value
-        .split(",")
-        .map((x) => x.trim().toLowerCase())
-        .filter(Boolean);
+const openFilterSpeakerIdx = useMemo(() => {
+    for (let i = 0; i < speakers.length; i++) {
+        if (speakerVoiceFilters[i]?.open) return i;
     }
-    return [];
-  };
-  const matchFacet = (selected, candidates) => {
-    const s = String(selected || "").trim().toLowerCase();
-    if (!s) return true;
-    return candidates.some((c) => c === s);
-  };
+    return -1;
+}, [speakers.length, speakerVoiceFilters]);
 
-  return voices.filter((v) => {
-    const name = String(v.name || "").toLowerCase();
-    const desc = String(v.description || "").toLowerCase();
-    const q = String(f.q || "").trim().toLowerCase();
+const openFilterDraftKey = useMemo(() => {
+    if (openFilterSpeakerIdx < 0) return "";
+    return JSON.stringify(filtersModalToApplied(speakerVoiceFilters[openFilterSpeakerIdx] || {}));
+}, [openFilterSpeakerIdx, speakerVoiceFilters]);
 
-    const vGender = String(v.gender || v.labels?.gender || "").toLowerCase();
-    const vPitch = getVoicePitchTag(v);
-    const vTones = getVoiceToneTags(v);
-    const vLangs = [...toListLower(v.languages), ...toListLower(v.labels?.languages)];
+useEffect(() => {
+    if (openFilterSpeakerIdx < 0) return;
+    const i = openFilterSpeakerIdx;
+    const t = setTimeout(async () => {
+        const f = speakerVoiceFilters[i];
+        if (!f?.open) return;
+        const applied = filtersModalToApplied(f);
+        setModalLibraryPreview((p) => ({ ...p, [i]: { ...(p[i] || {}), loading: true } }));
+        try {
+            const r = await fetchLibraryItemsPage(applied, 0);
+            const refined = clientRefineLibraryVoices(r.items, applied);
+            setModalLibraryPreview((p) => ({
+                ...p,
+                [i]: { totalCount: r.totalCount, refinedCount: refined.length, loading: false },
+            }));
+        } catch {
+            setModalLibraryPreview((p) => ({
+                ...p,
+                [i]: { totalCount: null, refinedCount: null, loading: false },
+            }));
+        }
+    }, 400);
+    return () => clearTimeout(t);
+}, [openFilterDraftKey, openFilterSpeakerIdx, fetchLibraryItemsPage]);
 
-    if (q && !(name.includes(q) || desc.includes(q))) return false;
-    if (effectiveGender && vGender !== effectiveGender) return false;
-    if (f.pitch && vPitch !== String(f.pitch).toLowerCase()) return false;
-    if (!matchFacet(f.tone, vTones)) return false;
-    if (!matchFacet(f.language, vLangs)) return false;
+// Ensure each speaker has filter modal state
+useEffect(() => {
+    setSpeakerVoiceFilters((prev) => {
+        const next = { ...prev };
 
-    return true;
-  });
-};
+        speakers.forEach((_, i) => {
+            if (!next[i])
+                next[i] = {
+                    open: false,
+                    q: "",
+                    gender: "__all__",
+                    language: "",
+                    category: "",
+                    tone: "",
+                    pitch: "",
+                    accent: "",
+                    age: "",
+                };
+        });
+
+        Object.keys(next).forEach((k) => {
+            const idx = Number(k);
+            if (idx >= speakers.length) delete next[k];
+        });
+
+        return next;
+    });
+}, [speakers]);
+
+// Group seed voices by gender (default voice assignment)
+const voiceGroups = useMemo(() => {
+    const groups = { male: [], female: [], other: [] };
+
+    librarySeedVoices.forEach((v) => {
+        const g = normalizeGenderToken(v.gender || v.labels?.gender || v.labels?.Gender);
+        if (g === "male") groups.male.push(v);
+        else if (g === "female") groups.female.push(v);
+        else groups.other.push(v);
+    });
+
+    return groups;
+}, [librarySeedVoices]);
+
+const defaultVoiceForGender = useCallback(
+    (gender = "Male", usedIds = new Set()) => {
+        const isFemale = String(gender || "").toLowerCase() === "female";
+        const key = isFemale ? "female" : "male";
+
+        const pool = voiceGroups[key].length ? voiceGroups[key] : librarySeedVoices;
+        if (!pool.length) return "";
+
+        const unusedInPool = pool.find((v) => {
+            const id = getVoiceId(v);
+            return id && !usedIds.has(id);
+        });
+        if (unusedInPool) return getVoiceId(unusedInPool);
+
+        const unusedAny = librarySeedVoices.find((v) => {
+            const id = getVoiceId(v);
+            return id && !usedIds.has(id);
+        });
+        if (unusedAny) return getVoiceId(unusedAny);
+
+        return getVoiceId(pool[0]) || getVoiceId(librarySeedVoices[0]) || "";
+    },
+    [voiceGroups, librarySeedVoices]
+);
 
     const [description, setDescription] = useState("");
     const [errors, setErrors] = useState({});
@@ -437,9 +814,11 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
     const [showSampleReplaceModal, setShowSampleReplaceModal] = useState(false);
     const [pendingSampleLang, setPendingSampleLang] = useState("en");
 
-    const previewVoice = async (voiceId, voiceName = "") => {
+    const previewVoice = async (voiceId, voiceObj = null) => {
         if (!voiceId) {
-            alert(t("create.speakers.selectVoice"));
+            if (!voiceLibraryWarning) {
+                setToast({ type: "error", message: t("create.speakers.selectVoice") });
+            }
             return;
         }
 
@@ -447,6 +826,22 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
             setPreviewLoadingVoiceId(voiceId);
             if (voicePreviewRef.current) {
                 voicePreviewRef.current.pause();
+            }
+
+            const directUrl = String(voiceObj?.preview_url || voiceObj?.previewUrl || "").trim();
+            if (directUrl) {
+                const audio = new Audio(directUrl);
+                voicePreviewRef.current = audio;
+                await audio.play();
+                return;
+            }
+
+            if (elevenLabsAuthFailed) {
+                setToast({
+                    type: "error",
+                    message: "Preview unavailable until ElevenLabs API key is valid.",
+                });
+                return;
             }
 
             const cachedUrl = voicePreviewCacheRef.current.get(voiceId);
@@ -467,14 +862,15 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
                 },
                 body: JSON.stringify({
                     voiceId,
-                    voiceName,
                     text: "This is a WeCast preview.",
                 }),
             });
 
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                alert(err?.error || "Preview failed");
+                if (!voiceLibraryWarning) {
+                    setToast({ type: "error", message: err?.error || "Preview failed" });
+                }
                 return;
             }
 
@@ -486,7 +882,9 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
             await audio.play();
         } catch (e) {
             console.error(e);
-            alert("Preview failed");
+            if (!voiceLibraryWarning) {
+                setToast({ type: "error", message: "Preview failed" });
+            }
         } finally {
             setPreviewLoadingVoiceId("");
         }
@@ -968,7 +1366,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
 
 
     useEffect(() => {
-        if (loadingVoices || !voices.length || !speakers.length) return;
+        if (loadingLibrarySeed || !librarySeedVoices.length || !speakers.length) return;
 
         setSpeakers((prev) => {
             const usedIds = new Set(
@@ -986,7 +1384,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
 
             return next;
         });
-    }, [loadingVoices, voices.length, speakers.length, defaultVoiceForGender]);
+    }, [loadingLibrarySeed, librarySeedVoices.length, speakers.length, defaultVoiceForGender]);
 
 
     useEffect(() => {
@@ -1043,7 +1441,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
             }
             return next;
         });
-    }, [speakersCount, scriptStyle, voices.length]);
+    }, [speakersCount, scriptStyle, librarySeedVoices.length]);
 
     /* ---------- helpers ---------- */
     const allowedCounts = useMemo(() => STYLE_LIMITS[scriptStyle] || [], [scriptStyle]);
@@ -1785,20 +2183,24 @@ const exportScript = async (format = "pdf") => {
                                                                                 .filter(Boolean)
                                                                         );
 
-                                                                        const voiceId = defaultVoiceForGender(gender, usedIds);
+                                                                        const appliedPrev = speakerVoiceAppliedFiltersRef.current[i] || emptyAppliedVoiceFilters();
+                                                                        const appliedNext = {
+                                                                            ...appliedPrev,
+                                                                            gender: normalizeGenderToken(gender),
+                                                                        };
 
+                                                                        // Clear selection until list refreshes; preserve if still valid later.
                                                                         next[i] = {
                                                                             ...next[i],
                                                                             gender,
-                                                                            voiceId, // assign a fresh unique voice for this gender
+                                                                            voiceId: "", // will be re-selected only if still in filtered list
                                                                         };
+
+                                                                        // Apply gender to the same voice source used by Select Voice dropdown
+                                                                        applyVoiceLibraryForSpeaker(i, appliedNext);
 
                                                                         return next;
                                                                     });
-                                                                    setSpeakerVoiceVisibleCounts((prev) => ({
-                                                                        ...prev,
-                                                                        [i]: VOICE_PAGE_SIZE,
-                                                                    }));
                                                                 }}
                                                                 dir={isRTL ? "rtl" : "ltr"}
                                                                 className={`form-input select-input [color-scheme:light] dark:[color-scheme:dark] text-start ${isHostLocked ? "opacity-70 cursor-not-allowed" : ""}`}
@@ -1817,126 +2219,185 @@ const exportScript = async (format = "pdf") => {
                                                     {/* Voice picker */}
                                                     <div>
                                                         <label className="form-label">{t("create.speakers.voice")}</label>
-                                                        {loadingVoices ? (
-                                                            <p className="text-sm text-black/60 dark:text-white/60">
-                                                                {t("create.speakers.loadingVoices")}
-                                                            </p>
-                                                        ) : voices.length === 0 ? (
-                                                            <p className="text-sm text-rose-500">
-                                                                {t("create.speakers.noVoices")}
-                                                            </p>
-                                                        ) : (() => {
-                                                            const pool = getFilteredVoicesForSpeaker(i);
+                                                        {voiceLibraryWarning ? (
+                                                            <p className="mb-2 text-xs text-amber-600 dark:text-amber-300">{voiceLibraryWarning}</p>
+                                                        ) : null}
+                                                        {(() => {
+                                                            const applied = speakerVoiceAppliedFilters[i] || emptyAppliedVoiceFilters();
+                                                            const libr = speakerVoiceLibrary[i] || {
+                                                                rawItems: [],
+                                                                loading: true,
+                                                                hasMore: false,
+                                                                totalCount: 0,
+                                                                nextPage: null,
+                                                                error: null,
+                                                            };
+                                                            const rawPool = libr.rawItems || [];
+                                                            const pool = clientRefineLibraryVoices(rawPool, applied);
                                                             const poolIds = new Set(pool.map(getVoiceId));
                                                             const currentId = sp.voiceId || "";
                                                             const safeValue = poolIds.has(currentId) ? currentId : "";
-                                                            const visibleCount = speakerVoiceVisibleCounts[i] || VOICE_PAGE_SIZE;
-                                                            const visiblePool = pool.slice(0, visibleCount);
-                                                            const hasMoreVoices = pool.length > visibleCount;
+                                                            const listLoading = libr.loading && rawPool.length === 0;
+                                                            const loadFailed = Boolean(!listLoading && libr.error);
+                                                            const listEmpty = !listLoading && !loadFailed && pool.length === 0;
+                                                            const hasMoreVoices = Boolean(libr.hasMore && !libr.loading);
                                                             return (
                                                                 <div className="w-full">
+                                                                    {listLoading ? (
+                                                                        <p className="text-sm text-black/60 dark:text-white/60 mb-2">
+                                                                            {t("create.speakers.loadingVoices")}
+                                                                        </p>
+                                                                    ) : null}
+                                                                    {loadFailed ? (
+                                                                        <p className="text-sm text-rose-500 mb-2">{libr.error}</p>
+                                                                    ) : null}
+                                                                    {listEmpty ? (
+                                                                        <p className="text-sm text-black/60 dark:text-white/60 mb-2">
+                                                                            {t("create.speakers.noVoicesFiltered", {
+                                                                                defaultValue: "No voices found. Try changing filters.",
+                                                                            })}
+                                                                        </p>
+                                                                    ) : null}
                                                                     <div className="flex items-center gap-3">
                                                                     {/* Filters dropdown (per speaker) */}
                                                                     {(() => {
                                                                     const f = speakerVoiceFilters[i] || {
                                                                         open: false,
                                                                         q: "",
-                                                                        gender: "",
+                                                                        gender: "__all__",
                                                                         language: "",
+                                                                        category: "",
                                                                         tone: "",
                                                                         pitch: "",
-                                                                    };
-                                                                    const isNeutralGender = (value) => {
-                                                                        const g = String(value || "").trim().toLowerCase();
-                                                                        return g.includes("neutral") || g.includes("netural");
+                                                                        accent: "",
+                                                                        age: "",
                                                                     };
                                                                     const safeGenderFilter = (() => {
                                                                         const g = String(f.gender || "").trim().toLowerCase();
-                                                                        if (!g || g === "__all__" || isNeutralGender(g)) return "__all__";
-                                                                        return g;
+                                                                        if (!g || g === "__all__" || isNeutralGenderValue(g)) return "__all__";
+                                                                        return normalizeGenderToken(f.gender) || "__all__";
                                                                     })();
 
-                                                                    const setF = (patch) =>
-                                                                        {
-                                                                            setSpeakerVoiceFilters((prev) => ({
-                                                                                ...prev,
-                                                                                [i]: { ...prev[i], ...patch },
-                                                                            }));
-                                                                            setSpeakerVoiceVisibleCounts((prev) => ({
-                                                                                ...prev,
-                                                                                [i]: VOICE_PAGE_SIZE,
-                                                                            }));
-                                                                        };
+                                                                    const setF = (patch) => {
+                                                                        setSpeakerVoiceFilters((prev) => ({
+                                                                            ...prev,
+                                                                            [i]: { ...prev[i], ...patch },
+                                                                        }));
+                                                                    };
 
-                                                                    const languageOptions = Array.from(
-                                                                        new Set(
-                                                                        voices
-                                                                            .flatMap((v) => {
-                                                                                const langs = Array.isArray(v.languages)
-                                                                                    ? v.languages
-                                                                                    : typeof v.languages === "string"
-                                                                                        ? v.languages.split(",")
-                                                                                        : [];
-                                                                                const labelLangs = Array.isArray(v.labels?.languages)
-                                                                                    ? v.labels.languages
-                                                                                    : typeof v.labels?.languages === "string"
-                                                                                        ? String(v.labels.languages).split(",")
-                                                                                        : [];
-                                                                                return [...langs, ...labelLangs];
-                                                                            })
-                                                                            .map((x) => String(x).trim())
-                                                                            .filter(Boolean)
-                                                                        )
-                                                                    ).sort();
+                                                                    const languageOptions = uniqueSortedDisplay([
+                                                                        ...libraryFilterOptions.languages,
+                                                                        ...mergeDisplayOptionsFromVoices(
+                                                                            librarySeedVoices,
+                                                                            collectLanguageDisplaysFromVoice
+                                                                        ),
+                                                                    ]);
 
-                                                                    const toneOptions = Array.from(
-                                                                        new Set(
-                                                                            voices
-                                                                                .flatMap((v) => getVoiceToneTags(v))
-                                                                                .map((x) => String(x).trim())
-                                                                                .filter(Boolean)
-                                                                        )
-                                                                    ).sort();
+                                                                    const toneOptions = uniqueSortedDisplay(
+                                                                        librarySeedVoices.flatMap((v) => getVoiceToneTags(v))
+                                                                    );
 
                                                                     const pitchOptions = PITCH_VALUES;
 
-                                                                    const genderOptions = Array.from(
-                                                                        new Set(
-                                                                            voices
-                                                                                .map((v) => String(v.gender || v.labels?.gender || "").trim().toLowerCase())
-                                                                                .filter((g) => Boolean(g) && !isNeutralGender(g))
-                                                                        )
-                                                                    ).sort();
+                                                                    const genderOptions = uniqueSortedDisplay(
+                                                                        librarySeedVoices
+                                                                            .map((v) => normalizeGenderToken(v.gender || v.labels?.gender))
+                                                                            .filter(Boolean)
+                                                                    ).map((g) => ({
+                                                                        value: g,
+                                                                        label: g === "female" ? "Female" : g === "male" ? "Male" : g,
+                                                                    }));
 
-                                                                        const hasActive =
-                                                                        !!String(f.q || "").trim() || !!f.gender || !!f.language || !!f.tone || !!f.pitch;
-                                                                        const activeFilterChips = [
-                                                                            String(f.q || "").trim()
-                                                                                ? { key: "q", label: `${t("create.speakers.search", "Search")}: ${String(f.q).trim()}` }
-                                                                                : null,
-                                                                            (safeGenderFilter && safeGenderFilter !== "__all__")
-                                                                                ? {
-                                                                                    key: "gender",
-                                                                                    label: `${t("create.speakers.gender", "Gender")}: ${safeGenderFilter}`,
-                                                                                }
-                                                                                : null,
-                                                                            f.language
-                                                                                ? { key: "language", label: `${t("create.speakers.language", "Language")}: ${f.language}` }
-                                                                                : null,
-                                                                            f.tone
-                                                                                ? { key: "tone", label: `${t("create.speakers.tone", "Tone")}: ${f.tone}` }
-                                                                                : null,
-                                                                            f.pitch
-                                                                                ? { key: "pitch", label: `${t("create.speakers.pitch", "Pitch")}: ${f.pitch}` }
-                                                                                : null,
-                                                                        ].filter(Boolean);
+                                                                    const accentOptions = uniqueSortedDisplay([
+                                                                        ...libraryFilterOptions.accents,
+                                                                        ...mergeDisplayOptionsFromVoices(librarySeedVoices, (v) => {
+                                                                            const acc = [];
+                                                                            if (v?.labels && typeof v.labels === "object") {
+                                                                                pushFacetTokens(v.labels.accent, acc);
+                                                                                pushFacetTokens(v.labels.Accent, acc);
+                                                                            }
+                                                                            return acc;
+                                                                        }),
+                                                                    ]);
+
+                                                                    const ageOptions = uniqueSortedDisplay([
+                                                                        ...libraryFilterOptions.ages,
+                                                                        ...mergeDisplayOptionsFromVoices(librarySeedVoices, (v) => {
+                                                                            const acc = [];
+                                                                            if (v?.labels && typeof v.labels === "object") {
+                                                                                pushFacetTokens(v.labels.age, acc);
+                                                                                pushFacetTokens(v.labels.Age, acc);
+                                                                            }
+                                                                            return acc;
+                                                                        }),
+                                                                    ]);
+
+                                                                    const categoryOptions = uniqueSortedDisplay([
+                                                                        ...libraryFilterOptions.categories,
+                                                                        ...librarySeedVoices.map((v) => v.category).filter(Boolean),
+                                                                    ]);
+
+                                                                    const genderFilterActive = safeGenderFilter !== "__all__";
+                                                                    const hasActive =
+                                                                        !!String(f.q || "").trim() ||
+                                                                        genderFilterActive ||
+                                                                        !!f.language ||
+                                                                        !!f.category ||
+                                                                        !!f.tone ||
+                                                                        !!f.pitch ||
+                                                                        !!f.accent ||
+                                                                        !!f.age;
+                                                                    const activeFilterChips = [
+                                                                        String(f.q || "").trim()
+                                                                            ? { key: "q", label: `${t("create.speakers.search", "Search")}: ${String(f.q).trim()}` }
+                                                                            : null,
+                                                                        genderFilterActive
+                                                                            ? {
+                                                                                  key: "gender",
+                                                                                  label: `${t("create.speakers.gender", "Gender")}: ${safeGenderFilter}`,
+                                                                              }
+                                                                            : null,
+                                                                        f.language
+                                                                            ? { key: "language", label: `${t("create.speakers.language", "Language")}: ${f.language}` }
+                                                                            : null,
+                                                                        f.category
+                                                                            ? { key: "category", label: `${t("create.speakers.category", "Category")}: ${f.category}` }
+                                                                            : null,
+                                                                        f.tone
+                                                                            ? { key: "tone", label: `${t("create.speakers.tone", "Tone")}: ${f.tone}` }
+                                                                            : null,
+                                                                        f.pitch
+                                                                            ? { key: "pitch", label: `${t("create.speakers.pitch", "Pitch")}: ${f.pitch}` }
+                                                                            : null,
+                                                                        f.accent
+                                                                            ? { key: "accent", label: `${t("create.speakers.accent", "Accent")}: ${f.accent}` }
+                                                                            : null,
+                                                                        f.age
+                                                                            ? { key: "age", label: `${t("create.speakers.age", "Age")}: ${f.age}` }
+                                                                            : null,
+                                                                    ].filter(Boolean);
 
                                                                     return (
                                                                         <>
                                                                     <button
                                                                     type="button"
                                                                     disabled={isHostLocked}
-                                                                    onClick={() => setF({ open: true })}
+                                                                    onClick={() => {
+                                                                        const a = speakerVoiceAppliedFilters[i] || emptyAppliedVoiceFilters();
+                                                                        const speakerGenderTok = normalizeGenderToken(speakers?.[i]?.gender);
+                                                                        const modalPatch = appliedFiltersToModalPatch(a);
+                                                                        if (!a.gender) {
+                                                                            modalPatch.gender = speakerGenderTok || "__all__";
+                                                                        }
+                                                                        setSpeakerVoiceFilters((prev) => ({
+                                                                            ...prev,
+                                                                            [i]: {
+                                                                                ...prev[i],
+                                                                                ...modalPatch,
+                                                                                open: true,
+                                                                            },
+                                                                        }));
+                                                                    }}
                                                                     className={`relative inline-flex items-center justify-center h-[44px] w-[44px] rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 transition
                                                                         ${isHostLocked ? "opacity-60 cursor-not-allowed" : "hover:bg-black/5 dark:hover:bg-white/5"}`}
                                                                     aria-label={t("create.speakers.filters")}
@@ -1956,52 +2417,96 @@ const exportScript = async (format = "pdf") => {
                                                                             title={t("create.speakers.filters")}
                                                                             onClose={() => setF({ open: false })}
                                                                             isRTL={isRTL}
+                                                                            dense
                                                                             footer={
                                                                             <>
                                                                                 <button
                                                                                 type="button"
-                                                                                onClick={() => setF({ q: "", gender: "__all__", language: "", tone: "", pitch: "" })}
-                                                                                className="px-4 h-[42px] rounded-xl border border-neutral-300 dark:border-neutral-700 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                                                                onClick={() =>
+                                                                                (() => {
+                                                                                    const speakerGenderTok = normalizeGenderToken(speakers?.[i]?.gender);
+                                                                                    const patch = {
+                                                                                        q: "",
+                                                                                        gender: speakerGenderTok || "__all__",
+                                                                                        language: "",
+                                                                                        category: "",
+                                                                                        tone: "",
+                                                                                        pitch: "",
+                                                                                        accent: "",
+                                                                                        age: "",
+                                                                                    };
+                                                                                    setF(patch);
+                                                                                    applyVoiceLibraryForSpeaker(i, filtersModalToApplied(patch));
+                                                                                })()
+                                                                            }
+                                                                                className="px-4 h-10 min-h-10 rounded-xl border border-neutral-300 dark:border-neutral-700 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition"
                                                                                 >
                                                                                 {t("create.speakers.clearFilters")}
                                                                                 </button>
 
                                                                                 <button
                                                                                 type="button"
-                                                                                onClick={() => setF({ open: false })}
-                                                                                className="px-4 h-[42px] rounded-xl bg-purple-600 text-white text-sm font-semibold hover:opacity-95 transition"
+                                                                                onClick={() => {
+                                                                            const nextApplied = filtersModalToApplied(f);
+                                                                            const modalGenderTok = normalizeGenderToken(f.gender);
+                                                                            const modalGenderLabel =
+                                                                                modalGenderTok === "female"
+                                                                                    ? "Female"
+                                                                                    : modalGenderTok === "male"
+                                                                                        ? "Male"
+                                                                                        : "";
+                                                                            // Keep speaker card gender UI in sync with applied modal gender
+                                                                            if (modalGenderLabel) {
+                                                                                setSpeakers((arr) => {
+                                                                                    const next = [...arr];
+                                                                                    const prev = next[i] || {};
+                                                                                    const prevTok = normalizeGenderToken(prev.gender);
+                                                                                    const genderChanged = prevTok && modalGenderTok && prevTok !== modalGenderTok;
+                                                                                    next[i] = {
+                                                                                        ...prev,
+                                                                                        gender: modalGenderLabel,
+                                                                                        // If gender changed, clear selection so dropdown shows placeholder until a matching voice is chosen
+                                                                                        voiceId: genderChanged ? "" : (prev.voiceId || ""),
+                                                                                    };
+                                                                                    return next;
+                                                                                });
+                                                                            }
+                                                                                    setF({ open: false });
+                                                                                    applyVoiceLibraryForSpeaker(i, nextApplied);
+                                                                                }}
+                                                                                className="px-4 h-10 min-h-10 rounded-xl bg-purple-600 text-white text-sm font-semibold hover:opacity-95 transition"
                                                                                 >
                                                                                 {t("create.common.done")}
                                                                                 </button>
                                                                             </>
                                                                             }
                                                                         >
-                                                                            <div className="grid grid-cols-1 gap-4">
+                                                                            <div className="grid grid-cols-1 gap-2.5">
                                                                             {/* Search */}
                                                                             <div>
-                                                                                <label className="form-label">{t("create.speakers.search")}</label>
+                                                                                <label className="form-label mb-1 block">{t("create.speakers.search")}</label>
                                                                                 <input
                                                                                 value={f.q}
                                                                                 onChange={(e) => setF({ q: e.target.value })}
                                                                                 placeholder={t("create.speakers.searchPlaceholder")}
-                                                                                className="form-input"
+                                                                                className="form-input !px-3 !py-2 min-h-10 text-sm"
                                                                                 />
                                                                             </div>
 
-                                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                                            <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-x-3 md:gap-y-2.5">
                                                                                 {/* Gender */}
                                                                                 <div>
-                                                                                <label className="form-label">{t("create.speakers.gender")}</label>
+                                                                                <label className="form-label mb-1 block">{t("create.speakers.gender")}</label>
                                                                                 <div className="relative">
                                                                                     <select
                                                                                         value={safeGenderFilter}
                                                                                         onChange={(e) => setF({ gender: e.target.value })}
-                                                                                        className="form-input appearance-none pr-10 [color-scheme:light] dark:[color-scheme:dark]"
+                                                                                        className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
                                                                                     >
                                                                                         <option value="__all__">{t("create.speakers.allGenders", "All Genders")}</option>
                                                                                         {genderOptions.map((g) => (
-                                                                                        <option key={g} value={g}>
-                                                                                            {g}
+                                                                                        <option key={g.value} value={g.value}>
+                                                                                            {g.label}
                                                                                         </option>
                                                                                         ))}
                                                                                     </select>
@@ -2011,12 +2516,12 @@ const exportScript = async (format = "pdf") => {
 
                                                                                 {/* Language */}
                                                                                 <div>
-                                                                                <label className="form-label">{t("create.speakers.language")}</label>
+                                                                                <label className="form-label mb-1 block">{t("create.speakers.language")}</label>
                                                                                 <div className="relative">
                                                                                     <select
                                                                                         value={f.language}
                                                                                         onChange={(e) => setF({ language: e.target.value })}
-                                                                                        className="form-input appearance-none pr-10 [color-scheme:light] dark:[color-scheme:dark]"
+                                                                                        className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
                                                                                     >
                                                                                         <option value="">{t("create.speakers.allLanguages")}</option>
                                                                                         {languageOptions.map((lang) => (
@@ -2031,12 +2536,12 @@ const exportScript = async (format = "pdf") => {
 
                                                                                 {/* Tone */}
                                                                                 <div>
-                                                                                <label className="form-label">{t("create.speakers.tone")}</label>
+                                                                                <label className="form-label mb-1 block">{t("create.speakers.tone")}</label>
                                                                                 <div className="relative">
                                                                                     <select
                                                                                         value={f.tone}
                                                                                         onChange={(e) => setF({ tone: e.target.value })}
-                                                                                        className="form-input appearance-none pr-10 [color-scheme:light] dark:[color-scheme:dark]"
+                                                                                        className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
                                                                                     >
                                                                                         <option value="">{t("create.speakers.allTones")}</option>
                                                                                         {toneOptions.map((tone) => (
@@ -2051,12 +2556,12 @@ const exportScript = async (format = "pdf") => {
 
                                                                                 {/* Pitch */}
                                                                                 <div className="md:col-span-2">
-                                                                                <label className="form-label">{t("create.speakers.pitch")}</label>
+                                                                                <label className="form-label mb-1 block">{t("create.speakers.pitch")}</label>
                                                                                 <div className="relative">
                                                                                     <select
                                                                                         value={f.pitch}
                                                                                         onChange={(e) => setF({ pitch: e.target.value })}
-                                                                                        className="form-input appearance-none pr-10 [color-scheme:light] dark:[color-scheme:dark]"
+                                                                                        className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
                                                                                     >
                                                                                         <option value="">{t("create.speakers.allPitches")}</option>
                                                                                         {pitchOptions.map((p) => (
@@ -2070,18 +2575,89 @@ const exportScript = async (format = "pdf") => {
                                                                                 </div>
                                                                             </div>
 
+                                                                            {(accentOptions.length > 0 || ageOptions.length > 0) ? (
+                                                                                <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-x-3 md:gap-y-2.5">
+                                                                                    {accentOptions.length > 0 ? (
+                                                                                        <div>
+                                                                                            <label className="form-label mb-1 block">{t("create.speakers.accent", "Accent")}</label>
+                                                                                            <div className="relative">
+                                                                                                <select
+                                                                                                    value={f.accent}
+                                                                                                    onChange={(e) => setF({ accent: e.target.value })}
+                                                                                                    className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
+                                                                                                >
+                                                                                                    <option value="">{t("create.speakers.allAccents", "All accents")}</option>
+                                                                                                    {accentOptions.map((a) => (
+                                                                                                        <option key={a} value={a}>
+                                                                                                            {a}
+                                                                                                        </option>
+                                                                                                    ))}
+                                                                                                </select>
+                                                                                                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    ) : null}
+                                                                                    {ageOptions.length > 0 ? (
+                                                                                        <div>
+                                                                                            <label className="form-label mb-1 block">{t("create.speakers.age", "Age")}</label>
+                                                                                            <div className="relative">
+                                                                                                <select
+                                                                                                    value={f.age}
+                                                                                                    onChange={(e) => setF({ age: e.target.value })}
+                                                                                                    className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
+                                                                                                >
+                                                                                                    <option value="">{t("create.speakers.allAges", "All ages")}</option>
+                                                                                                    {ageOptions.map((a) => (
+                                                                                                        <option key={a} value={a}>
+                                                                                                            {a}
+                                                                                                        </option>
+                                                                                                    ))}
+                                                                                                </select>
+                                                                                                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    ) : null}
+                                                                                </div>
+                                                                            ) : null}
+
+                                                                            {categoryOptions.length > 0 ? (
+                                                                                <div>
+                                                                                    <label className="form-label mb-1 block">{t("create.speakers.category", "Category")}</label>
+                                                                                    <div className="relative">
+                                                                                        <select
+                                                                                            value={f.category}
+                                                                                            onChange={(e) => setF({ category: e.target.value })}
+                                                                                            className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
+                                                                                        >
+                                                                                            <option value="">{t("create.speakers.allCategories", "All categories")}</option>
+                                                                                            {categoryOptions.map((c) => (
+                                                                                                <option key={c} value={c}>
+                                                                                                    {c}
+                                                                                                </option>
+                                                                                            ))}
+                                                                                        </select>
+                                                                                        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
+                                                                                    </div>
+                                                                                </div>
+                                                                            ) : null}
+
                                                                             {activeFilterChips.length > 0 && (
                                                                                 <div>
-                                                                                    <p className="mb-2 text-xs font-semibold text-black/60 dark:text-white/60">
+                                                                                    <p className="mb-1 text-xs font-semibold text-black/60 dark:text-white/60">
                                                                                         {t("create.speakers.activeFilters", "Active filters")}
                                                                                     </p>
-                                                                                    <div className="flex flex-wrap gap-2">
+                                                                                    <div className="flex flex-wrap gap-1.5">
                                                                                         {activeFilterChips.map((chip) => (
                                                                                             <button
                                                                                                 key={chip.key}
                                                                                                 type="button"
-                                                                                                onClick={() => setF({ [chip.key]: chip.key === "gender" ? "__all__" : "" })}
-                                                                                                className="inline-flex items-center gap-1 rounded-full border border-purple-300/70 dark:border-purple-400/45 bg-purple-50 dark:bg-purple-900/25 px-2.5 py-1 text-xs text-purple-700 dark:text-purple-200"
+                                                                                                onClick={() =>
+                                                                                                setF({
+                                                                                                    [chip.key]:
+                                                                                                        chip.key === "gender" ? "__all__" : "",
+                                                                                                })
+                                                                                            }
+                                                                                                className="inline-flex items-center gap-1 rounded-full border border-purple-300/70 dark:border-purple-400/45 bg-purple-50 dark:bg-purple-900/25 px-2 py-0.5 text-xs text-purple-700 dark:text-purple-200"
                                                                                                 title={t("create.speakers.removeFilter", "Remove filter")}
                                                                                             >
                                                                                                 <span>{chip.label}</span>
@@ -2092,14 +2668,23 @@ const exportScript = async (format = "pdf") => {
                                                                                 </div>
                                                                             )}
 
-                                                                            {/* Optional: small hint */}
-                                                                            <p className="text-xs text-black/60 dark:text-white/60">
-                                                                                {pool?.length
-                                                                                ? t("create.speakers.filteredCount", {
-                                                                                    count: pool.length,
-                                                                                    defaultValue: "{{count}} voices match current filters",
-                                                                                })
-                                                                                : ""}
+                                                                            {/* Preview count (debounced server query while modal open) */}
+                                                                            <p className="text-xs leading-snug text-black/60 dark:text-white/60">
+                                                                                {(() => {
+                                                                                    const mp = modalLibraryPreview[i];
+                                                                                    if (mp?.loading) {
+                                                                                        return t("create.speakers.searchingVoices", {
+                                                                                            defaultValue: "Searching…",
+                                                                                        });
+                                                                                    }
+                                                                                    if (mp?.refinedCount != null) {
+                                                                                        return t("create.speakers.filteredCount", {
+                                                                                            count: mp.refinedCount,
+                                                                                            defaultValue: "{{count}} voices match current filters",
+                                                                                        });
+                                                                                    }
+                                                                                    return "";
+                                                                                })()}
                                                                             </p>
                                                                             </div>
                                                                         </Modal>
@@ -2139,12 +2724,12 @@ const exportScript = async (format = "pdf") => {
                                                                                 const selected = pool.find(
                                                                                     (v) => (v.providerVoiceId || v.id || v.docId) === newVoice
                                                                                 );
-                                                                                previewVoice(newVoice, selected?.name || "");
+                                                                                previewVoice(newVoice, selected || null);
                                                                             }
                                                                         }}
                                                                     >
                                                                         <option value="">{t("create.speakers.selectVoice")}</option>
-                                                                        {visiblePool.map((v) => {
+                                                                        {pool.map((v) => {
                                                                         const vid = v.providerVoiceId || v.id || v.docId;
                                                                         const isTaken = speakers.some((s, idx) => s.voiceId === vid && idx !== i);
 
@@ -2158,10 +2743,10 @@ const exportScript = async (format = "pdf") => {
 
                                                                     <button
                                                                     type="button"
-                                                                    disabled={isHostLocked || !sp.voiceId || previewLoadingVoiceId === sp.voiceId}
+                                                                    disabled={isHostLocked || !sp.voiceId || previewLoadingVoiceId === sp.voiceId || (elevenLabsAuthFailed && !String((pool.find((v) => (v.providerVoiceId || v.id || v.docId) === sp.voiceId)?.preview_url || "")).trim())}
                                                                     onClick={() => {
                                                                         const selected = pool.find((v) => (v.providerVoiceId || v.id || v.docId) === sp.voiceId);
-                                                                        previewVoice(sp.voiceId, selected?.name || "");
+                                                                        previewVoice(sp.voiceId, selected || null);
                                                                     }}
                                                                     className={`inline-flex items-center justify-center gap-2 px-5 h-[44px] rounded-xl border border-purple-500 text-purple-600 font-semibold transition ${
                                                                         (isHostLocked || !sp.voiceId || previewLoadingVoiceId === sp.voiceId) ? "opacity-60 cursor-not-allowed" : "hover:bg-purple-50 dark:hover:bg-purple-900/20"
@@ -2171,24 +2756,19 @@ const exportScript = async (format = "pdf") => {
                                                                     {t("create.common.preview")} <Play className={`w-4 h-4 ${previewLoadingVoiceId === sp.voiceId ? "animate-pulse" : ""}`} />
                                                                     </button>
                                                                     </div>
-                                                                    {hasMoreVoices && (
+                                                                    {hasMoreVoices ? (
                                                                         <button
                                                                             type="button"
-                                                                            onClick={() =>
-                                                                                setSpeakerVoiceVisibleCounts((prev) => ({
-                                                                                    ...prev,
-                                                                                    [i]: Math.min(pool.length, (prev[i] || VOICE_PAGE_SIZE) + VOICE_PAGE_SIZE),
-                                                                                }))
-                                                                            }
+                                                                            onClick={() => appendVoiceLibraryPageForSpeaker(i)}
                                                                             className="mt-2 text-xs font-semibold text-purple-600 dark:text-purple-300 hover:underline"
                                                                         >
                                                                             {t("create.speakers.loadMoreVoices", {
                                                                                 defaultValue: "Load more voices ({{shown}}/{{total}})",
-                                                                                shown: visiblePool.length,
-                                                                                total: pool.length,
+                                                                                shown: pool.length,
+                                                                                total: libr.totalCount || pool.length,
                                                                             })}
                                                                         </button>
-                                                                    )}
+                                                                    ) : null}
                                                                 </div>
                                                             );
                                                         })()}
