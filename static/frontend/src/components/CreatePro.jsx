@@ -504,7 +504,6 @@ const fetchLibraryItemsPage = useCallback(async (applied, page, pageSize = VOICE
     const url = `${API_BASE}/api/voices/elevenlabs?${params.toString()}`;
     const res = await fetch(url, { credentials: "include" });
     const data = await res.json().catch(() => ({}));
-    console.log("[library-voices] page", page, "response keys:", data && typeof data === "object" ? Object.keys(data) : data);
     if (!res.ok) {
         const msg = data?.error || `Failed to load voices (${res.status})`;
         if (String(msg).includes("401") || res.status === 401) {

@@ -269,7 +269,6 @@ Session(app)
 # Load .env variables configuring ffmpeg for pydub (explicit path: repo root)
 _ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(dotenv_path=_ENV_PATH, override=False)
-print("DEBUG .env loaded?", os.path.exists(_ENV_PATH), "path=", _ENV_PATH)
 
 import boto3
 from botocore.client import Config
@@ -2551,7 +2550,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 # ElevenLabs client for multi speaker TTS
 ELEVENLABS_API_KEY = (os.getenv("ELEVENLABS_API_KEY") or "").strip()
-print("ELEVENLABS_API_KEY present?", bool(ELEVENLABS_API_KEY), "length=", len(ELEVENLABS_API_KEY))
 
 def _elevenlabs_key_ready() -> bool:
     return bool(ELEVENLABS_API_KEY)
@@ -3521,10 +3519,6 @@ def _fetch_elevenlabs_shared_voices_from_request():
                 502,
             )
         data = r.json() or {}
-        print(
-            "[shared-voices] key_present=%s key_len=%s page=%s size=%s status=%s keys=%s"
-            % (bool(ELEVENLABS_API_KEY), len(ELEVENLABS_API_KEY), page, page_size, r.status_code, list(data.keys()))
-        )
         voices = data.get("voices") or []
         items = [_normalize_shared_library_voice(v) for v in voices if v.get("voice_id")]
         has_more = bool(data.get("has_more"))
