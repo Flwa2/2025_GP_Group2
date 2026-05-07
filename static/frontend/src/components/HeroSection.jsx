@@ -39,13 +39,13 @@ function HeroSection() {
         </div>
       )}
 
-      <div className="section-shell section-block relative grid min-w-0 grid-cols-1 items-center gap-6 pt-8 sm:gap-8 sm:pt-16 lg:grid-cols-2 lg:gap-10 lg:pt-24">
+      <div className="section-shell section-block relative grid min-w-0 grid-cols-1 items-center gap-6 pt-10 sm:gap-8 sm:pt-16 lg:grid-cols-2 lg:gap-10 lg:pt-24">
         <div className="order-1 min-w-0 space-y-3 text-start sm:space-y-5">
-          <h1 className="max-w-[12ch] text-[2.05rem] font-black leading-[0.94] tracking-tight text-black min-[380px]:max-w-[13ch] min-[380px]:text-[2.25rem] sm:max-w-xl sm:text-6xl dark:text-gray-100">
+          <h1 className="w-full min-w-0 max-w-[min(100%,20.5rem)] text-[clamp(1.95rem,5.4vw,2.45rem)] font-black leading-[1.12] tracking-tight text-black [text-wrap:balance] sm:max-w-xl sm:text-6xl sm:leading-[0.94] sm:[text-wrap:unset] dark:text-gray-100">
             {heroTitleLines.map((line, index) => (
               <span
                 key={`${line}-${index}`}
-                className="block break-words [overflow-wrap:anywhere] sm:whitespace-nowrap"
+                className="block max-sm:break-words sm:whitespace-nowrap"
               >
                 {line}
               </span>
@@ -80,36 +80,36 @@ function HeroSection() {
             </div>
           </div>
 
-          <div className="absolute start-[8%] top-[18%] hidden rotate-12 text-sm font-semibold text-black dark:text-gray-100 sm:block sm:text-base">
-            <span className="animate-pulse body-sm">{t("Start Casting!!")}</span>
-            <div className="relative mt-2 h-6 w-6">
+          <div className="absolute start-[5%] top-[11%] z-10 block max-w-[min(42vw,7.5rem)] rotate-12 text-[0.625rem] font-semibold leading-tight text-black dark:text-gray-100 sm:start-[8%] sm:top-[18%] sm:max-w-none sm:text-base sm:leading-normal">
+            <span className="animate-pulse">{t("Start Casting!!")}</span>
+            <div className="relative mt-1.5 h-5 w-5 origin-top-left scale-90 sm:mt-2 sm:h-6 sm:w-6 sm:scale-100">
               <div className="absolute inset-0 rounded-full bg-pink-bright animate-spin" />
-              <div className="absolute left-1 top-1 h-4 w-4 rounded-full bg-orange-bright animate-pulse" />
-              <div className="absolute left-2 top-2 h-2 w-2 rounded-full bg-black dark:bg-white" />
+              <div className="absolute left-0.5 top-0.5 h-3 w-3 rounded-full bg-orange-bright animate-pulse sm:left-1 sm:top-1 sm:h-4 sm:w-4" />
+              <div className="absolute left-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-black dark:bg-white sm:left-2 sm:top-2 sm:h-2 sm:w-2" />
             </div>
           </div>
 
-          <div className="absolute end-[2%] top-[18%] hidden -rotate-12 text-sm font-semibold text-black dark:text-gray-100 sm:block sm:text-base">
-            <span className="animate-pulse body-sm">{t("Turn Text to speech!")}</span>
-            <div className="relative mt-2 h-6 w-6">
+          <div className="absolute end-[3%] top-[11%] z-10 block max-w-[min(46vw,8.5rem)] -rotate-12 text-end text-[0.625rem] font-semibold leading-tight text-black dark:text-gray-100 sm:end-[2%] sm:top-[18%] sm:max-w-none sm:text-base sm:leading-normal sm:text-start">
+            <span className="animate-pulse">{t("Turn Text to speech!")}</span>
+            <div className="relative mt-1.5 ms-auto h-5 w-5 origin-top-right scale-90 sm:ms-0 sm:mt-2 sm:h-6 sm:w-6 sm:scale-100">
               <div className="absolute inset-0 rounded-full bg-blue-bright animate-spin" style={{ animationDirection: "reverse" }} />
-              <div className="absolute left-1 top-1 h-4 w-4 rounded-full bg-yellow-bright animate-pulse" />
-              <div className="absolute left-2 top-2 h-2 w-2 rounded-full bg-black dark:bg-white" />
+              <div className="absolute left-0.5 top-0.5 h-3 w-3 rounded-full bg-yellow-bright animate-pulse sm:left-1 sm:top-1 sm:h-4 sm:w-4" />
+              <div className="absolute left-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-black dark:bg-white sm:left-2 sm:top-2 sm:h-2 sm:w-2" />
             </div>
           </div>
 
           <div className="pointer-events-none absolute left-[16%] top-[62%] z-10 h-3.5 w-3.5 rounded-full bg-purple-medium animate-bounce sm:h-4 sm:w-4 sm:top-[62%]" />
           <div className="pointer-events-none absolute right-[14%] top-[64%] z-10 h-3 w-3 rounded-full bg-green-bright animate-pulse sm:top-[66%]" />
           <div className="pointer-events-none absolute right-[8%] top-[58%] z-10 h-4 w-4 rounded-full bg-yellow-bright/90 animate-pulse sm:h-6 sm:w-6 sm:top-[56%] sm:right-[2%]" />
-          <div className="pointer-events-none absolute left-[24%] top-[12%] z-10 hidden h-8 w-8 rounded-full border-2 border-purple-medium/60 animate-pulse sm:block sm:h-10 sm:w-10" />
-          <div className="pointer-events-none absolute right-[20%] top-[18%] z-10 hidden h-8 w-8 rounded-full border-2 border-pink-bright/70 animate-pulse sm:block sm:h-10 sm:w-10" style={{ animationDelay: "0.5s" }} />
+          <div className="pointer-events-none absolute left-[20%] top-[7%] z-10 h-5 w-5 rounded-full border-2 border-purple-medium/60 animate-pulse sm:left-[24%] sm:top-[12%] sm:h-10 sm:w-10" />
+          <div className="pointer-events-none absolute right-[16%] top-[13%] z-10 h-5 w-5 rounded-full border-2 border-pink-bright/70 animate-pulse sm:right-[20%] sm:top-[18%] sm:h-10 sm:w-10" style={{ animationDelay: "0.5s" }} />
 
           <div className="pointer-events-none absolute left-[28%] top-[28%] z-10 h-2.5 w-2.5 rounded-full bg-pink-bright animate-bounce" />
           <div className="pointer-events-none absolute left-[44%] top-[70%] z-10 h-3 w-3 rounded-full bg-blue-bright animate-pulse sm:top-[68%]" />
           <div className="pointer-events-none absolute right-[26%] top-[28%] z-10 h-3 w-3 rounded-full bg-orange-bright animate-bounce" style={{ animationDelay: "0.2s" }} />
-          <div className="pointer-events-none absolute right-[36%] top-[66%] z-10 hidden h-9 w-9 rounded-full border-2 border-green-bright/70 animate-pulse sm:block sm:top-[58%]" style={{ animationDelay: "0.35s" }} />
-          <div className="pointer-events-none absolute left-[38%] top-[22%] z-10 hidden text-lg text-purple-medium/80 animate-pulse sm:block">*</div>
-          <div className="pointer-events-none absolute right-[34%] top-[76%] z-10 hidden text-base text-pink-bright/80 animate-bounce sm:block sm:top-[70%]">+</div>
+          <div className="pointer-events-none absolute right-[38%] top-[60%] z-10 h-6 w-6 rounded-full border-2 border-green-bright/70 animate-pulse sm:right-[36%] sm:top-[58%] sm:h-9 sm:w-9" style={{ animationDelay: "0.35s" }} />
+          <div className="pointer-events-none absolute left-[36%] top-[19%] z-10 text-xs text-purple-medium/80 animate-pulse sm:left-[38%] sm:top-[22%] sm:text-lg">*</div>
+          <div className="pointer-events-none absolute right-[30%] top-[73%] z-10 text-xs text-pink-bright/80 animate-bounce sm:right-[34%] sm:top-[70%] sm:text-base">+</div>
         </div>
       </div>
     </section>
