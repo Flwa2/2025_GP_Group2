@@ -1,5 +1,13 @@
 ﻿import React from "react";
 import { useTranslation } from "react-i18next";
+import {
+  Instagram,
+  Linkedin,
+  Podcast,
+  Radio,
+  Twitter,
+  Youtube,
+} from "lucide-react";
 
 export default function Footer() {
   const { t } = useTranslation();
@@ -26,87 +34,112 @@ export default function Footer() {
     setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
   };
 
-  return (
-    <footer className="min-w-0 shrink-0 bg-[#ffecc6] text-black transition-colors duration-500 dark:bg-[#0f1020] dark:text-white">
-      <div className="h-1.5 w-full bg-[#e6c34a] dark:bg-[#8b5cf6]" />
+  const quickLinks = [
+    { label: "Home", color: "bg-[#ef4444]", onClick: scrollToTop, type: "button" },
+    { label: "Cast Studio", color: "bg-[#22c55e]", href: "#/episodes", type: "link" },
+    {
+      label: "About Us",
+      color: "bg-[#3b82f6]",
+      href: "#about",
+      type: "anchor",
+      onClick: (e) => {
+        e.preventDefault();
+        navigateToSection("#about");
+      },
+    },
+    { label: "Create Script", color: "bg-[#f59e0b]", href: "#/create", type: "link" },
+  ];
 
-      <div className="section-shell pt-12 pb-8 md:pt-14 md:pb-10">
-        <div className="grid min-w-0 grid-cols-1 items-start gap-10 md:grid-cols-3 md:gap-8 lg:gap-12">
-          <div className="min-w-0 text-center md:text-start">
-            <div className="mb-3 flex items-center justify-center gap-2.5 md:justify-start">
+  const socialLinks = [
+    { label: "Spotify", href: "https://open.spotify.com/", icon: Podcast },
+    { label: "Apple Podcasts", href: "https://podcasts.apple.com/", icon: Radio },
+    { label: "YouTube", href: "https://www.youtube.com/", icon: Youtube },
+    { label: "X / Twitter", href: "https://x.com/", icon: Twitter },
+    { label: "Instagram", href: "https://www.instagram.com/", icon: Instagram },
+    { label: "LinkedIn", href: "https://www.linkedin.com/", icon: Linkedin },
+  ];
+
+  return (
+    <footer className="min-w-0 shrink-0 bg-[#f9e7c4] text-[#2c2217] transition-colors duration-500 dark:bg-[linear-gradient(145deg,#070910_0%,#0c1222_52%,#1c1540_100%)] dark:text-white">
+      <div className="h-1.5 w-full bg-[#e6c34a] dark:bg-purple-gradient" />
+
+      <div className="section-shell pt-14 pb-8 md:pt-16 md:pb-10">
+        <div className="grid min-w-0 grid-cols-1 gap-y-8 text-center md:text-start lg:grid-cols-12 lg:gap-x-10 lg:gap-y-10">
+          <section className="min-w-0 lg:col-span-5">
+            <div className="flex items-center justify-center gap-3.5 md:justify-start">
               <img
                 src="/logo.png"
                 alt="WeCast logo"
-                className="h-8 w-8 object-contain"
+                className="h-12 w-12 shrink-0 object-contain dark:brightness-110 dark:contrast-110 dark:[filter:drop-shadow(0_0_10px_rgba(139,92,246,0.55))]"
               />
               <h4
-                className="text-3xl font-semibold tracking-tight leading-none"
+                className="text-3xl font-semibold leading-none tracking-tight text-[#2c2217] dark:text-white"
                 style={{ fontFamily: "\"Playfair Display\", \"Cormorant Garamond\", Georgia, serif" }}
               >
                 WeCast
               </h4>
             </div>
-            <p className="body-sm mx-auto max-w-xs text-pretty text-black/75 dark:text-white/75 md:mx-0">
-              {t("footer.tagline")}
+            <p className="mx-auto mt-4 max-w-[35ch] text-sm leading-6 text-[#3f3428]/80 dark:text-[#b8b8c7] md:mx-0">
+              Turn your ideas into polished podcast episodes with voice, script, and preview in one flow.
             </p>
-          </div>
+            <p className="mt-3 text-sm font-semibold text-purple-700 dark:text-purple-300">
+              Built for creators. Powered by AI.
+            </p>
+          </section>
 
-          <div className="min-w-0 text-center md:px-8 md:text-start lg:px-16">
-            <h5 className="heading-md mb-4 leading-none">{t("footer.quickLinks")}</h5>
-            <ul className="space-y-3 text-base font-medium text-black/88 dark:text-white/88">
-              <li>
-                <button
-                  onClick={scrollToTop}
-                  className="group inline-flex items-center gap-3 hover:opacity-80 transition cursor-pointer"
-                >
-                  <span className="h-2.5 w-2.5 rounded-full bg-[#ef4444] group-hover:scale-125 transition-transform" />
-                  <span>{t("footer.home")}</span>
-                </button>
-              </li>
-              <li>
-                <a href="#/episodes" className="group inline-flex items-center gap-3 hover:opacity-80 transition">
-                  <span className="h-2.5 w-2.5 rounded-full bg-[#22c55e] group-hover:scale-125 transition-transform" />
-                  <span>{t("episodes.sidebar.library")}</span>
-                </a>
-              </li>
-              <li>
-                <a
-                  href="#about"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    navigateToSection("#about");
-                  }}
-                  className="group inline-flex items-center gap-3 hover:opacity-80 transition cursor-pointer"
-                >
-                  <span className="h-2.5 w-2.5 rounded-full bg-[#3b82f6] group-hover:scale-125 transition-transform" />
-                  <span>{t("footer.about")}</span>
-                </a>
-              </li>
-              <li>
-                <a href="#/create" className="group inline-flex items-center gap-3 hover:opacity-80 transition">
-                  <span className="h-2.5 w-2.5 rounded-full bg-[#f59e0b] group-hover:scale-125 transition-transform" />
-                  <span>{t("footer.create")}</span>
-                </a>
-              </li>
+          <section className="min-w-0 lg:col-span-7">
+            <h5 className="text-base font-semibold text-[#2c2217] dark:text-white">{t("footer.quickLinks")}</h5>
+            <ul className="mt-4 flex min-w-0 flex-wrap items-center justify-center gap-x-7 gap-y-3 md:justify-start">
+              {quickLinks.map((item) => (
+                <li key={item.label} className="min-w-0">
+                  {item.type === "button" ? (
+                    <button
+                      onClick={item.onClick}
+                      className="group inline-flex min-h-10 items-center gap-2.5 text-sm font-medium text-[#2f2419]/90 transition hover:text-purple-700 dark:text-[#e6e6f0] dark:hover:text-purple-300"
+                    >
+                      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${item.color}`} />
+                      <span className="whitespace-nowrap">{item.label}</span>
+                    </button>
+                  ) : (
+                    <a
+                      href={item.href}
+                      onClick={item.onClick}
+                      className="group inline-flex min-h-10 items-center gap-2.5 text-sm font-medium text-[#2f2419]/90 transition hover:text-purple-700 dark:text-[#e6e6f0] dark:hover:text-purple-300"
+                    >
+                      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${item.color}`} />
+                      <span className="whitespace-nowrap">{item.label}</span>
+                    </a>
+                  )}
+                </li>
+              ))}
             </ul>
-          </div>
+          </section>
 
-          <div className="min-w-0 text-center md:px-8 md:text-start lg:px-16">
-            <h5 className="heading-md mb-4 leading-none">{t("footer.followPodcast")}</h5>
-            <div className="mb-6 flex flex-wrap items-center justify-center gap-2.5 md:justify-start">
-              <a className="h-10 w-10 rounded-full bg-[#fbbc05] inline-flex items-center justify-center text-sm font-black text-black hover:scale-105 transition-transform" href="#" aria-label="Google Podcasts">G</a>
-              <a className="h-10 w-10 rounded-full bg-[#a84ad9] inline-flex items-center justify-center text-sm font-black text-white hover:scale-105 transition-transform" href="#" aria-label="Apple Podcasts">P</a>
-              <a className="h-10 w-10 rounded-full bg-[#1db954] inline-flex items-center justify-center text-sm font-black text-white hover:scale-105 transition-transform" href="#" aria-label="Spotify">S</a>
-              <a className="h-10 w-10 rounded-full bg-[#f9d94a] inline-flex items-center justify-center text-sm font-black text-black hover:scale-105 transition-transform" href="#" aria-label="Headphones">H</a>
-              <a className="h-10 w-10 rounded-full bg-[#e83e8c] inline-flex items-center justify-center text-sm font-black text-white hover:scale-105 transition-transform" href="#" aria-label="Anchor">A</a>
-            </div>
-          </div>
+          <section className="min-w-0 lg:col-span-12">
+            <h5 className="text-base font-semibold text-[#2c2217] dark:text-white">Follow Us</h5>
+            <ul className="mt-4 flex min-w-0 flex-wrap items-center justify-center gap-3.5 md:justify-start">
+              {socialLinks.map(({ label, href, icon: Icon }) => (
+                <li key={label}>
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label={label}
+                    title={label}
+                    className="inline-flex h-10 w-10 items-center justify-center text-[#3f3428]/85 transition hover:text-purple-700 dark:text-[#b8b8c7] dark:hover:text-purple-300"
+                  >
+                    <Icon className="h-5 w-5" aria-hidden="true" />
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </section>
         </div>
 
-        <div className="mt-8">
-          <div className="mx-auto h-px w-[94%] bg-black/20 dark:bg-white/20" />
-          <p className="mt-3 text-center text-sm text-black/60 dark:text-white/60">
-            © {new Date().getFullYear()} WeCast - {t("footer.rights")}
+        <div className="mt-9">
+          <div className="mx-auto h-px w-full max-w-[94%] bg-black/20 dark:bg-gradient-to-r dark:from-transparent dark:via-white/20 dark:to-transparent" />
+          <p className="mt-4 text-center text-sm text-black/60 dark:text-[#9d9dad]">
+            © 2026 WeCast. All rights reserved.
           </p>
         </div>
       </div>
