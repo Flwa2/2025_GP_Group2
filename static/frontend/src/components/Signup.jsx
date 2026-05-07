@@ -38,36 +38,127 @@ function normalizeEmail(value) {
     return String(value || "").trim().toLowerCase();
 }
 
-function mapSignupError(error) {
-    const code = error?.code || "";
+function normalizeUsername(value) {
+    return String(value || "").trim();
+}
 
-    if (code === "auth/email-already-in-use") {
-        return "An account already exists with this email. Try logging in instead.";
+function looksLikeEmail(value) {
+    return /\S+@\S+\.\S+/.test(String(value || "").trim());
+}
+
+function buildApiError(data, fallbackMessage) {
+    const error = new Error(
+        data?.message || data?.error || fallbackMessage
+    );
+    error.code = data?.code || "";
+    error.data = data || {};
+    return error;
+}
+
+const PASSWORD_RULE_MESSAGE =
+    "Password must be at least 8 characters and include one uppercase letter, one number, and one special symbol.";
+
+const EMPTY_FIELD_ERRORS = {
+    username: "",
+    email: "",
+    password: "",
+    confirmPassword: "",
+};
+
+function mapSignupError(error) {
+    const code = String(error?.code || "").trim().toLowerCase();
+
+    if (code === "username_required" || code === "invalid_username") {
+        return {
+            field: "username",
+            message: "Username is required.",
+        };
     }
-    if (code === "auth/invalid-email") {
-        return "Enter a valid email address you can access, then try again.";
+    if (code === "username_taken") {
+        return {
+            field: "username",
+            message: "This username is already taken.",
+        };
     }
-    if (code === "auth/weak-password") {
-        return "Choose a stronger password with at least 8 characters.";
+    if (code === "email_required" || code === "auth/missing-email") {
+        return {
+            field: "email",
+            message: "Email is required.",
+        };
+    }
+    if (code === "email_already_exists" || code === "auth/email-already-in-use") {
+        return {
+            field: "email",
+            message: "This email is already registered.",
+        };
+    }
+    if (code === "invalid_email" || code === "auth/invalid-email") {
+        return {
+            field: "email",
+            message: "Please enter a valid email address.",
+        };
+    }
+    if (code === "password_required") {
+        return {
+            field: "password",
+            message: "Password is required.",
+        };
+    }
+    if (code === "confirm_password_required") {
+        return {
+            field: "confirmPassword",
+            message: "Confirm password is required.",
+        };
+    }
+    if (code === "weak_password" || code === "auth/weak-password") {
+        return {
+            field: "password",
+            message: PASSWORD_RULE_MESSAGE,
+        };
+    }
+    if (code === "password_mismatch") {
+        return {
+            field: "confirmPassword",
+            message: "Passwords do not match.",
+        };
     }
     if (code === "auth/operation-not-allowed") {
-        return "Email/password signup is disabled in Firebase. Enable Firebase Authentication > Sign-in method > Email/Password, then try again.";
+        return {
+            field: "",
+            message: "Email/password signup is disabled in Firebase. Enable Firebase Authentication > Sign-in method > Email/Password, then try again.",
+        };
     }
     if (code === "auth/unauthorized-domain") {
-        return "This app URL is not approved in Firebase Authentication yet. Add this domain in Firebase Authentication > Settings > Authorized domains, then try again.";
+        return {
+            field: "",
+            message: "This app URL is not approved in Firebase Authentication yet. Add this domain in Firebase Authentication > Settings > Authorized domains, then try again.",
+        };
     }
     if (code === "auth/app-not-authorized" || code === "auth/invalid-api-key") {
-        return "Firebase Authentication is not configured correctly for this web app yet. Check the Firebase web app settings and env vars, then try again.";
+        return {
+            field: "",
+            message: "Firebase Authentication is not configured correctly for this web app yet. Check the Firebase web app settings and env vars, then try again.",
+        };
     }
     if (code === "auth/too-many-requests") {
-        return "Too many signup attempts were made in a short time. Wait a moment, then try again.";
+        return {
+            field: "",
+            message: "Too many signup attempts were made in a short time. Wait a moment, then try again.",
+        };
     }
 
     if (code === "auth/network-request-failed") {
-        return "We couldn't reach the signup service. Check your connection and try again.";
+        return {
+            field: "",
+            message: "We couldn't reach the signup service. Check your connection and try again.",
+        };
     }
 
-    return error?.message || "We couldn't create your account right now. Please try again.";
+    return {
+        field: "",
+        message:
+            error?.message || "We couldn't create your account right now. Please try again.",
+    };
 }
 
 function mapVerificationSendError(error) {
@@ -78,6 +169,7 @@ function mapVerificationSendError(error) {
 export default function Signup() {
     const { t } = useTranslation();
     const [form, setForm] = useState({ username: "", email: "", password: "", confirmPassword: "" });
+    const [fieldErrors, setFieldErrors] = useState(EMPTY_FIELD_ERRORS);
     const [error, setError] = useState("");
     const [info, setInfo] = useState("");
     const [loading, setLoading] = useState(false);
@@ -104,6 +196,7 @@ export default function Signup() {
             } catch (err) {
                 if (!cancelled) {
                     console.error("SOCIAL REDIRECT SIGNUP ERROR:", err);
+                    setFieldErrors(EMPTY_FIELD_ERRORS);
                     setError(err.message || "Social signup failed. Please try again.");
                 }
             } finally {
@@ -142,7 +235,26 @@ const strengthLabels = [
 
 const pwLabel = strengthLabels[passwordScore];
 
-    const syncFirebaseSignup = async ({ idToken, displayName }) => {
+    const checkUsernameAvailability = async (username) => {
+        const res = await fetch(`${API_BASE}/api/username-availability`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ username }),
+        });
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw buildApiError(
+                data,
+                "We couldn't validate that username right now. Please try again."
+            );
+        }
+
+        return data;
+    };
+
+    const syncFirebaseSignup = async ({ idToken, displayName, username }) => {
         const res = await fetch(`${API_BASE}/api/signup`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -150,13 +262,15 @@ const pwLabel = strengthLabels[passwordScore];
             body: JSON.stringify({
                 idToken,
                 name: displayName,
+                username,
             }),
         });
 
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-            throw new Error(
-                data?.error || "We couldn't finish setting up your WeCast account. Please try again."
+            throw buildApiError(
+                data,
+                "We couldn't finish setting up your WeCast account. Please try again."
             );
         }
 
@@ -179,11 +293,46 @@ const pwLabel = strengthLabels[passwordScore];
         return data;
     };
 
-    const onChange = (e) =>
+    const applyMappedSignupError = (sourceError) => {
+        const mapped = mapSignupError(sourceError);
+        setInfo("");
+
+        if (mapped.field) {
+            setError("");
+            setFieldErrors({
+                ...EMPTY_FIELD_ERRORS,
+                [mapped.field]: mapped.message,
+            });
+            return;
+        }
+
+        setFieldErrors(EMPTY_FIELD_ERRORS);
+        setError(mapped.message);
+    };
+
+    const onChange = (e) => {
+        const { name, value } = e.target;
+
         setForm((f) => ({
             ...f,
-            [e.target.name]: e.target.value,
+            [name]: value,
         }));
+        setError("");
+
+        setFieldErrors((current) => {
+            const next = { ...current };
+
+            if (next[name]) {
+                next[name] = "";
+            }
+
+            if (name === "password" && next.confirmPassword) {
+                next.confirmPassword = "";
+            }
+
+            return next;
+        });
+    };
 
     const onSubmit = async (e) => {
         e.preventDefault();
@@ -191,22 +340,58 @@ const pwLabel = strengthLabels[passwordScore];
         setInfo("");
         setVerificationEmail("");
         setVerificationStatus("sent");
+        setFieldErrors(EMPTY_FIELD_ERRORS);
 
+        const displayName = normalizeUsername(form.username);
+        const email = normalizeEmail(form.email);
         const password = form.password || "";
+        const confirmPassword = form.confirmPassword || "";
+        const nextFieldErrors = { ...EMPTY_FIELD_ERRORS };
+
+        if (!displayName) {
+            nextFieldErrors.username = "Username is required.";
+        }
+        if (!email) {
+            nextFieldErrors.email = "Email is required.";
+        }
+        if (!password) {
+            nextFieldErrors.password = "Password is required.";
+        }
+        if (!confirmPassword) {
+            nextFieldErrors.confirmPassword = "Confirm password is required.";
+        }
+
+        if (Object.values(nextFieldErrors).some(Boolean)) {
+            setFieldErrors(nextFieldErrors);
+            return;
+        }
+
         const hasMinLength = password.length >= 8;
         const hasUppercase = /[A-Z]/.test(password);
         const hasNumber = /\d/.test(password);
         const hasSpecial = /[^A-Za-z0-9]/.test(password);
 
-        if (!hasMinLength || !hasUppercase || !hasNumber || !hasSpecial) {
-            setError(
-                "Password must be at least 8 characters and include one uppercase letter, one number, and one special symbol."
-            );
+        if (!looksLikeEmail(email)) {
+            setFieldErrors({
+                ...EMPTY_FIELD_ERRORS,
+                email: "Please enter a valid email address.",
+            });
             return;
         }
 
-        if (form.password !== form.confirmPassword) {
-            setError("Passwords do not match.");
+        if (!hasMinLength || !hasUppercase || !hasNumber || !hasSpecial) {
+            setFieldErrors({
+                ...EMPTY_FIELD_ERRORS,
+                password: PASSWORD_RULE_MESSAGE,
+            });
+            return;
+        }
+
+        if (password !== confirmPassword) {
+            setFieldErrors({
+                ...EMPTY_FIELD_ERRORS,
+                confirmPassword: "Passwords do not match.",
+            });
             return;
         }
 
@@ -215,12 +400,11 @@ const pwLabel = strengthLabels[passwordScore];
         try {
             ensureFirebaseClientReady();
 
-            const email = normalizeEmail(form.email);
-            const displayName = form.username.trim();
+            await checkUsernameAvailability(displayName);
             const cred = await createUserWithEmailAndPassword(
                 auth,
                 email,
-                form.password
+                password
             );
 
             if (displayName) {
@@ -232,17 +416,14 @@ const pwLabel = strengthLabels[passwordScore];
                 await syncFirebaseSignup({
                     idToken,
                     displayName,
+                    username: displayName,
                 });
             } catch (syncError) {
                 console.error("SIGNUP PROFILE SYNC ERROR:", syncError);
                 await cred.user.delete().catch(async () => {
                     await auth.signOut().catch(() => {});
                 });
-                setError(
-                    syncError?.message ||
-                    "We couldn't finish setting up your WeCast account. Please try again."
-                );
-                return;
+                throw syncError;
             }
 
             try {
@@ -265,7 +446,7 @@ const pwLabel = strengthLabels[passwordScore];
             setForm({ username: "", email: "", password: "", confirmPassword: "" });
         } catch (err) {
             console.error("SIGNUP ERROR:", err);
-            setError(mapSignupError(err));
+            applyMappedSignupError(err);
         } finally {
             setLoading(false);
         }
@@ -273,6 +454,7 @@ const pwLabel = strengthLabels[passwordScore];
 
 
     const handleGoogleSignup = async () => {
+        setFieldErrors(EMPTY_FIELD_ERRORS);
         setError("");
         setLoading(true);
 
@@ -300,6 +482,7 @@ const pwLabel = strengthLabels[passwordScore];
     };
 
     const handleGithubSignup = async () => {
+        setFieldErrors(EMPTY_FIELD_ERRORS);
         setError("");
         setLoading(true);
 
@@ -325,7 +508,7 @@ const pwLabel = strengthLabels[passwordScore];
     };
 
     return (
-        <div className="relative min-h-screen flex items-center justify-center overflow-hidden bg-cream px-4 py-8 text-black dark:bg-[#0a0a1a] dark:text-white sm:px-6 sm:py-12">
+        <div className="relative flex min-h-screen min-w-0 items-center justify-center overflow-hidden bg-cream px-4 py-8 text-black dark:bg-[#0a0a1a] dark:text-white sm:px-6 sm:py-12">
             {/*Decorative Background (BlubSignup image)*/}
             <div
                 className="pointer-events-none absolute z-0 right-[-80px] bottom-[-30px] opacity-60 md:right-[40px] md:bottom-[20px] md:opacity-90"
@@ -373,7 +556,7 @@ const pwLabel = strengthLabels[passwordScore];
             </div>
 
             {/*Signup Card*/}
-            <div className="ui-card relative z-10 w-full max-w-md p-5 backdrop-blur sm:p-8">
+            <div className="ui-card relative z-10 w-full min-w-0 max-w-md p-5 backdrop-blur sm:p-8">
                 <div className="mb-8 text-center">
                     <h1 className="text-3xl font-extrabold text-black-medium dark:text-purple-400 sm:text-[2rem]">
                         {t("signup.title")}
@@ -428,7 +611,7 @@ const pwLabel = strengthLabels[passwordScore];
                         </div>
                     </div>
                 ) : (
-                <form onSubmit={onSubmit} className="space-y-5">
+                <form onSubmit={onSubmit} noValidate className="space-y-5">
                     <div>
                         <label className="form-label">{t("signup.username")}</label>
                         <input
@@ -440,6 +623,11 @@ const pwLabel = strengthLabels[passwordScore];
                             required
                             className="form-input"
                         />
+                        {fieldErrors.username && (
+                            <p className="mt-2 text-start text-sm font-medium text-red-600" dir="auto">
+                                {fieldErrors.username}
+                            </p>
+                        )}
                     </div>
 
                     <div>
@@ -453,6 +641,11 @@ const pwLabel = strengthLabels[passwordScore];
                             required
                             className="form-input"
                         />
+                        {fieldErrors.email && (
+                            <p className="mt-2 text-start text-sm font-medium text-red-600" dir="auto">
+                                {fieldErrors.email}
+                            </p>
+                        )}
                     </div>
 
                    <div>
@@ -489,6 +682,11 @@ const pwLabel = strengthLabels[passwordScore];
              {t("PasswordStrength.StrengthLabel")}: {pwLabel}
         </p>
     </div>
+    {fieldErrors.password && (
+        <p className="mt-2 text-start text-sm font-medium text-red-600" dir="auto">
+            {fieldErrors.password}
+        </p>
+    )}
 </div>
 
                     <div>
@@ -504,6 +702,11 @@ const pwLabel = strengthLabels[passwordScore];
                                 className="form-input"
                             />
                         </div>
+                        {fieldErrors.confirmPassword && (
+                            <p className="mt-2 text-start text-sm font-medium text-red-600" dir="auto">
+                                {fieldErrors.confirmPassword}
+                            </p>
+                        )}
                     </div>
 
                     {error && (

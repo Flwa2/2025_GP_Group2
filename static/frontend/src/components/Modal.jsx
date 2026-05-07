@@ -3,6 +3,7 @@ import React, { useEffect } from "react";
 export default function Modal({ open, title, onClose, children, footer, isRTL }) {
   useEffect(() => {
     if (!open) return;
+    if (typeof document === "undefined" || !document.body) return;
 
     const onKeyDown = (e) => {
       if (e.key === "Escape") onClose?.();
@@ -22,7 +23,7 @@ export default function Modal({ open, title, onClose, children, footer, isRTL })
 
   return (
     <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      className="wecast-overlay flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       onMouseDown={onClose}

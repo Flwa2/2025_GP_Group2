@@ -1,5 +1,6 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import {
     Mic2,
@@ -109,14 +110,32 @@ const STYLE_LIMITS = {
     Conversational: [2, 3],
 };
 
+const readSessionJson = (key, fallback = {}) => {
+    try {
+        return JSON.parse(sessionStorage.getItem(key) || JSON.stringify(fallback));
+    } catch {
+        return fallback;
+    }
+};
+
+const readStoredPodcastId = () => {
+    const editData = readSessionJson("editData");
+    return String(editData?.podcastId || "").trim();
+};
+
+const getPortalTarget = () => {
+    if (typeof document === "undefined") return null;
+    return document.body && document.body.nodeType === 1 ? document.body : null;
+};
+
 
 /* -------------------- overlay: rotating logo -------------------- */
 function LoadingOverlay({ show, logoSrc = "/logo.png", title, subtitle, logoAlt = "WeCast logo" }) {
     if (!show) return null;
     const safeTitle = String(title || "").replace(/[?؟]/g, "");
-    return (
+    const overlay = (
         <div
-            className="fixed inset-0 z-[9999] grid place-items-center bg-black/70 backdrop-blur-sm"
+            className="wecast-overlay grid place-items-center bg-black/70 backdrop-blur-sm"
             role="dialog"
             aria-modal="true"
         >
@@ -143,6 +162,8 @@ function LoadingOverlay({ show, logoSrc = "/logo.png", title, subtitle, logoAlt 
             <style>{`@keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}`}</style>
         </div>
     );
+    const portalTarget = getPortalTarget();
+    return portalTarget ? createPortal(overlay, portalTarget) : overlay;
 }
 
 /* -------------------- tiny toast -------------------- */
@@ -150,7 +171,15 @@ function Toast({ toast, onClose, closeLabel = "Close" }) {
   if (!toast) return null;
   if (!shouldShowEditingNotifications() && toast.type !== "error") return null;
 
-  return (
+  const fallbackMessage = "Something went wrong. Please try again.";
+  const rawMessage = toast?.message;
+  const safeMessage = typeof rawMessage === "string"
+    ? rawMessage
+    : typeof rawMessage === "number" || typeof rawMessage === "boolean"
+      ? String(rawMessage)
+      : fallbackMessage;
+
+  const toastNode = (
     <div className="fixed top-4 right-4 z-[9998]">
       <div
         className={`rounded-xl px-4 py-3 shadow-lg border ${
@@ -161,7 +190,7 @@ function Toast({ toast, onClose, closeLabel = "Close" }) {
       >
         <div className="flex items-start gap-2">
           <Info className="w-4 h-4 mt-0.5" />
-          <div className="text-sm font-medium">{toast.message}</div>
+          <div className="text-sm font-medium">{safeMessage}</div>
 
           <button
             type="button"
@@ -175,6 +204,8 @@ function Toast({ toast, onClose, closeLabel = "Close" }) {
       </div>
     </div>
   );
+  const portalTarget = getPortalTarget();
+  return portalTarget ? createPortal(toastNode, portalTarget) : toastNode;
 }
 
 
@@ -204,6 +235,7 @@ export default function CreatePro() {
 
     const [generatedAudio, setGeneratedAudio] = useState(null);
     const [generatingAudio, setGeneratingAudio] = useState(false);
+    const [currentPodcastId, setCurrentPodcastId] = useState(readStoredPodcastId);
     const [generatedScript, setGeneratedScript] = useState(null);
     const [showTitle, setShowTitle] = useState("");
     const [scriptTemplate, setScriptTemplate] = useState("");
@@ -518,13 +550,25 @@ const getFilteredVoicesForSpeaker = (speakerIndex) => {
 
     // restore title and template when page reloads or user comes back
     useEffect(() => {
-        let editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
+        let editData = readSessionJson("editData");
 
         if (editData.showTitle) {
             setShowTitle(editData.showTitle);
         }
         if (editData.scriptTemplate) {
             setScriptTemplate(editData.scriptTemplate);
+        }
+        if (editData.scriptStyle) {
+            setScriptStyle(editData.scriptStyle);
+        }
+        if (editData.speakersCount) {
+            setSpeakersCount(Number(editData.speakersCount));
+        }
+        if (Array.isArray(editData.speakers) && editData.speakers.length) {
+            setSpeakers(editData.speakers);
+        }
+        if (editData.description) {
+            setDescription(String(editData.description));
         }
     }, [t]);
 
@@ -606,12 +650,14 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
             const urlParams = new URLSearchParams(window.location.search);
             const stepParam = urlParams.get("step");
             const forceStep = sessionStorage.getItem("forceStep");
-            const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
+            const editData = readSessionJson("editData");
             const saved = sessionStorage.getItem("currentStep");
 
-            if (editData.fromEdit && (editData.generatedScript || editData.scriptTemplate)) {
-                const template =
-                    editData.scriptTemplate || editData.generatedScript || "";
+            if (editData.fromEdit && (editData.currentScript || editData.generatedScript || editData.scriptTemplate)) {
+                const directScript =
+                    String(editData.currentScript || "").trim() ||
+                    String(editData.generatedScript || "").trim();
+                const template = directScript ? "" : (editData.scriptTemplate || "");
 
                 const titleFromStorage =
                     (editData.showTitle || "").trim() ||
@@ -619,9 +665,9 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
                     t("create.defaults.podcastShow");
 
 
-                const rendered = template.includes("{{SHOW_TITLE}}")
+                const rendered = directScript || (template.includes("{{SHOW_TITLE}}")
                     ? template.replaceAll("{{SHOW_TITLE}}", titleFromStorage)
-                    : template;
+                    : template);
 
                 setGeneratedScript(rendered);
                 setScriptTemplate(template);
@@ -642,6 +688,24 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
                 return;
             }
 
+            const storedScript =
+                String(editData.currentScript || "").trim() ||
+                String(editData.generatedScript || "").trim();
+            const targetStep = Number.parseInt(forceStep || stepParam || saved || "", 10);
+            if (storedScript && Number.isFinite(targetStep) && targetStep >= 4) {
+                setGeneratedScript(storedScript);
+                setScriptTemplate("");
+                const titleFromStorage =
+                    (editData.showTitle || "").trim() ||
+                    (editData.episodeTitle || "").trim() ||
+                    t("create.defaults.podcastShow");
+                setShowTitle(titleFromStorage);
+                setEpisodeTitle(titleFromStorage);
+                setScriptStyle(editData.scriptStyle || "");
+                setSpeakersCount(editData.speakersCount || 0);
+                setSpeakers(editData.speakers || []);
+                setDescription(editData.description || "");
+            }
 
             if (forceStep) {
                 const nextStep = Number.parseInt(forceStep, 10);
@@ -669,13 +733,14 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
     useEffect(() => {
         const handleHashChange = () => {
             const hash = window.location.hash;
-            const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
+            const editData = readSessionJson("editData");
 
             if (hash === '#/edit' && generatedScript) {
                 setStep(4);
             } else if (hash === '#/create') {
-                if (editData.fromEdit && editData.generatedScript) {
-                    setGeneratedScript(editData.generatedScript);
+                if (editData.fromEdit && (editData.currentScript || editData.generatedScript)) {
+                    const editedScript = editData.currentScript || editData.generatedScript;
+                    setGeneratedScript(editedScript);
                     setScriptStyle(editData.scriptStyle || "");
                     setSpeakersCount(editData.speakersCount || 0);
                     setSpeakers(editData.speakers || []);
@@ -690,9 +755,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
                     }
 
 
-                    if (editData.scriptTemplate) {
-                        setScriptTemplate(editData.scriptTemplate);
-                    }
+                    setScriptTemplate("");
                     if (titleFromStorage) {
                         setShowTitle(titleFromStorage);
                         setEpisodeTitle(titleFromStorage);
@@ -1004,6 +1067,17 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
             setTimeout(() => setToast(null), 2600);
             return;
         }
+        const count = Number(speakersCount) || defaultCount(scriptStyle);
+        const editData = {
+            ...readSessionJson("editData"),
+            scriptStyle,
+            speakersCount: count,
+            speakers,
+            description,
+        };
+        sessionStorage.setItem("editData", JSON.stringify(editData));
+        sessionStorage.setItem("currentStep", "2");
+        setSpeakersCount(count);
         setErrors({});
         setStep(2);
         setToast({ type: "success", message: t("create.toasts.styleSelected") });
@@ -1024,6 +1098,15 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
 
         setErrors(errs);
         if (Object.keys(errs).length === 0) {
+            const editData = {
+                ...readSessionJson("editData"),
+                scriptStyle,
+                speakersCount,
+                speakers,
+                description,
+            };
+            sessionStorage.setItem("editData", JSON.stringify(editData));
+            sessionStorage.setItem("currentStep", "3");
             setStep(3);
             setToast({ type: "success", message: t("create.toasts.speakersSet") });
             setTimeout(() => setToast(null), 2400);
@@ -1069,6 +1152,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
                 return;
             }
             const podcastId = data.podcastId;
+            setCurrentPodcastId(podcastId || "");
             const template = data.script;
 
             const backendTitle =
@@ -1120,7 +1204,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
 
         // 🔽 ADD THIS BLOCK HERE
         let editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
-        let podcastId = editData.podcastId;
+        let podcastId = editData.podcastId || currentPodcastId;
         const scriptLanguage = editData.language || resolveContentLanguage(generatedScript || description);
 
         if (!podcastId) {
@@ -1133,6 +1217,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
                     if (draft && draft.podcastId) {
                         podcastId = draft.podcastId;
                         editData = { ...editData, podcastId };
+                        setCurrentPodcastId(podcastId);
                         sessionStorage.setItem("editData", JSON.stringify(editData));
                     }
                 }
@@ -1183,11 +1268,27 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
             audioKey: data.audioKey || "",
             words: data.words || [],
             title: audioTitle,
+            episodeTitle: audioTitle,
+            podcastTitle: audioTitle,
+            showTitle: showTitle || episodeTitle || audioTitle,
+            generatedTitle: showTitle || episodeTitle || audioTitle,
             language: scriptLanguage,
             category,
+            script: generatedScript,
+            description,
+            style: scriptStyle,
+            speakers,
             };
+            console.debug("[WeCast guest restore] title before login", {
+                title: previewPayload.title,
+                episodeTitle: previewPayload.episodeTitle,
+                podcastTitle: previewPayload.podcastTitle,
+                showTitle: previewPayload.showTitle,
+                generatedTitle: previewPayload.generatedTitle,
+            });
             sessionStorage.setItem("wecast_preview", JSON.stringify(previewPayload));
 
+            setCurrentPodcastId(podcastId);
             setGeneratedAudio(baseAudioUrl);
 
             setToast({
@@ -1220,9 +1321,11 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
         }
 
         const editData = {
+            podcastId: currentPodcastId || readStoredPodcastId(),
             scriptStyle,
             speakersCount,
             speakers,
+            currentScript: generatedScript,
             generatedScript,
             description,
             scriptTemplate,
@@ -1231,12 +1334,13 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
         };
 
         sessionStorage.setItem("editData", JSON.stringify(editData));
+        sessionStorage.setItem("currentStep", "4");
         window.location.hash = "#/edit";
     };
 
     const navigateToFinalize = () => {
         const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
-        const podcastId = editData.podcastId;
+        const podcastId = editData.podcastId || currentPodcastId;
 
         if (!podcastId) {
             setToast({
@@ -1566,6 +1670,14 @@ const exportScript = async (format = "pdf") => {
                     {step === 2 && (
                         <section className={studioCardClass}>
                             <h2 className="ui-card-title flex items-center gap-2 justify-center"><Users className="w-4 h-4" /> {t("create.sections.speakers")}</h2>
+                            {!scriptStyle && (
+                                <div className="mt-5 rounded-xl border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-400/30 dark:bg-amber-500/10 dark:text-amber-100">
+                                    <div className="flex items-start gap-2">
+                                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                                        <p>{t("create.errors.chooseStyle")}</p>
+                                    </div>
+                                </div>
+                            )}
                             {scriptStyle && (
                                 <div className="flex items-center gap-2 flex-wrap mt-3 justify-center">
                                     {allowedCounts.map((n) => (
@@ -1689,7 +1801,7 @@ const exportScript = async (format = "pdf") => {
                                                                     }));
                                                                 }}
                                                                 dir={isRTL ? "rtl" : "ltr"}
-                                                                className={`form-input select-input [color-scheme:light] dark:[color-scheme:dark] ${isRTL ? "text-right" : "text-left"} ${isHostLocked ? "opacity-70 cursor-not-allowed" : ""}`}
+                                                                className={`form-input select-input [color-scheme:light] dark:[color-scheme:dark] text-start ${isHostLocked ? "opacity-70 cursor-not-allowed" : ""}`}
                                                                 style={{
                                                                     backgroundPosition: isRTL ? "left 0.75rem center" : "right 1rem center",
                                                                     paddingLeft: isRTL ? "2.25rem" : undefined,
@@ -1997,7 +2109,7 @@ const exportScript = async (format = "pdf") => {
                                                                     <select
                                                                         dir={isRTL ? "rtl" : "ltr"}
                                                                         disabled={isHostLocked}
-                                                                        className={`form-input select-input flex-1 [color-scheme:light] dark:[color-scheme:dark] ${isRTL ? "text-right" : "text-left"} ${isHostLocked ? "opacity-70 cursor-not-allowed" : ""}`}
+                                                                        className={`form-input select-input flex-1 [color-scheme:light] dark:[color-scheme:dark] text-start ${isHostLocked ? "opacity-70 cursor-not-allowed" : ""}`}
                                                                         style={{
                                                                             backgroundPosition: isRTL ? "left 0.75rem center" : "right 1rem center",
                                                                             paddingLeft: isRTL ? "2.25rem" : undefined,
@@ -2130,7 +2242,7 @@ const exportScript = async (format = "pdf") => {
                                 onChange={(e) => setDescription(e.target.value)}
                                 placeholder={t("create.step3.textPlaceholder", { min: MIN, max: MAX })}
                                 dir={isArabicText(description) || isRTL ? "rtl" : "ltr"}
-                                className={`form-textarea mt-3 ${isArabicText(description) || isRTL ? "text-right" : "text-left"}`}
+                                className={`form-textarea mt-3 text-start`}
                                 rows={8}
                             />
 
@@ -2281,29 +2393,30 @@ const exportScript = async (format = "pdf") => {
                             </div>
 
                             {/* Action Buttons */}
-                            <div className="flex justify-between items-center">
+                            <div className="grid grid-cols-1 items-stretch gap-3 min-[430px]:grid-cols-3 md:flex md:items-center md:justify-between">
                                 <button
                                     onClick={() => {
                                         // go back to text step and allow regeneration
                                         setStep(3);
                                     }}
-                                    className="px-4 py-2 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                    className="inline-flex h-11 w-full min-w-0 items-center justify-center rounded-xl border border-neutral-300 px-3 py-2 text-center text-sm font-semibold leading-tight transition hover:bg-black/5 dark:border-neutral-700 dark:hover:bg-white/5 md:h-auto md:w-auto md:px-4 md:text-base md:font-normal"
                                 >
-                                    {t("create.common.backToText")}
+                                    <span className="min-w-0 truncate">{t("create.common.backToText")}</span>
                                 </button>
 
-                                <div className="flex gap-3">
+                                <div className="contents md:flex md:gap-3">
                                     <button
                                         onClick={navigateToEdit}
-                                        className="px-4 py-2 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                        className="inline-flex h-11 w-full min-w-0 items-center justify-center rounded-xl border border-purple-500 px-3 py-2 text-center text-sm font-semibold leading-tight text-purple-600 transition hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20 md:h-auto md:w-auto md:px-4 md:text-base md:font-normal"
                                     >
-                                        {t("create.step4.editInEditor")}
+                                        <span className="min-w-0 truncate">{t("create.step4.editInEditor")}</span>
                                     </button>
                                     <button
                                         onClick={() => setStep(5)}
-                                        className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
+                                        className="btn-cta inline-flex h-11 w-full min-w-0 items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-center text-sm font-semibold leading-tight md:h-auto md:w-auto md:gap-2 md:px-7 md:py-3 md:text-base"
                                     >
-                                        {t("create.common.continueToMusic")} <ChevronRight className={`w-4 h-4 ${isRTL ? "rotate-180" : ""}`} />
+                                        <span className="min-w-0 truncate">{t("create.common.continueToMusic")}</span>
+                                        <ChevronRight className={`h-4 w-4 shrink-0 ${isRTL ? "rotate-180" : ""}`} />
                                     </button>
                                 </div>
                             </div>
@@ -2536,108 +2649,107 @@ const exportScript = async (format = "pdf") => {
 
                     {/* STEP 6: AUDIO */}
                     {step === 6 && (
-                        <section className={studioCardClass}>
+                        <section className={`${studioCardClass} w-full max-w-full overflow-hidden p-4 sm:p-6`}>
                             <h2 className="ui-card-title flex items-center gap-2 justify-center"><Mic2 className="w-4 h-4" /> {t("create.step6.generateAudioTitle")}</h2>
 
                             {!generatedAudio ? (
                                 // Audio generation section
-                                <div className="text-center space-y-6">
-                                    <div className="bg-purple-50 dark:bg-purple-900/20 rounded-2xl p-6 border border-purple-200 dark:border-purple-800">
-                                        <h3 className="text-xl font-bold text-purple-700 dark:text-purple-300 mb-3">{t("create.step6.readyTitle")}</h3>
-                                        <p className="text-black/70 dark:text-white/70 mb-4">
+                                <div className="space-y-5 text-center sm:space-y-6">
+                                    <div className="w-full max-w-full rounded-xl border border-purple-200 bg-purple-50 p-4 dark:border-purple-800 dark:bg-purple-900/20 sm:rounded-2xl sm:p-6">
+                                        <h3 className="mb-2 text-lg font-bold leading-tight text-purple-700 dark:text-purple-300 sm:mb-3 sm:text-xl">{t("create.step6.readyTitle")}</h3>
+                                        <p className="mb-4 text-sm leading-6 text-black/70 dark:text-white/70 sm:text-base">
                                             {t("create.step6.readySubtitle")}
                                         </p>
 
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 text-left">
-                                            <div>
+                                        <div className="grid grid-cols-1 gap-3 text-start sm:gap-4 md:grid-cols-2">
+                                            <div className="min-w-0 text-sm leading-6 [overflow-wrap:anywhere] sm:text-base">
                                                 <h4 className="font-semibold mb-2">{t("create.step6.detailsTitle")}</h4>
                                                 <p><strong>{t("create.step6.detailsStyle")}:</strong> {styleLabelMap[scriptStyle] || scriptStyle}</p>
                                                 <p><strong>{t("create.step6.detailsSpeakers")}:</strong> {speakersCount}</p>
-                                                <p><strong>{t("create.step6.detailsWords")}:</strong> {generatedScript.split(/\s+/).filter(Boolean).length}</p>
+                                                <p><strong>{t("create.step6.detailsWords")}:</strong> {(generatedScript || "").split(/\s+/).filter(Boolean).length}</p>
                                             </div>
                                         </div>
                                     </div>
 
-                                    <div className="flex gap-4 justify-center flex-wrap">
+                                    <div className="flex w-full flex-wrap justify-center gap-2 sm:gap-4">
                                         <button
                                             onClick={() => setStep(5)}
-                                            className="px-6 py-3 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                            className="min-h-10 flex-1 basis-[6.5rem] rounded-xl border border-neutral-300 px-2.5 py-2 text-sm font-semibold transition hover:bg-black/5 dark:border-neutral-700 dark:hover:bg-white/5 sm:flex-none sm:basis-auto sm:px-6 sm:py-3 sm:text-base sm:font-normal"
                                         >
                                             {t("create.common.back")}
                                         </button>
                                         <button
-                                            onClick={handleGenerateAudio}
-                                            disabled={generatingAudio}
-                                            className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold disabled:opacity-50"
+                                            onClick={navigateToEdit}
+                                            className="min-h-10 flex-1 basis-[6.5rem] rounded-xl border border-purple-500 px-2.5 py-2 text-sm font-semibold text-purple-600 transition hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20 sm:flex-none sm:basis-auto sm:px-6 sm:py-3 sm:text-base sm:font-normal"
                                         >
-                                            {generatingAudio ? t("create.common.generatingAudio") : <>{t("create.common.generateAudio")} <Play className="w-4 h-4" /></>}
+                                            {t("create.step6.editScript")}
                                         </button>
                                         <button
-                                            onClick={navigateToEdit}
-                                            className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                            onClick={handleGenerateAudio}
+                                            disabled={generatingAudio}
+                                            className="btn-cta inline-flex min-h-10 flex-1 basis-[6.5rem] items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-sm font-semibold disabled:opacity-50 sm:flex-none sm:basis-auto sm:gap-2 sm:px-7 sm:py-3 sm:text-base"
                                         >
-                                            {t("create.step6.editScriptFirst")}
+                                            {generatingAudio ? t("create.common.generatingAudio") : <>{t("create.common.generateAudio")} <Play className="w-4 h-4" /></>}
                                         </button>
                                     </div>
                                 </div>
                             ) : (
                                 // Audio playback section
                                 <div className="space-y-6">
-                                    <div className="bg-green-50 dark:bg-green-900/20 rounded-2xl p-6 border border-green-200 dark:border-green-800">
-                                        <h3 className="text-xl font-bold text-green-700 dark:text-green-300 mb-4 flex items-center gap-2 justify-center">
-                                            <Check className="w-5 h-5" /> {t("create.step6.audioGeneratedTitle")}
+                                    <div
+                                        className="rounded-2xl border border-purple-200/90 bg-gradient-to-br from-white via-purple-50/50 to-white p-4 shadow-md shadow-purple-500/[0.08] ring-1 ring-purple-500/[0.06] sm:p-6
+                                        dark:border-purple-400/25 dark:bg-gradient-to-br dark:from-[#211333] dark:via-[#15101f] dark:to-[#1b1228] dark:shadow-[0_18px_42px_rgba(88,28,135,0.24)] dark:ring-purple-400/15"
+                                    >
+                                        <h3 className="mb-1 flex items-center justify-center gap-2 text-center text-lg font-bold leading-snug text-neutral-900 sm:mb-2 sm:text-xl dark:text-purple-100">
+                                            <Check className="h-5 w-5 shrink-0 text-purple-medium dark:text-purple-300" strokeWidth={2.5} aria-hidden />
+                                            {t("create.step6.audioGeneratedTitle")}
                                         </h3>
 
                                         {/* Audio Player */}
-                                        <div className="mt-6">
+                                        <div className="mt-4 sm:mt-5">
                                             <WeCastAudioPlayer
+                                                variant="createSuccess"
                                                 src={generatedAudio}
                                                 title={audioTitle}
+                                                downloadUrl={
+                                                  currentPodcastId
+                                                    ? `${API_BASE}/api/audio/${encodeURIComponent(currentPodcastId)}/download`
+                                                    : ""
+                                                }
                                             />
                                         </div>
 
                                         {/* Additional Actions */}
-                                        <div className="mt-6 flex gap-4 justify-center flex-wrap">
+                                        <div className="mt-5 grid w-full grid-cols-1 gap-3 sm:mt-6 sm:grid-cols-3 sm:gap-3">
                                             <button
+                                                type="button"
                                                 onClick={() => setStep(4)}
-                                                className="px-6 py-3 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
+                                                className="inline-flex h-11 min-h-[2.75rem] w-full items-center justify-center rounded-xl border border-neutral-200 bg-white px-3 text-sm font-semibold text-neutral-800 shadow-sm transition hover:border-neutral-300 hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/30 dark:border-purple-300/30 dark:bg-white/5 dark:text-purple-100 dark:shadow-none dark:hover:bg-purple-500/12"
                                             >
-                                                {t("create.common.backToScript")}
+                                                {t("create.common.back")}
                                             </button>
                                             <button
-                                                onClick={handleGenerateAudio}
-                                                disabled={generatingAudio}
-                                                className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
-                                            >
-                                                {t("create.step6.regenerateAudio")}
-                                            </button>
-                                            <button
+                                                type="button"
                                                 onClick={() => {
         let editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
-        let podcastId = editData.podcastId;
+        let podcastId = editData.podcastId || currentPodcastId;
+                                                const isLoggedIn = Boolean(localStorage.getItem("token") || sessionStorage.getItem("token"));
                                                 const previewSource = isFromStudioEntry ? "studio_create" : "create";
                                                 sessionStorage.setItem("preview_from", previewSource);
-                                                window.location.hash = podcastId ? `#/preview?id=${podcastId}&from=${previewSource}` : `#/preview?from=${previewSource}`;
+                                                window.location.hash = isLoggedIn && podcastId ? `#/preview?id=${podcastId}&from=${previewSource}` : `#/preview?from=${previewSource}`;
                                                 }}
-
-                                                className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
+                                                className="inline-flex h-11 min-h-[2.75rem] w-full items-center justify-center rounded-xl border border-purple-200 bg-purple-50/80 px-3 text-sm font-semibold text-purple-800 shadow-sm transition hover:border-purple-300 hover:bg-purple-100/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/35 dark:border-purple-300/35 dark:bg-purple-500/10 dark:text-purple-100 dark:shadow-none dark:hover:bg-purple-500/18"
                                             >
-                                                {t("create.step6.openEpisode")}
-                                            </button>
-
-                                            <button
-                                                onClick={navigateToEdit}
-                                                className="px-6 py-3 border border-purple-500 text-purple-600 dark:text-purple-400 rounded-xl hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
-                                            >
-                                                {t("create.step6.editScript")}
+                                                {t("create.step6.previewEpisode")}
                                             </button>
                                             <button
+                                                type="button"
                                                 onClick={navigateToFinalize}
-                                                className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
+                                                className="inline-flex h-11 min-h-[2.75rem] w-full items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-purple-600 via-purple-medium to-purple-700 px-3 text-sm font-semibold text-white shadow-md shadow-purple-500/25 transition hover:brightness-[1.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400/50 active:brightness-[0.98] dark:from-purple-500 dark:via-purple-600 dark:to-purple-700 dark:shadow-purple-900/40"
                                             >
-                                                Finalize & Publish <ChevronRight className={`w-4 h-4 ${isRTL ? "rotate-180" : ""}`} />
+                                                {t("create.step6.episodeCover")}{" "}
+                                                <ChevronRight className={`h-4 w-4 shrink-0 ${isRTL ? "rotate-180" : ""}`} aria-hidden />
                                             </button>
-
                                         </div>
                                     </div>
                                 </div>
@@ -2660,7 +2772,7 @@ const exportScript = async (format = "pdf") => {
                     logoAlt={t("create.common.logoAlt")}
                 />
                 {showSampleReplaceModal && (
-                    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                    <div className="wecast-overlay flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
                         <div className="w-[min(92vw,460px)] rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-2xl p-6">
                             <h2 className="text-lg font-bold text-black dark:text-white mb-2">
                                 Replace Existing Text?
@@ -2700,4 +2812,3 @@ const exportScript = async (format = "pdf") => {
         </div >
     );
 }
-

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, Mic2, Download, ChevronDown } from "lucide-react";
+import { createPortal } from "react-dom";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
 
@@ -7,12 +8,104 @@ const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
   : "http://localhost:5000";
 
+const getPortalTarget = () => {
+  if (typeof document === "undefined") return null;
+  return document.body && document.body.nodeType === 1 ? document.body : null;
+};
+
+function readEditData() {
+  try {
+    return JSON.parse(sessionStorage.getItem("editData") || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function authHeaders() {
+  const token = localStorage.getItem("token") || sessionStorage.getItem("token");
+  if (!token) return {};
+  return { Authorization: `Bearer ${token}` };
+}
+
+/** Persists script + title to Firestore edit draft when we have a podcast id (create / episodes flow). */
+async function syncEditScriptDraftToServer(content, showTitle) {
+  const editData = readEditData();
+  const podcastId = String(editData.podcastId || "").trim();
+  if (!podcastId) {
+    return { ok: true, localOnly: true };
+  }
+
+  const title =
+    String(showTitle || "").trim() ||
+    String(editData.showTitle || editData.episodeTitle || "").trim() ||
+    "Podcast Show";
+
+  const r = await fetch(
+    `${API_BASE}/api/podcast/${encodeURIComponent(podcastId)}/update`,
+    {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(),
+      },
+      body: JSON.stringify({
+        mode: "draft",
+        script: content,
+        showTitle: title,
+        speakers: Array.isArray(editData.speakers) ? editData.speakers : [],
+        introMusic: editData.introMusic || "",
+        bodyMusic: editData.bodyMusic || "",
+        outroMusic: editData.outroMusic || "",
+        category: editData.category || "",
+        description: editData.description || "",
+        scriptStyle: editData.scriptStyle || "",
+      }),
+    }
+  );
+
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    return {
+      ok: false,
+      error: data.error || `Save failed (${r.status})`,
+    };
+  }
+  return { ok: true, localOnly: false };
+}
+
+function resolveEditorDraft(source = {}) {
+  const show =
+    String(source.showTitle || "").trim() ||
+    String(source.episodeTitle || "").trim() ||
+    String(source.title || "").trim() ||
+    "Podcast Show";
+
+  const directScript =
+    String(source.currentScript || "").trim() ||
+    String(source.generatedScript || "").trim() ||
+    String(source.scriptText || "").trim() ||
+    String(source.editedScript || "").trim();
+
+  const template =
+    String(source.scriptTemplate || "").trim() ||
+    String(source.script || "").trim();
+
+  const content = directScript || (
+    template.includes("{{SHOW_TITLE}}")
+      ? template.replaceAll("{{SHOW_TITLE}}", show)
+      : template
+  );
+
+  return { content, show, template: directScript ? "" : template };
+}
+
 /* -------------------- overlay: rotating logo -------------------- */
 function LoadingOverlay({ show, logoSrc = "/logo.png" }) {
   if (!show) return null;
-  return (
+  const overlay = (
     <div
-      className="fixed inset-0 z-[9999] grid place-items-center bg-black/70 backdrop-blur-sm"
+      className="wecast-overlay grid place-items-center bg-black/70 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
     >
@@ -42,6 +135,8 @@ function LoadingOverlay({ show, logoSrc = "/logo.png" }) {
       </style>
     </div>
   );
+  const portalTarget = getPortalTarget();
+  return portalTarget ? createPortal(overlay, portalTarget) : overlay;
 }
 
 /* -------------------- stepper components -------------------- */
@@ -54,17 +149,17 @@ function StepDot({ n, label, active = false, done = false }) {
     state === "done" ? "text-neutral-500 dark:text-neutral-400" :
       "text-black/60 dark:text-white/60";
   return (
-    <div className="flex items-center gap-3">
-      <div className={`w-8 h-8 rounded-full grid place-items-center text-sm font-bold ${dot}`}>
+    <div className="flex min-w-0 shrink-0 items-center gap-1.5 sm:gap-3" title={label} aria-label={`Step ${n}: ${label}`}>
+      <div className={`grid h-6 w-6 place-items-center rounded-full text-[11px] font-bold sm:h-8 sm:w-8 sm:text-sm ${active ? "ring-2 ring-purple-300/70 ring-offset-1 ring-offset-white dark:ring-offset-neutral-950" : ""} ${dot}`}>
         {n}
       </div>
-      <div className={`text-sm font-semibold ${labelCls}`}>{label}</div>
+      <div className={`hidden text-sm font-semibold sm:block ${labelCls}`}>{label}</div>
     </div>
   );
 }
 
 const StepLine = ({ on }) => (
-  <div className={`h-[3px] flex-1 rounded-full ${on ? "bg-gradient-to-r from-purple-600 to-pink-500" : "bg-black/10 dark:bg-white/10"}`} />
+  <div className={`h-0.5 min-w-0 flex-1 rounded-full sm:h-[3px] ${on ? "bg-gradient-to-r from-purple-600 to-pink-500" : "bg-black/10 dark:bg-white/10"}`} />
 );
 
 export default function EditScript() {
@@ -90,9 +185,10 @@ export default function EditScript() {
 
   const lastValidRef = useRef("");
   const textareaRef = useRef(null);
+  const titleInputRef = useRef(null);
 
   useEffect(() => {
-    const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
+    const editData = readEditData();
     if (editData.scriptStyle) {
       setScriptStyle(editData.scriptStyle);
     }
@@ -164,9 +260,6 @@ export default function EditScript() {
     }
   };
 
-  const displayedScript = scriptTemplate
-    ? scriptTemplate.replaceAll("{{SHOW_TITLE}}", showTitle || "Podcast Show")
-    : script;
   const handleScriptChange = (e) => {
     const next = e.target.value;
     const prev = script;
@@ -216,6 +309,7 @@ export default function EditScript() {
   };
 
   const cancelEditTitle = () => {
+    setDraftTitle(showTitle || "Podcast Show");
     setIsEditingTitle(false);
   };
 
@@ -240,6 +334,25 @@ export default function EditScript() {
   };
 
   useEffect(() => {
+    if (!isEditingTitle) return;
+    const frame = requestAnimationFrame(() => {
+      titleInputRef.current?.focus();
+      titleInputRef.current?.select();
+      if (titleInputRef.current) {
+        titleInputRef.current.style.height = "auto";
+        titleInputRef.current.style.height = `${titleInputRef.current.scrollHeight}px`;
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [isEditingTitle]);
+
+  useEffect(() => {
+    if (!isEditingTitle || !titleInputRef.current) return;
+    titleInputRef.current.style.height = "auto";
+    titleInputRef.current.style.height = `${titleInputRef.current.scrollHeight}px`;
+  }, [draftTitle, isEditingTitle]);
+
+  useEffect(() => {
     if (!showTitle) return;
     setTitleJustUpdated(true);
     const t = setTimeout(() => setTitleJustUpdated(false), 900);
@@ -247,6 +360,25 @@ export default function EditScript() {
   }, [showTitle]);
 
   useEffect(() => {
+    const loadFromSource = (source) => {
+      const { content, show, template } = resolveEditorDraft(source);
+      if (!content.trim()) return false;
+
+      setScriptTemplate(template);
+      setShowTitle(show);
+      setScript(content);
+      setLastSavedScript(content);
+      setLastSavedTitle(show);
+      lastValidRef.current = content;
+      return true;
+    };
+
+    const fromCreate = readEditData();
+    if (loadFromSource(fromCreate)) {
+      setLoadingDraft(false);
+      return;
+    }
+
     const guestDraft = sessionStorage.getItem("guestEditDraft") || "";
     if (guestDraft.trim()) {
       const initial = guestDraft.trim();
@@ -259,39 +391,8 @@ export default function EditScript() {
       return;
 
     }
-
     if (!isAuthenticated()) {
-      const fromCreate = JSON.parse(sessionStorage.getItem("editData") || "{}");
-
-      const template = (fromCreate.scriptTemplate || "").trim();
-
-      let show =
-        (fromCreate.showTitle || "").trim() ||
-        (fromCreate.episodeTitle || "").trim();
-
-      if (!show) {
-        show = "Podcast Show";
-      }
-
-      if (template) {
-        const visible = template.replaceAll("{{SHOW_TITLE}}", show || "Podcast Show");
-        setScriptTemplate(template);
-        setShowTitle(show || "Podcast Show");
-        setScript(visible);
-        setLastSavedScript(visible);
-        setLastSavedTitle(show || "Podcast Show"); // Track saved title
-        lastValidRef.current = visible;
-      } else {
-        const initial = (fromCreate.generatedScript || "").trim() || "";
-        setScript(initial);
-        setLastSavedScript(initial);
-        setLastSavedTitle(show || "Podcast Show"); // Track saved title
-        lastValidRef.current = initial;
-        if (show) {
-          setShowTitle(show);
-        }
-      }
-
+      setShowTitle((prev) => prev || "Podcast Show");
       setLoadingDraft(false);
       return;
     }
@@ -299,28 +400,24 @@ export default function EditScript() {
     fetch(`${API_BASE}/api/draft`, { credentials: "include" })
       .then((r) => r.json())
       .then((d) => {
-        const template = (d.script || "").trim();
-        const show =
-          (d.show_title || "").trim() ||
-          (d.title || "").trim();
-
-        const visible = template
-          ? template.replaceAll("{{SHOW_TITLE}}", show || "Podcast Show")
-          : "";
-
-        setScriptTemplate(template);
-        setShowTitle(show || "Podcast Show");
-        setScript(visible);
-        setLastSavedScript(visible);
-        setLastSavedTitle(show || "Podcast Show"); // Track saved title
-        lastValidRef.current = visible || "";
+        if (!loadFromSource({ ...d, showTitle: d.show_title })) {
+          setShowTitle("Podcast Show");
+          setScript("");
+          setLastSavedScript("");
+          setLastSavedTitle("Podcast Show");
+          lastValidRef.current = "";
+        }
+      })
+      .catch(() => {
+        setShowTitle("Podcast Show");
+        setSaveMsg("No saved draft was found. Return to Review and try Edit in Editor again.");
       })
       .finally(() => setLoadingDraft(false));
 
   }, []);
 
   useEffect(() => {
-    const editData = JSON.parse(sessionStorage.getItem('editData') || '{}');
+    const editData = readEditData();
     sessionStorage.setItem('editScriptStyle', editData.scriptStyle || '');
     sessionStorage.setItem('editSpeakersCount', editData.speakersCount || '');
     sessionStorage.setItem('editSpeakers', JSON.stringify(editData.speakers || []));
@@ -413,6 +510,27 @@ export default function EditScript() {
     ta.selectionStart = ta.selectionEnd = offset;
   };
 
+  const persistEditorDraft = (content = script.trim()) => {
+    const editData = readEditData();
+    const resolvedTitle = showTitle || editData.showTitle || editData.episodeTitle || "Podcast Show";
+    const updatedEditData = {
+      ...editData,
+      currentScript: content,
+      generatedScript: content,
+      scriptText: content,
+      scriptTemplate: "",
+      showTitle: resolvedTitle,
+      episodeTitle: resolvedTitle,
+      fromEdit: true,
+      editedAt: new Date().toISOString(),
+    };
+
+    sessionStorage.setItem("editData", JSON.stringify(updatedEditData));
+    sessionStorage.setItem("forceStep", "4");
+    sessionStorage.setItem("currentStep", "4");
+    return updatedEditData;
+  };
+
   const save = async () => {
     const content = script.trim();
 
@@ -428,29 +546,34 @@ export default function EditScript() {
       return;
     }
 
+    persistEditorDraft(content);
+    setScriptTemplate("");
+    setLastSavedScript(content);
+    setLastSavedTitle(showTitle || "");
+
     if (!isAuthenticated()) {
       sessionStorage.setItem("guestEditDraft", content);
-      setSaveMsg("Sign up or log in to save your script.");
-      setShowAuthModal(true);
+      setSaveMsg("Saved locally for this episode flow.");
+      setToastMsg("Script saved in this draft.");
+      setTimeout(() => setToastMsg(""), 3000);
       return;
     }
 
     setSaving(true);
     setSaveMsg("Saving…");
     try {
-      const r = await fetch(`${API_BASE}/api/edit/save`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          edited_script: content,
-          show_title: showTitle || "",
-        }),
-      });
-      if (!r.ok) throw new Error();
+      const result = await syncEditScriptDraftToServer(content, showTitle || "");
+      if (!result.ok) {
+        setSaveMsg(result.error || "Failed to save.");
+        return;
+      }
+      if (result.localOnly) {
+        setSaveMsg("Saved locally for this episode flow.");
+        setToastMsg("Draft updated in this browser.");
+        setTimeout(() => setToastMsg(""), 3000);
+        return;
+      }
       setSaveMsg("Last saved: " + new Date().toLocaleTimeString());
-      setLastSavedScript(content);
-      setLastSavedTitle(showTitle || ""); // Save the current title
       setToastMsg("Script saved successfully!");
       setTimeout(() => setToastMsg(""), 3000);
     } catch {
@@ -481,17 +604,12 @@ export default function EditScript() {
     if (content) {
       setSaving(true);
       try {
-        await fetch(`${API_BASE}/api/edit/save`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            edited_script: content,
-            show_title: showTitle || "",
-          }),
-        });
+        const result = await syncEditScriptDraftToServer(content, showTitle || "");
+        if (!result.ok) {
+          console.error("Failed to save script:", result.error);
+        }
         setLastSavedScript(content);
-        setLastSavedTitle(showTitle || ""); // Save the current title
+        setLastSavedTitle(showTitle || "");
       } catch (error) {
         console.error("Failed to save script:", error);
       } finally {
@@ -499,18 +617,7 @@ export default function EditScript() {
       }
     }
 
-    const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
-    const updatedEditData = {
-      ...editData,
-      generatedScript: content,
-      scriptTemplate,
-      showTitle,
-      episodeTitle: showTitle,
-      fromEdit: true,
-    };
-
-    sessionStorage.setItem("editData", JSON.stringify(updatedEditData));
-    sessionStorage.setItem("forceStep", "4");
+    persistEditorDraft(content);
     window.location.hash = "#/create";
   };
 
@@ -530,8 +637,8 @@ export default function EditScript() {
     </p>
   </header>
 
-        <div className="w-full rounded-2xl bg-white/60 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-800 p-3 sm:p-4 mb-8 overflow-x-auto">
-          <div className="flex min-w-max items-center gap-2">
+        <div className="mb-8 w-full overflow-hidden rounded-2xl border border-neutral-200 bg-white/60 p-2.5 dark:border-neutral-800 dark:bg-neutral-900/60 sm:overflow-x-auto sm:p-4">
+          <div className="flex w-full min-w-0 items-center gap-1 sm:min-w-max sm:gap-2">
             <StepDot n={1} label="Choose Style" done />
             <StepLine on={true} />
 
@@ -580,27 +687,50 @@ export default function EditScript() {
 
           <div
             className={
-              `mt-8 mb-6 px-5 py-4 rounded-2xl border border-amber-200/70 ` +
-              `bg-gradient-to-r from-amber-50 via-amber-100 to-amber-50 ` +
-              `dark:from-neutral-800 dark:via-neutral-900 dark:to-neutral-800 ` +
-              `shadow-sm flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center transition-all ` +
+              `mt-8 mb-6 max-w-full rounded-2xl border border-purple-400/25 px-4 py-4 ` +
+              `bg-gradient-to-br from-[#211333] via-[#15101f] to-[#1b1228] ` +
+              `shadow-[0_14px_34px_rgba(88,28,135,0.22)] flex flex-wrap items-start justify-between gap-3 overflow-hidden ` +
+              `sm:px-5 sm:shadow-[0_18px_42px_rgba(88,28,135,0.24)] ` +
+              `sm:flex-row sm:items-center sm:gap-4 transition-all ` +
               `duration-300 ${titleJustUpdated
-                ? "ring-2 ring-purple-300/70 shadow-md"
+                ? "ring-2 ring-purple-400/45 shadow-[0_16px_38px_rgba(124,58,237,0.28)] sm:shadow-[0_20px_46px_rgba(124,58,237,0.30)]"
                 : "ring-0"
               }`
             }
           >
-            <div className="flex items-center gap-3">
-              <div className="h-9 w-9 rounded-full bg-white/80 dark:bg-neutral-700 flex items-center justify-center shadow-sm">
-                <Mic2 className="w-4 h-4 text-purple-600 dark:text-purple-300" />
+            <div className="flex min-w-0 flex-[1_1_18rem] items-start gap-3 sm:items-center">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-purple-300/25 bg-purple-500/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+                <Mic2 className="w-4 h-4 text-purple-200" />
               </div>
-              <div>
-                <p className="text-[11px] tracking-[0.18em] uppercase text-neutral-500 dark:text-neutral-400">
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] uppercase tracking-[0.18em] text-purple-200/75 sm:text-[11px]">
                   Podcast Title
                 </p>
-                <p className="mt-1 text-lg font-semibold text-neutral-900 dark:text-white">
-                  {showTitle || "Podcast Show"}
-                </p>
+                {isEditingTitle ? (
+                  <textarea
+                    ref={titleInputRef}
+                    value={draftTitle}
+                    rows={1}
+                    onChange={(e) => {
+                      setDraftTitle(e.target.value);
+                      e.currentTarget.style.height = "auto";
+                      e.currentTarget.style.height = `${e.currentTarget.scrollHeight}px`;
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        saveTitle();
+                      }
+                      if (e.key === "Escape") cancelEditTitle();
+                    }}
+                    className="mt-1 block w-full min-w-0 resize-none overflow-hidden border-0 border-b border-purple-300/45 bg-transparent px-0 pb-1 text-lg font-semibold leading-tight text-white caret-purple-200 outline-none transition focus:border-purple-200 focus:ring-0"
+                    aria-label="Podcast title"
+                  />
+                ) : (
+                  <p className="mt-1 max-w-full break-words text-lg font-semibold leading-tight text-white">
+                    {loadingDraft ? "Loading script..." : showTitle || "Podcast Show"}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -608,35 +738,23 @@ export default function EditScript() {
               <button
                 type="button"
                 onClick={startEditTitle}
-                className="text-xs px-3 py-1.5 rounded-full border border-neutral-300 dark:border-neutral-600 
-                        text-neutral-700 dark:text-neutral-100 
-                        hover:bg-neutral-900/5 dark:hover:bg-white/10 
-                        hover:border-purple-400 transition-all duration-200"
+                className="inline-flex shrink-0 items-center justify-center rounded-full border border-purple-300/35 bg-purple-500/10 px-3 py-1.5 text-xs font-semibold text-purple-100 transition-all duration-200 hover:border-purple-300/60 hover:bg-purple-500/18"
               >
                 Edit title
               </button>
             ) : (
-              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
-                <input
-                  type="text"
-                  value={draftTitle}
-                  onChange={(e) => setDraftTitle(e.target.value)}
-                  className="text-xs px-2 py-1 rounded-lg border border-neutral-300 dark:border-neutral-600 
-                          bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 w-44 
-                          focus:outline-none focus:ring-2 focus:ring-purple-400/70"
-                />
+              <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto sm:shrink-0 sm:flex-row sm:items-center sm:justify-end">
                 <button
                   type="button"
                   onClick={saveTitle}
-                  className="text-xs px-3 py-1.5 rounded-full bg-purple-600 text-white 
-                          hover:bg-purple-700 transition-colors duration-200"
+                  className="min-h-9 flex-1 rounded-full bg-purple-600 px-4 py-1.5 text-xs font-semibold text-white transition-colors duration-200 hover:bg-purple-700 sm:min-h-9 sm:flex-none sm:min-w-20"
                 >
                   Save
                 </button>
                 <button
                   type="button"
                   onClick={cancelEditTitle}
-                  className="text-xs px-2 py-1 text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-100"
+                  className="min-h-9 flex-1 rounded-full border border-purple-300/25 px-4 py-1.5 text-xs font-semibold text-purple-100 transition hover:bg-purple-500/12 sm:min-h-9 sm:flex-none sm:min-w-20"
                 >
                   Cancel
                 </button>
@@ -712,17 +830,7 @@ export default function EditScript() {
                 <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
                   <button
                     onClick={() => {
-                      const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
-                      const updatedEditData = {
-                        ...editData,
-                        generatedScript: script,
-                        scriptTemplate,
-                        showTitle,
-                        episodeTitle: showTitle,
-                        fromEdit: true,
-                      };
-                      sessionStorage.setItem("editData", JSON.stringify(updatedEditData));
-                      sessionStorage.setItem("forceStep", "4");
+                      persistEditorDraft(script.trim());
                       window.location.hash = "#/create";
                     }}
 
@@ -770,7 +878,7 @@ export default function EditScript() {
             )}
 
             {showAuthModal && (
-              <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+              <div className="wecast-overlay flex items-center justify-center bg-black/60 backdrop-blur-sm">
                 <div className="w-[min(92vw,460px)] rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-2xl p-6">
                   <h2 className="text-lg font-bold text-black dark:text-white mb-2">
                     Sign in to save your script

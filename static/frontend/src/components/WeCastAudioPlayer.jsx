@@ -4,8 +4,11 @@ import { Play, Pause, RotateCcw, RotateCw, Download } from "lucide-react";
 export default function WeCastAudioPlayer({
   src,
   title = "Generated Audio",
+  downloadUrl = "",
   onTimeUpdate,
   externalSeek, // NEW
+  /** Polished surface for create-flow success card (light + dark tuned). */
+  variant = "default",
 }) {
   const audioRef = useRef(null);
   const lastSeekRef = useRef(null); // NEW
@@ -18,6 +21,25 @@ export default function WeCastAudioPlayer({
   const [loadError, setLoadError] = useState(false);
 
   const SPEED_OPTIONS = [1, 1.25, 1.5, 2];
+
+  const getDownloadFileName = () => {
+    const base =
+      String(title || "Podcast Episode")
+        .trim()
+        .replace(/[^A-Za-z0-9._-]+/g, "-")
+        .replace(/^[-.]+|[-.]+$/g, "") || "wecast-audio";
+    return base.toLowerCase().endsWith(".mp3") ? base : `${base}.mp3`;
+  };
+
+  const triggerBrowserDownload = (url) => {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = getDownloadFileName();
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
 
   const formatTime = (sec) => {
     if (sec === 0) return "0:00";
@@ -110,21 +132,23 @@ export default function WeCastAudioPlayer({
   };
 
   const handleDownload = async () => {
-    if (!src) return;
+    const target = downloadUrl || src;
+    if (!target) return;
+
     try {
-      const res = await fetch(src, { credentials: "include" });
-      if (!res.ok) return;
+      const token = localStorage.getItem("token") || sessionStorage.getItem("token") || "";
+      const headers = downloadUrl && token ? { Authorization: `Bearer ${token}` } : {};
+      const res = await fetch(target, {
+        credentials: downloadUrl ? "include" : "omit",
+        headers,
+      });
+      if (!res.ok) throw new Error("Download request failed");
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = (title || "Podcast Episode") + ".mp3";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      triggerBrowserDownload(url);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (_err) {
-      void _err;
+      triggerBrowserDownload(target);
     }
   };
 
@@ -138,8 +162,23 @@ export default function WeCastAudioPlayer({
     lastSeekRef.current = null;
   }, [src]);
 
+  const shellClass =
+    variant === "createSuccess"
+      ? "flex w-full min-w-0 max-w-full flex-col gap-2.5 rounded-3xl border border-purple-100 bg-white px-3 py-3 shadow-sm shadow-purple-500/[0.07] ring-1 ring-purple-500/[0.04] dark:border-purple-500/25 dark:bg-neutral-900/70 dark:shadow-[0_12px_40px_rgba(0,0,0,0.35)] dark:ring-purple-400/10 sm:gap-3 sm:px-5 sm:py-4"
+      : "flex w-full min-w-0 max-w-full flex-col gap-2.5 rounded-3xl border border-purple-200/90 bg-white/55 px-3 py-3 backdrop-blur-md dark:border-purple-400/30 dark:bg-neutral-900/60 sm:gap-3 sm:px-5 sm:py-4";
+
+  const trackBg =
+    variant === "createSuccess"
+      ? "bg-purple-100/90 dark:bg-white/10"
+      : "bg-black/5 dark:bg-white/10";
+
+  const speedRailClass =
+    variant === "createSuccess"
+      ? "bg-purple-50 dark:bg-white/5"
+      : "bg-black/5 dark:bg-white/5";
+
   return (
-    <div className="w-full rounded-3xl border border-purple-200/90 dark:border-purple-400/30 bg-white/55 dark:bg-neutral-900/60 backdrop-blur-md px-5 py-4 flex flex-col gap-3">
+    <div className={shellClass}>
       <audio
         ref={audioRef}
         src={src}
@@ -168,28 +207,30 @@ export default function WeCastAudioPlayer({
         }}
       />
 
-      <div className="flex items-center gap-4">
+      <div className="flex min-w-0 w-full items-start gap-2 sm:items-center sm:gap-4">
         <button
           onClick={togglePlay}
           disabled={!src}
-          className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 text-white shadow-lg hover:shadow-xl hover:brightness-110 active:scale-95 transition"
+          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-purple-500 to-pink-500 text-white shadow-lg transition hover:brightness-110 hover:shadow-xl active:scale-95 sm:h-12 sm:w-12"
         >
           {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
         </button>
 
-        <div className="flex-1 flex items-center justify-between gap-3">
-          <div className="flex flex-col">
-            <span className="text-sm font-semibold text-black/80 dark:text-white">
+        <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+          <div className="min-w-0 flex flex-col">
+            <span className="line-clamp-2 text-sm font-semibold text-black/80 dark:text-white sm:line-clamp-none">
               {title}
             </span>
-            <span className="text-xs text-black/60 dark:text-white/60">
+            <span className="mt-0.5 shrink-0 text-xs tabular-nums text-black/60 dark:text-white/60">
               {formatTime(currentTime)} / {formatTime(duration)}
             </span>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1 rounded-full bg-black/5 dark:bg-white/5 px-2 py-1">
-              <span className="text-[0.7rem] uppercase tracking-wide text-black/50 dark:text-white/50 mr-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 sm:flex-nowrap sm:gap-3">
+            <div
+              className={`flex max-w-full flex-wrap items-center gap-0.5 rounded-full px-1.5 py-1 sm:gap-1 sm:px-2 ${speedRailClass}`}
+            >
+              <span className="px-0.5 text-[0.65rem] font-medium uppercase tracking-wide text-black/50 dark:text-white/50 sm:mr-1 sm:text-[0.7rem]">
                 Speed
               </span>
               {SPEED_OPTIONS.map((opt) => (
@@ -197,10 +238,10 @@ export default function WeCastAudioPlayer({
                   key={opt}
                   type="button"
                   onClick={() => applySpeed(opt)}
-                  className={`px-2 py-0.5 rounded-full text-[0.7rem] font-semibold border transition ${
+                  className={`rounded-full border px-1.5 py-0.5 text-[0.65rem] font-semibold transition sm:px-2 sm:text-[0.7rem] ${
                     speed === opt
-                      ? "bg-purple-600 text-white border-purple-600"
-                      : "bg-transparent text-black/70 dark:text-white/70 border-transparent hover:bg-black/10 dark:hover:bg-white/10"
+                      ? "border-purple-600 bg-purple-600 text-white"
+                      : "border-transparent bg-transparent text-black/70 hover:bg-black/10 dark:text-white/70 dark:hover:bg-white/10"
                   }`}
                 >
                   {opt}×
@@ -211,17 +252,18 @@ export default function WeCastAudioPlayer({
             <button
               type="button"
               onClick={handleDownload}
-              className="inline-flex items-center justify-center w-9 h-9 rounded-full border border-neutral-300 dark:border-neutral-700 text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 transition"
+              disabled={!src && !downloadUrl}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-neutral-300 text-black/70 transition hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:text-white/70 dark:hover:bg-white/10"
               title="Download audio"
             >
-              <Download className="w-4 h-4" />
+              <Download className="h-4 w-4" />
             </button>
           </div>
         </div>
       </div>
 
       <div
-        className="mt-1 h-2 w-full rounded-full bg-black/5 dark:bg-white/10 overflow-hidden cursor-pointer"
+        className={`mt-0.5 h-2 w-full min-w-0 max-w-full cursor-pointer overflow-hidden rounded-full sm:mt-1 ${trackBg}`}
         onClick={handleBarClick}
       >
         <div
@@ -230,21 +272,21 @@ export default function WeCastAudioPlayer({
         />
       </div>
 
-      <div className="flex items-center justify-center gap-4 mt-1">
+      <div className="mt-1.5 flex w-full min-w-0 flex-wrap items-center justify-center gap-2 sm:mt-1 sm:gap-4">
         <button
           type="button"
           onClick={() => skipSeconds(-10)}
-          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full border border-neutral-300 dark:border-neutral-700 text-xs font-medium text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 transition"
+          className="inline-flex min-w-0 items-center gap-1 rounded-full border border-neutral-300 px-2.5 py-1.5 text-xs font-medium text-black/70 transition hover:bg-black/5 dark:border-neutral-700 dark:text-white/70 dark:hover:bg-white/10 sm:px-3"
         >
-          <RotateCcw className="w-4 h-4" />
+          <RotateCcw className="h-4 w-4 shrink-0" />
           <span>-10s</span>
         </button>
         <button
           type="button"
           onClick={() => skipSeconds(10)}
-          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full border border-neutral-300 dark:border-neutral-700 text-xs font-medium text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 transition"
+          className="inline-flex min-w-0 items-center gap-1 rounded-full border border-neutral-300 px-2.5 py-1.5 text-xs font-medium text-black/70 transition hover:bg-black/5 dark:border-neutral-700 dark:text-white/70 dark:hover:bg-white/10 sm:px-3"
         >
-          <RotateCw className="w-4 h-4" />
+          <RotateCw className="h-4 w-4 shrink-0" />
           <span>+10s</span>
         </button>
       </div>

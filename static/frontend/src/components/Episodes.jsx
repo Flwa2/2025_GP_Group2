@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   BookOpenText,
   Check,
+  ChevronDown,
   ExternalLink,
   GraduationCap,
   LayoutDashboard,
@@ -13,6 +14,7 @@ import {
   Play,
   Plus,
   Search,
+  SlidersHorizontal,
   Trash2,
   Undo2,
   X,
@@ -22,6 +24,109 @@ import { useTranslation } from "react-i18next";
 const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
   : "http://localhost:5000";
+
+const EPISODES_CACHE_PREFIX = "wecast:episodesList:";
+const EPISODES_CACHE_TTL_MS = 5 * 60 * 1000;
+
+function episodesCacheKey(token) {
+  return `${EPISODES_CACHE_PREFIX}${token || ""}`;
+}
+
+function readEpisodesCache(token) {
+  if (!token) return null;
+  try {
+    const raw = sessionStorage.getItem(episodesCacheKey(token));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.t !== "number") return null;
+    if (Date.now() - parsed.t > EPISODES_CACHE_TTL_MS) return null;
+    return {
+      items: Array.isArray(parsed.items) ? parsed.items : [],
+      recycleBin: Array.isArray(parsed.recycleBin) ? parsed.recycleBin : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeEpisodesCache(token, items, recycleBin) {
+  if (!token) return;
+  try {
+    sessionStorage.setItem(
+      episodesCacheKey(token),
+      JSON.stringify({ t: Date.now(), items, recycleBin })
+    );
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function clearEpisodesCache(token) {
+  if (!token) return;
+  try {
+    sessionStorage.removeItem(episodesCacheKey(token));
+  } catch {
+    /* ignore */
+  }
+}
+
+function getStoredToken() {
+  try {
+    return localStorage.getItem("token") || sessionStorage.getItem("token") || "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeEpisodesPayload(data) {
+  return {
+    items: Array.isArray(data?.items) ? data.items : [],
+    recycleBin: Array.isArray(data?.recycleBin) ? data.recycleBin : [],
+  };
+}
+
+const episodesRequests = new Map();
+
+function requestEpisodes(token) {
+  if (!token) return null;
+  const existing = episodesRequests.get(token);
+  if (existing) return existing;
+
+  const request = fetch(`${API_BASE}/api/episodes`, {
+    headers: { Authorization: `Bearer ${token}` },
+    credentials: "include",
+  })
+    .then(async (res) => {
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        const error = new Error("Unauthorized");
+        error.status = 401;
+        throw error;
+      }
+      if (!res.ok) throw new Error(data?.error || "Failed to load episodes");
+      const next = normalizeEpisodesPayload(data);
+      writeEpisodesCache(token, next.items, next.recycleBin);
+      return next;
+    })
+    .finally(() => {
+      episodesRequests.delete(token);
+    });
+
+  episodesRequests.set(token, request);
+  return request;
+}
+
+function preloadEpisodes() {
+  const token = getStoredToken();
+  if (!token) return null;
+  const request = requestEpisodes(token);
+  request?.catch(() => {
+    /* handled when the Episodes route mounts */
+  });
+  return request;
+}
+
+preloadEpisodes();
 
 const STYLE_FILTER_ORDER = ["interview", "educational", "storytelling", "conversational"];
 
@@ -67,7 +172,7 @@ function EpisodeCover({ title, coverUrl, coverThumbB64 }) {
       <img
         src={resolvedCover}
         alt={`${title || "Episode"} cover`}
-        className="h-full w-full object-cover"
+        className="h-full w-full max-w-full object-cover"
         loading="lazy"
         onError={() => setImageFailed(true)}
       />
@@ -75,7 +180,7 @@ function EpisodeCover({ title, coverUrl, coverThumbB64 }) {
   }
 
   return (
-    <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-neutral-100 to-neutral-200 text-sm font-bold text-neutral-700 dark:from-neutral-800 dark:to-neutral-700 dark:text-neutral-100">
+    <div className="flex h-full w-full items-center justify-center rounded-lg bg-gradient-to-br from-neutral-100 to-neutral-200 text-sm font-bold text-neutral-700 dark:from-neutral-800 dark:to-neutral-700 dark:text-neutral-100">
       {initials || "EP"}
     </div>
   );
@@ -84,9 +189,11 @@ function EpisodeCover({ title, coverUrl, coverThumbB64 }) {
 export default function Episodes() {
   const { t, i18n } = useTranslation();
   const isRTL = i18n.language === "ar";
+  const token = getStoredToken();
+  const initialEpisodesCache = useMemo(() => readEpisodesCache(token), [token]);
   const [q, setQ] = useState("");
-  const [episodes, setEpisodes] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [episodes, setEpisodes] = useState(() => initialEpisodesCache?.items || []);
+  const [loading, setLoading] = useState(() => Boolean(token && !initialEpisodesCache));
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
   const [actionInfo, setActionInfo] = useState("");
@@ -98,18 +205,26 @@ export default function Episodes() {
   const [activeFilter, setActiveFilter] = useState("all");
   const [selectedEpisodeId, setSelectedEpisodeId] = useState("");
   const [pendingDeleteEpisode, setPendingDeleteEpisode] = useState(null);
-  const [recycleBin, setRecycleBin] = useState([]);
+  const [recycleBin, setRecycleBin] = useState(() => initialEpisodesCache?.recycleBin || []);
   const [isEmptyingBin, setIsEmptyingBin] = useState(false);
+  const [mobileLibraryOpen, setMobileLibraryOpen] = useState(false);
   const audioRef = useRef(null);
 
+  const closeMobileLibrary = () => {
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) {
+      setMobileLibraryOpen(false);
+    }
+  };
+
   const emptyBrief = t("episodes.briefFallback");
-  const token = localStorage.getItem("token") || sessionStorage.getItem("token") || "";
   const authHeaders = useMemo(
     () => (token ? { Authorization: `Bearer ${token}` } : {}),
     [token]
   );
 
   const handleUnauthorized = () => {
+    const prev = getStoredToken();
+    clearEpisodesCache(prev);
     localStorage.removeItem("token");
     sessionStorage.removeItem("token");
     window.dispatchEvent(new StorageEvent("storage", { key: "token", newValue: "" }));
@@ -118,35 +233,52 @@ export default function Episodes() {
 
   useEffect(() => {
     let isMounted = true;
-    const load = async () => {
-      try {
-        setLoading(true);
+    const cached = initialEpisodesCache;
+    if (cached) {
+      setEpisodes(cached.items);
+      setRecycleBin(cached.recycleBin);
+      setLoading(false);
+    } else if (token) {
+      setLoading(true);
+    } else {
+      setLoading(false);
+    }
+
+    if (!token) {
+      setEpisodes([]);
+      setRecycleBin([]);
+      setLoadError("");
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    if (!cached) setLoadError("");
+    const request = requestEpisodes(token);
+    request
+      ?.then((next) => {
+        if (!isMounted) return;
+        setEpisodes(next.items);
+        setRecycleBin(next.recycleBin);
         setLoadError("");
-        const res = await fetch(`${API_BASE}/api/episodes`, {
-          headers: authHeaders,
-          credentials: "include",
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.status === 401) {
+      })
+      .catch((error) => {
+        if (!isMounted) return;
+        if (error?.status === 401) {
           handleUnauthorized();
+          clearEpisodesCache(token);
           return;
         }
-        if (!res.ok) throw new Error(data?.error || "Failed to load episodes");
-        if (isMounted) {
-          setEpisodes(Array.isArray(data?.items) ? data.items : []);
-          setRecycleBin(Array.isArray(data?.recycleBin) ? data.recycleBin : []);
-        }
-      } catch {
-        if (isMounted) setLoadError(t("episodes.loadError"));
-      } finally {
+        if (!cached) setLoadError(t("episodes.loadError"));
+      })
+      .finally(() => {
         if (isMounted) setLoading(false);
-      }
-    };
-    load();
+      });
+
     return () => {
       isMounted = false;
     };
-  }, [t, token, authHeaders]);
+  }, [t, token, initialEpisodesCache]);
 
   useEffect(() => {
     return () => {
@@ -263,6 +395,7 @@ export default function Episodes() {
   };
 
   const startCreate = () => {
+    closeMobileLibrary();
     window.location.hash = "#/create?from=studio";
   };
 
@@ -306,7 +439,7 @@ export default function Episodes() {
   const renderProgress = (ep) => {
     if (activeAudioId !== ep?.id) return null;
     return (
-      <div className="mt-2">
+      <div className="mt-2 min-w-0 max-w-full overflow-hidden max-md:mt-1">
         <input
           type="range"
           min={0}
@@ -317,12 +450,12 @@ export default function Episodes() {
           onMouseDown={(e) => e.stopPropagation()}
           onTouchStart={(e) => e.stopPropagation()}
           onChange={(e) => handleSeekEpisode(ep, e.target.value)}
-          className="w-full accent-purple-600 cursor-pointer"
+          className="w-full max-w-full min-w-0 accent-purple-600 cursor-pointer"
           aria-label="Episode progress"
         />
-        <div className="mt-1 flex items-center justify-between text-xs text-black/55 dark:text-white/55">
-          <span>{formatClock(playbackTime)}</span>
-          <span>{t("episodes.timeLeft", { time: formatClock(remainingSec) })}</span>
+        <div className="mt-1 flex min-w-0 max-w-full items-center justify-between gap-2 text-xs text-black/55 dark:text-white/55 max-md:mt-0.5 max-md:gap-1 max-md:text-[10px]">
+          <span className="min-w-0 shrink-0 tabular-nums">{formatClock(playbackTime)}</span>
+          <span className="min-w-0 truncate text-end">{t("episodes.timeLeft", { time: formatClock(remainingSec) })}</span>
         </div>
       </div>
     );
@@ -364,9 +497,13 @@ export default function Episodes() {
           throw new Error(data?.error || "Failed to load audio");
         }
         src = resolveAudioUrl(data.url);
-        setEpisodes((prev) =>
-          prev.map((item) => (item.id === ep.id ? { ...item, audioUrl: data.url } : item))
-        );
+        setEpisodes((prev) => {
+          const next = prev.map((item) =>
+            item.id === ep.id ? { ...item, audioUrl: data.url } : item
+          );
+          writeEpisodesCache(token, next, recycleBin);
+          return next;
+        });
       } catch {
         setPlayerError(t("episodes.playError"));
         return;
@@ -447,8 +584,14 @@ export default function Episodes() {
         setPlaybackDuration(0);
       }
 
-      setEpisodes((prev) => prev.filter((item) => item.id !== id));
-      setRecycleBin((prev) => [{ ...episodePayload, deletedAt: data?.deletedAt || new Date().toISOString() }, ...prev.filter((x) => x.id !== id)]);
+      const nextEpisodes = episodes.filter((item) => item.id !== id);
+      const nextBin = [
+        { ...episodePayload, deletedAt: data?.deletedAt || new Date().toISOString() },
+        ...recycleBin.filter((x) => x.id !== id),
+      ];
+      setEpisodes(nextEpisodes);
+      setRecycleBin(nextBin);
+      writeEpisodesCache(token, nextEpisodes, nextBin);
       setActionInfo(t("episodes.recycle.moved", { title: episodePayload?.title || t("episodes.thisEpisode") }));
     } catch {
       setActionError(t("episodes.deleteError"));
@@ -474,8 +617,11 @@ export default function Episodes() {
       if (!res.ok) throw new Error(data?.error || "Failed to restore episode");
 
       const { deletedAt, deleteAfter, ...restoredEpisode } = target;
-      setRecycleBin((prev) => prev.filter((ep) => ep.id !== id));
-      setEpisodes((prev) => [restoredEpisode, ...prev]);
+      const nextBin = recycleBin.filter((ep) => ep.id !== id);
+      const nextEpisodes = [restoredEpisode, ...episodes];
+      setRecycleBin(nextBin);
+      setEpisodes(nextEpisodes);
+      writeEpisodesCache(token, nextEpisodes, nextBin);
       setActionInfo(t("episodes.recycle.restored", { title: target?.title || t("episodes.thisEpisode") }));
     } catch {
       setActionError(t("episodes.deleteError"));
@@ -499,7 +645,9 @@ export default function Episodes() {
         return;
       }
       if (!res.ok) throw new Error(data?.error || "Failed to delete episode");
-      setRecycleBin((prev) => prev.filter((x) => x.id !== id));
+      const nextBin = recycleBin.filter((x) => x.id !== id);
+      setRecycleBin(nextBin);
+      writeEpisodesCache(token, episodes, nextBin);
       setActionInfo(t("Episode deleted successfully", { title: ep?.title || t("episodes.thisEpisode") }));
     } catch {
       setActionError(t("episodes.deleteError"));
@@ -534,51 +682,88 @@ export default function Episodes() {
 
     if (failed.length) {
       setRecycleBin(failed);
+      writeEpisodesCache(token, episodes, failed);
       setActionError(t("episodes.recycle.emptyError", { count: failed.length }));
     } else {
       const removedCount = recycleBin.length;
       setRecycleBin([]);
+      writeEpisodesCache(token, episodes, []);
       setActionInfo(t("episodes.recycle.emptied", { count: removedCount }));
     }
     setIsEmptyingBin(false);
   };
 
   return (
-    <div className="relative h-full min-h-0 overflow-hidden bg-cream dark:bg-[#0a0a1a] text-black dark:text-white flex flex-col">
-      <main className="w-full flex-1 min-h-0 pt-0 pb-0">
-        <div className="mx-auto w-full h-full min-h-0 overflow-hidden border-b border-black/10 dark:border-white/10 bg-white/70 dark:bg-neutral-900/45 shadow-[0_10px_30px_rgba(0,0,0,0.08)] backdrop-blur-sm">
-          <div className="h-full min-h-0 md:flex md:items-stretch">
-            <aside className="border-b md:border-b-0 md:border-r border-black/10 dark:border-white/10 bg-white/45 dark:bg-neutral-950/30 backdrop-blur-sm p-4 sm:p-5 md:w-80 md:shrink-0 md:overflow-y-auto">
-              <div className="mb-4 rounded-2xl border border-white/60 dark:border-white/10 bg-white/55 dark:bg-neutral-900/60 backdrop-blur-md p-3 shadow-sm">
+    <div className="relative flex h-full min-h-0 min-w-0 flex-col overflow-x-clip overflow-y-hidden bg-cream text-black dark:bg-[#0a0a1a] dark:text-white">
+      <main className="min-h-0 min-w-0 w-full flex-1 pt-0 pb-0">
+        <div className="mx-auto h-full min-h-0 w-full min-w-0 max-w-full overflow-x-clip border-b border-black/10 bg-white/70 backdrop-blur-sm dark:border-white/10 dark:bg-neutral-900/45">
+          <div className="flex h-full min-h-0 w-full min-w-0 max-w-full flex-col md:flex-row md:items-stretch">
+            <div className="min-w-0 max-w-full shrink-0 border-b border-black/10 bg-white/55 px-4 py-2.5 backdrop-blur-sm dark:border-white/10 dark:bg-neutral-950/40 md:hidden">
+              <button
+                type="button"
+                id="episodes-library-toggle"
+                aria-expanded={mobileLibraryOpen}
+                aria-controls="episodes-library-aside"
+                onClick={() => setMobileLibraryOpen((open) => !open)}
+                className="flex w-full items-center justify-between gap-3 rounded-xl border border-black/10 bg-white/90 px-4 py-3.5 text-start text-sm font-semibold text-black shadow-sm transition hover:bg-white dark:border-white/15 dark:bg-neutral-900/90 dark:text-white dark:hover:bg-neutral-900"
+              >
+                <span className="inline-flex min-w-0 items-center gap-2">
+                  <SlidersHorizontal className="h-4 w-4 shrink-0" aria-hidden />
+                  <span className="min-w-0 truncate">
+                    {t("episodes.mobile.libraryPanel", "Filters & library")}
+                  </span>
+                </span>
+                <ChevronDown
+                  className={`h-5 w-5 shrink-0 transition-transform ${mobileLibraryOpen ? "rotate-180" : ""}`}
+                  aria-hidden
+                />
+              </button>
+            </div>
+
+            <aside
+              id="episodes-library-aside"
+              className={[
+                "min-w-0 max-w-full border-b border-black/10 bg-white/45 backdrop-blur-sm dark:border-white/10 dark:bg-neutral-950/30",
+                "p-4 pb-5 md:block md:w-80 md:shrink-0 md:overflow-y-auto md:overflow-x-hidden md:border-b-0 md:border-e md:max-h-none md:p-5 lg:p-6",
+                mobileLibraryOpen
+                  ? "max-md:block max-md:max-h-[min(70vh,520px)] max-md:overflow-y-auto"
+                  : "max-md:hidden",
+              ].join(" ")}
+            >
+              <div className="mb-4 min-w-0 max-w-full rounded-2xl border border-white/60 bg-white/55 p-3.5 shadow-sm backdrop-blur-md dark:border-white/10 dark:bg-neutral-900/60 md:mb-5 md:p-4">
                 <p className="text-[11px] uppercase tracking-[0.2em] text-black/55 dark:text-white/60">{t("episodes.sidebar.library")}</p>
-                <div className="mt-3 grid gap-2">
+                <div className="mt-3.5 grid min-w-0 gap-2 md:gap-2.5">
                   <button
                     type="button"
                     onClick={() => {
                       setActiveFilter("all");
                       setQ("");
+                      closeMobileLibrary();
                     }}
-                    className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold border transition ${
+                    className={`inline-flex min-w-0 max-w-full items-center gap-2 rounded-xl border px-3 py-2 text-start text-sm font-semibold transition ${
                       activeFilter === "all"
                         ? "bg-purple-100 text-purple-900 border-purple-300 dark:bg-purple-500/25 dark:text-purple-100 dark:border-purple-400/40"
                         : "bg-white/70 text-black/85 dark:bg-neutral-900/80 dark:text-white border-black/10 dark:border-white/10 hover:bg-white/90 dark:hover:bg-white/10"
                     }`}
                   >
-                    <LayoutDashboard className="h-4 w-4" />
-                    {t("episodes.sidebar.viewAll")}
+                    <LayoutDashboard className="h-4 w-4 shrink-0" />
+                    <span className="min-w-0 truncate">{t("episodes.sidebar.viewAll")}</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => setActiveFilter("deleted")}
-                    className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold border transition ${
+                    onClick={() => {
+                      setActiveFilter("deleted");
+                      closeMobileLibrary();
+                    }}
+                    className={`inline-flex min-w-0 max-w-full items-center gap-2 rounded-xl border px-3 py-2 text-start text-sm font-semibold transition ${
                       activeFilter === "deleted"
                         ? "bg-purple-100 text-purple-900 border-purple-300 dark:bg-purple-500/25 dark:text-purple-100 dark:border-purple-400/40"
                         : "bg-white/70 text-black/85 dark:bg-neutral-900/80 dark:text-white border-black/10 dark:border-white/10 hover:bg-white/90 dark:hover:bg-white/10"
                     }`}
                   >
-                    <Trash2 className="h-4 w-4" />
-                    {t("episodes.sidebar.recycleBin")}
-                    <span className="ml-1 inline-flex min-w-5 items-center justify-center rounded-full border border-current/20 px-1.5 text-[11px] leading-5">
+                    <Trash2 className="h-4 w-4 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate">{t("episodes.sidebar.recycleBin")}</span>
+                    <span className="ms-1 inline-flex min-w-5 shrink-0 items-center justify-center rounded-full border border-current/20 px-1.5 text-[11px] leading-5">
                       {recycleBin.length}
                     </span>
                   </button>
@@ -587,7 +772,7 @@ export default function Episodes() {
                     <p className="mb-2 text-[11px] uppercase tracking-[0.16em] text-black/50 dark:text-white/55">
                       {t("create.step4.style")}
                     </p>
-                    <div className="grid gap-2">
+                    <div className="grid min-w-0 gap-2">
                       {styleFilters.map((styleItem) => {
                         const filterKey = `style:${styleItem.key}`;
                         const StyleIcon = STYLE_ICON_BY_KEY[styleItem.key] || List;
@@ -595,18 +780,21 @@ export default function Episodes() {
                           <button
                             key={styleItem.key}
                             type="button"
-                            onClick={() => setActiveFilter(filterKey)}
-                            className={`inline-flex items-center justify-between gap-2 rounded-xl px-3 py-2 text-sm font-semibold border transition ${
+                            onClick={() => {
+                              setActiveFilter(filterKey);
+                              closeMobileLibrary();
+                            }}
+                            className={`inline-flex min-w-0 max-w-full items-center justify-between gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
                               activeFilter === filterKey
                                 ? "bg-purple-100 text-purple-900 border-purple-300 dark:bg-purple-500/25 dark:text-purple-100 dark:border-purple-400/40"
                                 : "bg-white/70 text-black/85 dark:bg-neutral-900/80 dark:text-white border-black/10 dark:border-white/10 hover:bg-white/90 dark:hover:bg-white/10"
                             }`}
                           >
-                            <span className="inline-flex items-center gap-2">
-                              <StyleIcon className="h-4 w-4" />
-                              {styleItem.label}
+                            <span className="inline-flex min-w-0 flex-1 items-center gap-2">
+                              <StyleIcon className="h-4 w-4 shrink-0" />
+                              <span className="min-w-0 truncate">{styleItem.label}</span>
                             </span>
-                            <span className="inline-flex min-w-5 items-center justify-center rounded-full border border-current/20 px-1.5 text-[11px] leading-5">
+                            <span className="inline-flex min-w-5 shrink-0 items-center justify-center rounded-full border border-current/20 px-1.5 text-[11px] leading-5">
                               {styleItem.count}
                             </span>
                           </button>
@@ -617,16 +805,16 @@ export default function Episodes() {
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-white/60 dark:border-white/10 bg-white/55 dark:bg-neutral-900/60 backdrop-blur-md p-3 shadow-sm">
+              <div className="min-w-0 max-w-full rounded-2xl border border-white/60 bg-white/55 p-3.5 shadow-sm backdrop-blur-md dark:border-white/10 dark:bg-neutral-900/60 md:p-4">
                 <p className="text-[11px] uppercase tracking-[0.2em] text-black/55 dark:text-white/60">{t("episodes.sidebar.actions")}</p>
-                <div className="mt-3 grid gap-2">
+                <div className="mt-3.5 grid min-w-0 gap-2 md:gap-2.5">
                   <button
                     type="button"
                     onClick={startCreate}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-black text-white dark:bg-white dark:text-black px-4 py-2 text-sm font-semibold hover:opacity-95"
+                    className="inline-flex min-w-0 max-w-full items-center justify-center gap-2 rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white hover:opacity-95 dark:bg-white dark:text-black"
                   >
-                    <Plus className="h-4 w-4" />
-                    {t("episodes.sidebar.createNew")}
+                    <Plus className="h-4 w-4 shrink-0" />
+                    <span className="min-w-0 truncate">{t("episodes.sidebar.createNew")}</span>
                   </button>
             
                 </div>
@@ -634,42 +822,47 @@ export default function Episodes() {
 
             </aside>
 
-            <section dir={isRTL ? "rtl" : "ltr"} className="min-w-0 flex-1 bg-white/35 dark:bg-neutral-900/20 p-4 sm:p-6 lg:p-7 md:flex md:min-h-0 md:flex-col md:overflow-hidden">
-              <div className={`flex flex-wrap items-center justify-between gap-3 ${isRTL ? "text-right" : ""}`}>
-                <div>
-                  <div className={`flex items-center gap-3 ${isRTL ? "flex-row-reverse" : ""}`}>
-                    <h1 className="heading-md text-black dark:text-white">{t("episodes.pageTitle")}</h1>
-                    <div className="relative h-6 w-6 shrink-0" aria-hidden="true">
-                      <span className="absolute inset-0 rounded-full border border-purple-400/70 dark:border-purple-300/60 animate-spin-slow" />
-                      <span className="absolute left-1.5 top-1.5 h-3 w-3 rounded-full bg-gradient-to-br from-pink-400 to-purple-500 animate-pulse" />
-                      <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-yellow-400 animate-bounce" />
-                    </div>
+            <section
+              dir={isRTL ? "rtl" : "ltr"}
+              className="flex min-h-0 w-full min-w-0 max-w-full flex-1 flex-col overflow-y-auto overflow-x-clip bg-white/35 px-4 py-4 dark:bg-neutral-900/20 md:min-h-0 md:overflow-hidden md:px-6 md:py-6 lg:px-7 lg:py-7"
+            >
+              <div className="grid w-full min-w-0 max-w-full grid-cols-[minmax(0,1fr)_auto] gap-x-2 text-start max-md:items-center max-md:gap-y-0 md:items-center md:gap-x-4 md:gap-y-2">
+                <div className="flex min-w-0 max-w-full items-center gap-2 max-md:col-start-1 max-md:row-start-1 max-md:min-w-0 max-md:pe-1 md:col-start-1 md:row-start-1 md:gap-3 md:self-center">
+                  <h1 className="heading-md min-w-0 break-words text-black dark:text-white">
+                    {t("episodes.pageTitle")}
+                  </h1>
+                  <div className="relative h-6 w-6 shrink-0" aria-hidden="true">
+                    <span className="absolute inset-0 rounded-full border border-purple-400/70 dark:border-purple-300/60 animate-spin-slow" />
+                    <span className="absolute left-1.5 top-1.5 h-3 w-3 rounded-full bg-gradient-to-br from-pink-400 to-purple-500 animate-pulse" />
+                    <span className="absolute -end-1 -top-1 h-2 w-2 rounded-full bg-yellow-400 animate-bounce" />
                   </div>
-                  <p className="body-sm mt-2 text-black/65 dark:text-white/65">{t("episodes.pageSubtitle")}</p>
                 </div>
-                <div className="inline-flex h-10 items-center rounded-full border border-black/10 dark:border-white/10 bg-white/90 dark:bg-neutral-900 px-4 text-sm font-semibold">
-                  {t("episodes.resultsCount", { count: filtered.length })}
+                <p className="body-sm mt-1.5 max-w-full break-words text-black/65 dark:text-white/65 max-md:col-span-2 max-md:col-start-1 max-md:row-start-2 md:col-span-2 md:row-start-2 md:mt-0">
+                  {t("episodes.pageSubtitle")}
+                </p>
+                <div className="inline-flex h-10 w-auto max-w-full shrink-0 items-center justify-center rounded-full border border-black/10 bg-white/90 px-3.5 text-xs font-semibold text-black dark:border-white/10 dark:bg-neutral-900 dark:text-white max-md:col-start-2 max-md:row-start-1 max-md:h-6 max-md:self-center max-md:justify-self-end max-md:border-black/15 max-md:bg-white/85 max-md:px-2 max-md:py-0.5 max-md:text-[10px] max-md:leading-none md:col-start-2 md:row-start-1 md:h-8 md:px-2.5 md:text-[11px] md:leading-tight md:justify-self-end">
+                  <span className="truncate">{t("episodes.resultsCount", { count: filtered.length })}</span>
                 </div>
               </div>
 
-              <div className="mt-4 max-w-4xl">
-                <div className="group flex items-center gap-3 rounded-xl border border-black/10 dark:border-white/10 bg-white/85 dark:bg-neutral-900/85 backdrop-blur-md px-4 py-2.5 shadow-sm focus-within:border-purple-300 dark:focus-within:border-purple-400/60">
-                  <div className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-pink-100 via-purple-100 to-indigo-100 text-purple-700 ring-1 ring-purple-200/80 shadow-sm dark:from-purple-500/30 dark:via-fuchsia-500/20 dark:to-indigo-500/25 dark:text-purple-100 dark:ring-purple-300/30">
+              <div className="mt-3 w-full min-w-0 max-w-full md:mt-5 md:max-w-4xl">
+                <div className="group flex min-w-0 max-w-full items-center gap-2.5 overflow-hidden rounded-xl border border-black/10 bg-white/85 px-3.5 py-2.5 shadow-sm backdrop-blur-md focus-within:border-purple-300 dark:border-white/10 dark:bg-neutral-900/85 dark:focus-within:border-purple-400/60 md:gap-3 md:px-4 md:py-3">
+                  <div className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-pink-100 via-purple-100 to-indigo-100 text-purple-700 ring-1 ring-purple-200/80 shadow-sm dark:from-purple-500/30 dark:via-fuchsia-500/20 dark:to-indigo-500/25 dark:text-purple-100 dark:ring-purple-300/30">
                     <Search className="h-[18px] w-[18px] transition-transform duration-200 ease-out group-hover:scale-110" />
                   </div>
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-1 overflow-hidden">
                     <input
                       value={q}
                       onChange={(e) => setQ(e.target.value)}
                       placeholder={t("episodes.searchPlaceholder")}
-                      className="w-full bg-transparent text-sm text-black dark:text-white outline-none placeholder:text-black/40 dark:placeholder:text-white/40"
+                      className="w-full min-w-0 bg-transparent text-sm text-black dark:text-white outline-none placeholder:text-black/40 dark:placeholder:text-white/40"
                     />
                   </div>
                   {q && (
                     <button
                       type="button"
                       onClick={() => setQ("")}
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-full text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10"
+                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-black/70 dark:text-white/70 hover:bg-black/5 dark:hover:bg-white/10"
                       title={t("episodes.clearSearch", "Clear search")}
                       aria-label={t("episodes.clearSearch", "Clear search")}
                     >
@@ -679,19 +872,27 @@ export default function Episodes() {
                 </div>
               </div>
 
-              {actionInfo && <p className="mt-3 text-sm text-emerald-700 dark:text-emerald-300">{actionInfo}</p>}
-              {actionError && <p className="mt-2 text-sm text-red-600 dark:text-red-300">{actionError}</p>}
-              {playerError && <p className="mt-2 text-sm text-rose-600 dark:text-rose-300">{playerError}</p>}
+              {actionInfo && (
+                <p className="mt-3 max-w-full break-words text-sm text-emerald-700 dark:text-emerald-300 md:mt-4">{actionInfo}</p>
+              )}
+              {actionError && (
+                <p className="mt-2 max-w-full break-words text-sm text-red-600 dark:text-red-300 md:mt-3">{actionError}</p>
+              )}
+              {playerError && (
+                <p className="mt-2 max-w-full break-words text-sm text-rose-600 dark:text-rose-300 md:mt-3">{playerError}</p>
+              )}
 
-              <div className="mt-6 min-h-0 flex-1 rounded-2xl border border-black/10 dark:border-white/10 bg-white/45 dark:bg-neutral-900/35 p-2 sm:p-3">
-                <div className="episodes-scrollbar h-full overflow-y-auto overscroll-contain pr-2">
-                  <div className="grid gap-3">
+              <div className="mt-5 flex min-h-0 w-full min-w-0 max-w-full flex-1 flex-col overflow-x-clip rounded-2xl border border-black/10 bg-white/45 p-3 dark:border-white/10 dark:bg-neutral-900/35 md:mt-6 md:p-4 lg:mt-7 lg:p-5">
+                <div className="episodes-scrollbar h-full min-h-0 w-full min-w-0 max-w-full flex-1 overflow-y-auto overflow-x-clip overscroll-contain px-0 pe-2 md:pe-3">
+                  <div className="grid w-full min-w-0 max-w-full gap-3 md:gap-4">
                 {loading ? (
-                  <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white/90 dark:bg-neutral-900/70 p-5 text-sm text-black/70 dark:text-white/70">{t("episodes.loading")}</div>
+                  <div className="max-w-full break-words rounded-xl border border-black/10 bg-white/90 p-4 text-sm text-black/70 dark:border-white/10 dark:bg-neutral-900/70 dark:text-white/70 md:p-6">
+                    {t("episodes.loading")}
+                  </div>
                 ) : loadError ? (
-                  <div className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">{loadError}</div>
+                  <div className="max-w-full break-words rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 md:p-6">{loadError}</div>
                 ) : filtered.length === 0 ? (
-                  <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white/90 dark:bg-neutral-900/70 p-5 text-sm text-black/70 dark:text-white/70">
+                  <div className="max-w-full break-words rounded-xl border border-black/10 bg-white/90 p-4 text-sm text-black/70 dark:border-white/10 dark:bg-neutral-900/70 dark:text-white/70 md:p-6">
                     {q.trim()
                       ? t("episodes.searchEmpty")
                       : activeFilter === "deleted"
@@ -703,55 +904,55 @@ export default function Episodes() {
                     <div
                       key={ep.id}
                       onClick={() => setSelectedEpisodeId(ep.id)}
-                      className={`min-h-[128px] overflow-hidden rounded-2xl border bg-white/95 dark:bg-neutral-900/80 transition hover:border-purple-500 dark:hover:border-purple-400 hover:bg-purple-100/55 dark:hover:bg-purple-900/25 hover:shadow-md cursor-pointer ${
+                      className={`w-full min-h-[128px] min-w-0 max-w-full cursor-pointer overflow-x-clip overflow-hidden rounded-2xl border bg-white/95 p-3 transition hover:border-purple-500 hover:bg-purple-100/55 hover:shadow-md dark:bg-neutral-900/80 dark:hover:border-purple-400 dark:hover:bg-purple-900/25 max-md:min-h-0 md:p-4 ${
                         selectedEpisodeId === ep.id
                           ? "border-purple-500 ring-2 ring-purple-300/70 dark:ring-purple-500/45 bg-purple-50/45 dark:bg-purple-900/20"
                           : "border-black/10 dark:border-white/10"
-                      } ${isRTL ? "text-right" : "text-left"}`}
+                      } text-start`}
                     >
-                      <div className="flex flex-col items-stretch sm:flex-row">
-                        <div className={`flex flex-1 min-w-0 ${isRTL ? "text-right" : "text-left"}`}>
-                          <div className={`min-h-[112px] w-full sm:w-[7.5rem] md:w-32 shrink-0 overflow-hidden bg-neutral-100/80 dark:bg-white/10 ${isRTL ? "sm:border-l border-black/10 dark:border-white/15" : "sm:border-r border-black/10 dark:border-white/15"}`}>
+                      <div className="flex w-full min-w-0 max-w-full flex-col flex-nowrap items-stretch gap-0 overflow-x-clip max-md:gap-4 md:min-w-0 md:flex-row md:items-stretch md:gap-5">
+                        <div className="flex w-full min-w-0 max-w-full flex-none flex-col gap-3 overflow-hidden max-md:flex-none max-md:flex-row max-md:flex-nowrap max-md:items-start max-md:gap-2.5 md:min-w-0 md:flex-1 md:flex-row md:items-stretch md:gap-5">
+                          <div className="relative w-32 shrink-0 overflow-hidden rounded-lg border-0 bg-neutral-100/80 max-md:h-16 max-md:w-16 max-md:shrink-0 max-md:self-start max-md:border max-md:border-black/10 dark:max-md:border-white/15 md:h-full md:min-h-0 md:w-40 md:shrink-0 md:self-stretch md:rounded-lg md:border-0">
                             <EpisodeCover title={ep.title} coverUrl={ep.coverUrl} coverThumbB64={ep.coverThumbB64} />
                           </div>
-                          <div className="flex min-w-0 flex-1 flex-col justify-center p-3.5 sm:p-4">
-                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/50 dark:text-white/50">{t("episodes.itemLabel")}</p>
+                          <div className="flex min-w-0 w-full max-w-none flex-1 flex-col justify-center overflow-hidden py-0.5 max-md:min-w-0 max-md:flex-1 max-md:py-0 md:min-h-0 md:min-w-0 md:flex-1 md:max-w-none md:self-stretch md:justify-center md:py-1">
+                            <div className="max-md:flex max-md:min-w-0 max-md:items-center max-md:justify-between max-md:gap-2 md:contents">
+                              <p className="shrink-0 text-[10px] font-semibold uppercase leading-none tracking-[0.2em] text-black/40 dark:text-white/45 md:text-[11px] md:tracking-[0.18em]">
+                                {t("episodes.itemLabel")}
+                              </p>
+                              {selectedEpisodeId === ep.id && (
+                                <span className="inline-flex max-w-[min(100%,8rem)] shrink-0 items-center gap-0.5 rounded-md border border-purple-200/80 bg-purple-50/80 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-purple-700 dark:border-purple-400/35 dark:bg-purple-900/30 dark:text-purple-200 md:hidden">
+                                  <Check className="size-3 shrink-0" aria-hidden />
+                                  <span className="min-w-0 truncate">{t("episodes.card.selected")}</span>
+                                </span>
+                              )}
+                            </div>
                             {ep.hasEditDraft && (
-                              <div className={`mt-1 inline-flex w-fit items-center gap-2 rounded-full border border-amber-300/70 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800 dark:border-amber-400/30 dark:bg-amber-900/15 dark:text-amber-200 ${isRTL ? "self-end" : ""}`}>
-                                <span className="h-2 w-2 rounded-full bg-amber-500" />
-                                Editing In Progress
+                              <div className="mt-1.5 inline-flex max-w-full items-center gap-2 self-start rounded-full border border-amber-300/70 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800 dark:border-amber-400/30 dark:bg-amber-900/15 dark:text-amber-200 max-md:mt-1 max-md:gap-1 max-md:px-2 max-md:py-0.5 max-md:text-[10px]">
+                                <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500 max-md:h-1.5 max-md:w-1.5" />
+                                <span className="min-w-0 truncate">Editing In Progress</span>
                               </div>
                             )}
-                            <div
-                              className="text-base font-semibold leading-snug mt-1"
-                              style={{
-                                display: "-webkit-box",
-                                WebkitBoxOrient: "vertical",
-                                WebkitLineClamp: 2,
-                                overflow: "hidden",
-                              }}
-                            >
+                            <div className="mt-1.5 min-w-0 w-full max-w-full text-pretty break-words text-sm font-semibold leading-snug text-black line-clamp-2 dark:text-white max-md:mt-1 md:mt-2 md:text-base md:leading-snug">
                               {ep.title || t("episodes.untitledEpisode")}
                             </div>
-                            <p
-                              className="body-sm mt-1 min-h-[3.2rem] text-black/70 dark:text-white/70 leading-relaxed"
-                              style={{
-                                display: "-webkit-box",
-                                WebkitBoxOrient: "vertical",
-                                WebkitLineClamp: 2,
-                                overflow: "hidden",
-                              }}
-                            >
+                            <p className="body-sm mt-1.5 min-w-0 w-full max-w-full text-pretty break-words text-black/65 line-clamp-2 dark:text-white/65 max-md:mt-1 max-md:text-[13px] max-md:leading-snug md:mt-2 md:text-[13px] md:leading-normal">
                               {getEpisodeBrief(ep)}
                             </p>
                             {renderProgress(ep)}
                           </div>
                         </div>
 
-                        <div className={`flex flex-wrap items-start gap-2 border-t border-black/5 p-3.5 sm:border-t-0 sm:p-4 ${isRTL ? "sm:pr-0" : "sm:pl-0"}`}>
+                        <div
+                          className={`flex flex-nowrap content-center items-center justify-center gap-2.5 self-stretch border-t border-black/5 pt-3 max-md:w-full max-md:min-w-0 max-md:overflow-x-auto max-md:overscroll-x-contain max-md:pb-0.5 md:w-auto md:min-w-0 md:max-w-none md:shrink-0 md:grow-0 md:basis-auto md:content-start md:items-start md:justify-end md:gap-2 md:self-stretch md:overflow-x-auto md:overscroll-x-contain md:border-t-0 md:pt-0 md:[scrollbar-width:thin] lg:gap-2.5 ${isRTL ? "md:justify-start" : ""}`}
+                        >
                           {selectedEpisodeId === ep.id && (
-                            <span className={`inline-flex h-9 items-center gap-1 px-1 text-xs font-semibold text-purple-500 ${isRTL ? "sm:order-5" : ""}`}>
-                              <Check className="h-3 w-3" />
+                            <span
+                              className={`hidden h-9 min-h-0 w-auto min-w-0 shrink-0 grow-0 items-center gap-1 rounded-lg border-0 bg-transparent px-1 py-0 text-xs font-semibold text-purple-600 justify-start dark:text-purple-200 md:inline-flex ${
+                                isRTL ? "order-5" : ""
+                              }`}
+                            >
+                              <Check className="size-4 shrink-0" />
                               {t("episodes.card.selected")}
                             </span>
                           )}
@@ -763,11 +964,11 @@ export default function Episodes() {
                                   e.stopPropagation();
                                   restoreFromRecycleBin(ep.id);
                                 }}
-                                className="inline-flex h-9 items-center gap-1 rounded-lg border border-black/10 dark:border-white/15 px-3 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/10"
+                                className="inline-flex h-9 min-h-9 max-md:h-7 max-md:min-h-7 min-w-0 w-auto max-w-full shrink-0 grow-0 items-center justify-center gap-1.5 max-md:gap-0.5 rounded-lg max-md:rounded border border-black/10 px-3 max-md:px-1.5 text-sm max-md:text-[10px] max-md:leading-tight font-semibold hover:bg-black/5 dark:border-white/15 dark:hover:bg-white/10"
                                 title={t("episodes.recycle.undoLatest")}
                               >
-                                <Undo2 className="h-4 w-4" />
-                                <span className="hidden sm:inline">{t("episodes.recycle.restore")}</span>
+                                <Undo2 className="size-4 max-md:size-3 shrink-0" />
+                                <span className="min-w-0 truncate">{t("episodes.recycle.restore")}</span>
                               </button>
                               <button
                                 type="button"
@@ -775,11 +976,11 @@ export default function Episodes() {
                                   e.stopPropagation();
                                   await permanentlyDeleteFromRecycleBin(ep);
                                 }}
-                                className="inline-flex h-9 items-center gap-1 rounded-lg border border-red-200 dark:border-red-400/30 px-3 text-sm font-semibold text-red-600 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20"
+                                className="inline-flex h-9 min-h-9 max-md:h-7 max-md:min-h-7 min-w-0 w-auto max-w-full shrink-0 grow-0 items-center justify-center gap-1.5 max-md:gap-0.5 rounded-lg max-md:rounded border border-red-200 px-3 max-md:px-1.5 text-sm max-md:text-[10px] max-md:leading-tight font-semibold text-red-600 hover:bg-red-50 dark:border-red-400/30 dark:text-red-300 dark:hover:bg-red-900/20"
                                 title={t("episodes.recycle.emptyNow")}
                               >
-                                <Trash2 className="h-4 w-4" />
-                                <span className="hidden sm:inline">{t("episodes.recycle.emptyNow")}</span>
+                                <Trash2 className="size-4 max-md:size-3 shrink-0" />
+                                <span className="min-w-0 truncate">{t("episodes.recycle.emptyNow")}</span>
                               </button>
                             </>
                           ) : (
@@ -790,11 +991,11 @@ export default function Episodes() {
                                   e.stopPropagation();
                                   openEpisode(ep.id);
                                 }}
-                                className="inline-flex h-9 items-center gap-1 rounded-lg border border-black bg-black px-3 text-sm font-semibold text-white hover:bg-black/90 dark:border-white dark:bg-white dark:text-black dark:hover:bg-white/90"
+                                className="inline-flex h-9 min-h-9 max-md:h-7 max-md:min-h-7 min-w-0 w-auto max-w-full shrink-0 grow-0 items-center justify-center gap-1.5 max-md:gap-0.5 rounded-lg max-md:rounded border border-black bg-black px-3 max-md:px-1.5 text-sm max-md:text-[10px] max-md:leading-tight font-semibold text-white hover:bg-black/90 dark:border-white dark:bg-white dark:text-black dark:hover:bg-white/90"
                                 title={t("episodes.card.view")}
                               >
-                                <ExternalLink className="h-4 w-4" />
-                                <span className="hidden sm:inline">{t("episodes.card.view")}</span>
+                                <ExternalLink className="size-4 max-md:size-3 shrink-0" />
+                                <span className="min-w-0 max-w-none max-md:truncate">{t("episodes.card.view")}</span>
                               </button>
                               <button
                                 type="button"
@@ -802,11 +1003,13 @@ export default function Episodes() {
                                   e.stopPropagation();
                                   startEditEpisode(ep);
                                 }}
-                                className="inline-flex h-9 items-center gap-1 rounded-lg border border-black/10 dark:border-white/15 px-3 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/10"
+                                className="inline-flex h-9 min-h-9 max-md:h-7 max-md:min-h-7 min-w-0 w-auto max-w-full shrink-0 grow-0 items-center justify-center gap-1.5 max-md:gap-0.5 rounded-lg max-md:rounded border border-black/10 px-3 max-md:px-1.5 text-sm max-md:text-[10px] max-md:leading-tight font-semibold hover:bg-black/5 dark:border-white/15 dark:hover:bg-white/10"
                                 title={ep.hasEditDraft ? "Continue Editing" : t("episodes.card.edit")}
                               >
-                                <Pencil className="h-4 w-4" />
-                                <span className="hidden sm:inline">{ep.hasEditDraft ? "Continue Editing" : t("episodes.card.edit")}</span>
+                                <Pencil className="size-4 max-md:size-3 shrink-0" />
+                                <span className="min-w-0 max-w-none max-md:truncate">
+                                  {ep.hasEditDraft ? "Continue Editing" : t("episodes.card.edit")}
+                                </span>
                               </button>
                               <button
                                 type="button"
@@ -815,30 +1018,30 @@ export default function Episodes() {
                                   togglePlayEpisode(ep);
                                 }}
                                 disabled={!Boolean(ep.audioKey || resolveAudioUrl(ep.audioUrl))}
-                                className="inline-flex h-9 items-center gap-1 rounded-lg border border-black/10 dark:border-white/15 px-3 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="inline-flex h-9 min-h-9 max-md:h-7 max-md:min-h-7 min-w-0 w-auto max-w-full shrink-0 grow-0 items-center justify-center gap-1.5 max-md:gap-0.5 rounded-lg max-md:rounded border border-black/10 px-3 max-md:px-1.5 text-sm max-md:text-[10px] max-md:leading-tight font-semibold hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/15 dark:hover:bg-white/10"
                                 title={activeAudioId === ep.id && isPlaying ? t("episodes.card.pause") : t("episodes.card.play")}
                               >
                                 {activeAudioId === ep.id && isPlaying ? (
-                                  <Pause className="h-4 w-4" />
+                                  <Pause className="size-4 max-md:size-3 shrink-0" />
                                 ) : (
-                                  <Play className="h-4 w-4" />
+                                  <Play className="size-4 max-md:size-3 shrink-0" />
                                 )}
-                                <span className="hidden sm:inline">
+                                <span className="min-w-0 max-w-none max-md:truncate">
                                   {activeAudioId === ep.id && isPlaying ? t("episodes.card.pause") : t("episodes.card.play")}
                                 </span>
                               </button>
                               <button
-  type="button"
-  onClick={(e) => {
-    e.stopPropagation();
-    requestDeleteEpisode(ep);
-  }}
-  className="inline-flex h-9 items-center gap-1 rounded-lg border border-red-200 dark:border-red-400/30 px-3 text-sm font-semibold text-red-600 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20"
-  title={t("episodes.deleteEpisode")}
->
-  <Trash2 className="h-4 w-4" />
-  <span className="hidden sm:inline">{t("episodes.deleteEpisode")}</span>
-</button>
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  requestDeleteEpisode(ep);
+                                }}
+                                className="inline-flex h-9 min-h-9 max-md:h-7 max-md:min-h-7 min-w-0 w-auto max-w-full shrink-0 grow-0 items-center justify-center gap-1.5 max-md:gap-0.5 rounded-lg max-md:rounded border border-red-200 px-3 max-md:px-1.5 text-sm max-md:text-[10px] max-md:leading-tight font-semibold text-red-600 hover:bg-red-50 dark:border-red-400/30 dark:text-red-300 dark:hover:bg-red-900/20"
+                                title={t("episodes.deleteEpisode")}
+                              >
+                                <Trash2 className="size-4 max-md:size-3 shrink-0" />
+                                <span className="min-w-0 max-w-none max-md:truncate">{t("episodes.deleteEpisode")}</span>
+                              </button>
                             </>
                           )}
                         </div>
@@ -854,9 +1057,9 @@ export default function Episodes() {
         </div>
       </main>
       {pendingDeleteEpisode && (
-        <div className="fixed inset-0 z-[9999] grid place-items-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="w-[min(92vw,480px)] rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xl p-6">
-            <div className="flex items-center gap-4">
+        <div className="wecast-overlay grid place-items-center bg-black/70 p-4 backdrop-blur-sm sm:p-5">
+          <div className="w-[min(92vw,480px)] rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xl p-5 md:p-6">
+            <div className="flex items-center gap-3 md:gap-4">
               <img
                 src="/logo.png"
                 alt="WeCast logo"
@@ -871,14 +1074,14 @@ export default function Episodes() {
                 </p>
               </div>
             </div>
-            <p className="mt-5 text-sm text-black/70 dark:text-white/70">
+            <p className="mt-4 text-sm text-black/70 dark:text-white/70 md:mt-5">
               {t("episodes.modal.deletePrompt", { title: pendingDeleteEpisode.title })}
             </p>
-            <div className="flex items-center justify-end gap-3">
+            <div className="mt-5 flex flex-wrap items-center justify-end gap-2.5 md:mt-6 md:gap-3">
               <button
                 type="button"
                 onClick={() => setPendingDeleteEpisode(null)}
-                className="mt-5 px-4 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition"
+                className="px-4 py-2.5 rounded-xl border border-neutral-300 dark:border-neutral-700 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition"
               >
                 {t("episodes.modal.cancel")}
               </button>
@@ -889,7 +1092,7 @@ export default function Episodes() {
                   setPendingDeleteEpisode(null);
                   await moveEpisodeToRecycleBin(target);
                 }}
-                className="mt-5 px-4 py-2 rounded-xl border border-red-300 dark:border-red-400/30 bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition"
+                className="px-4 py-2.5 rounded-xl border border-red-300 dark:border-red-400/30 bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition"
               >
                 {t("episodes.recycle.moveAction")}
               </button>

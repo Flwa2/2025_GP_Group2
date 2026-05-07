@@ -23,15 +23,42 @@ import Share from "./components/Share";
 
 
 function isAuthenticated() {
-  return !!localStorage.getItem("token");
+  return !!(
+    localStorage.getItem("token") || sessionStorage.getItem("token")
+  );
 }
 
 function useHashRoute() {
-  const [hash, setHash] = useState(window.location.hash || '#/');
+  const resolveRoute = () => {
+    const hash = window.location.hash || "";
+    if (hash) {
+      return hash;
+    }
+
+    const path = window.location.pathname || "/";
+    const search = window.location.search || "";
+    if (path === "/reset-password") {
+      return `#/reset-password${search}`;
+    }
+    if (path === "/verify-email") {
+      return `#/verify-email${search}`;
+    }
+    if (path === "/email-change-confirm") {
+      return `#/email-change-confirm${search}`;
+    }
+    return "#/";
+  };
+
+  const [hash, setHash] = useState(resolveRoute());
   useEffect(() => {
-    const onHashChange = () => setHash(window.location.hash || '#/');
+    const onHashChange = () => setHash(resolveRoute());
+    const onPopState = () => setHash(resolveRoute());
     window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener('hashchange', onHashChange);
+      window.removeEventListener("popstate", onPopState);
+    };
   }, []);
   return hash;
 }
@@ -66,13 +93,24 @@ export default function App() {
     }
   }, [hash]);
   return (
-    <div className={`min-h-screen flex flex-col text-black dark:text-white transition-colors duration-500 ${
+    <div className={`flex min-h-screen min-w-0 flex-col overflow-x-clip text-black dark:text-white transition-colors duration-500 ${
       isCreateFromStudio ? "bg-cream dark:bg-[#0a0a1a]" : "bg-cream dark:bg-[#0a0a1a]"
     }`}>
-      <div className="h-2 bg-purple-gradient"></div>
+      <div className="h-2 min-w-0 shrink-0 bg-purple-gradient" aria-hidden />
       <Header />
 
-      <main className={(isEpisodes || isCreateFromStudio || isPreviewFromStudioSurface || isEditPodcast) ? "app-main pt-14 flex-1" : "app-main pt-16 flex-1"}>
+      <main
+        className={
+          isEpisodes ||
+          isCreateFromStudio ||
+          isPreviewFromStudioSurface ||
+          isEditPodcast ||
+          isPreview ||
+          isFinalize
+            ? "app-main min-w-0 flex-1 pt-14"
+            : "app-main min-w-0 flex-1 pt-16"
+        }
+      >
         {isAccount ? (
           <Account />
         ) : isEmailAction ? (
@@ -99,7 +137,7 @@ export default function App() {
             return <Create />;
            })()
             ) : isEditPodcast ? ( 
-          <EditPodcast />
+          <EditPodcast key={hash} />
         ) : isEdit ? (
           <EditScript />
         ) : isEpisodes ? (

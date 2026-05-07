@@ -87,7 +87,6 @@ def generate_wecast_email_template(
     )
 
     button_block = ""
-    fallback_block = ""
     if safe_button_text and safe_button_url:
         button_block = f"""
                         <tr>
@@ -95,15 +94,6 @@ def generate_wecast_email_template(
                             <a class="wecast-button" href="{safe_button_url}" target="_blank" style="display:inline-block;background:#17131f;color:#ffffff;text-decoration:none;border-radius:16px;padding:15px 28px;font-size:16px;line-height:1;font-weight:800;box-shadow:0 12px 24px rgba(23,19,31,0.18);">
                               {safe_button_text}
                             </a>
-                          </td>
-                        </tr>"""
-        fallback_block = f"""
-                        <tr>
-                          <td align="center" style="padding:22px 0 0;">
-                            <p style="margin:0;color:#747b8a;font-size:13px;line-height:1.65;">
-                              If the button does not work, use this link:
-                              <a href="{safe_button_url}" target="_blank" style="color:#5b2bd8;text-decoration:underline;font-weight:700;">Open secure link</a>
-                            </p>
                           </td>
                         </tr>"""
 
@@ -187,7 +177,7 @@ def generate_wecast_email_template(
                           <td align="center" style="padding:18px 0 0;">
                             {_message_html(message)}
                           </td>
-                        </tr>{_detail_html(detail_label, detail_lines)}{button_block}{fallback_block}{notice_block}
+                        </tr>{_detail_html(detail_label, detail_lines)}{button_block}{notice_block}
                       </table>
                     </td>
                   </tr>
@@ -238,15 +228,16 @@ def generate_reset_password_template(button_url, **kwargs):
 
 def generate_password_changed_template(button_url="", **kwargs):
     return generate_wecast_email_template(
-        "Your password was changed",
+        "Your password has been updated",
         [
-            "This confirms that the password for your WeCast account was changed successfully.",
-            "If this was you, no further action is needed. If this was not you, contact support immediately so we can help protect your account.",
+            "This confirms that your WeCast password was successfully changed.",
+            "If you made this change, no further action is required.",
+            "If you did not change your password, please contact support immediately.",
         ],
-        "Review Account Security" if button_url else "",
+        "Go to WeCast" if button_url else "",
         button_url,
         eyebrow="Security confirmation",
-        notice_text="Keep your account secure by using a unique password and signing out of shared devices.",
+        notice_text="",
         **kwargs,
     )
 
@@ -277,7 +268,7 @@ def generate_email_change_requested_template(button_url, new_email="new@example.
             "No change will happen unless the new email address is verified.",
             "If this was not you, secure your account immediately.",
         ],
-        "Secure My Account",
+        "Cancel email change",
         button_url,
         eyebrow="Security notice",
         detail_label="Requested new email",

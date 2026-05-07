@@ -18,6 +18,11 @@ const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
   : "http://localhost:5000";
 
+const getPortalTarget = () => {
+  if (typeof document === "undefined") return null;
+  return document.body && document.body.nodeType === 1 ? document.body : null;
+};
+
 /* -----------------------------
    Summary helpers
 ------------------------------ */
@@ -151,13 +156,28 @@ export default function Preview() {
   const isFromDashboardPreview = fromSource === "episodes";
   const isFromStudioCreatePreview = fromSource === "studio_create";
   const useDashboardGlassTone = isFromDashboardPreview || isFromStudioCreatePreview;
-  const dashboardShellClass = "w-full border-b border-black/10 bg-white/70 dark:bg-neutral-900/45 shadow-[0_10px_30px_rgba(0,0,0,0.08)] backdrop-blur-sm";
-  const dashboardContentClass = "mx-auto w-full max-w-[1400px] px-4 pt-4 pb-8 bg-white/35 dark:bg-neutral-900/20 space-y-6 sm:px-6 sm:pb-10";
-  const dashboardCardClass = "rounded-3xl border border-purple-200/90 dark:border-purple-400/30 bg-white/55 dark:bg-neutral-900/60 backdrop-blur-md shadow-sm";
-  const previewTitleCardClass = "overflow-hidden rounded-[28px] border border-[#eadcf6] bg-white/78 shadow-[0_12px_36px_rgba(15,23,42,0.10)] backdrop-blur-md dark:border-[#6f5a86]/30 dark:bg-neutral-900/42";
+  const dashboardShellClass =
+    "w-full min-w-0 max-w-full border-b border-black/10 bg-white/70 dark:bg-neutral-900/45 shadow-[0_10px_30px_rgba(0,0,0,0.08)] backdrop-blur-sm";
+  /** Dashboard route: shell only; main glass is previewPageGlassShellClass */
+  const dashboardContentClass =
+    "flex w-full min-w-0 max-w-none flex-1 flex-col px-0 pt-0 pb-8 sm:pb-10";
+  const dashboardCardClass =
+    "rounded-3xl border border-purple-300/40 dark:border-purple-400/30 bg-white/55 dark:bg-neutral-900/60 backdrop-blur-md shadow-sm";
+  const previewTitleCardClass =
+    "max-w-full min-w-0 overflow-hidden rounded-[28px] border border-purple-300/40 bg-white/78 shadow-[0_12px_36px_rgba(15,23,42,0.10)] backdrop-blur-md dark:border-[#6f5a86]/30 dark:bg-neutral-900/42";
   const previewCardClass = dashboardCardClass;
+  /** Light: full-bleed glass over cream; dark: transparent so page/cards keep prior look */
+  const previewPageGlassShellClass = [
+    "flex w-full min-w-0 max-w-none flex-1 flex-col border-y border-white/30 bg-[rgba(255,255,255,0.7)] shadow-[0_14px_50px_-18px_rgba(15,23,42,0.1)] backdrop-blur-[14px]",
+    useDashboardGlassTone
+      ? "dark:border-white/10 dark:bg-neutral-900/45 dark:shadow-[0_8px_36px_rgba(0,0,0,0.42)] dark:backdrop-blur-xl"
+      : "dark:border-transparent dark:bg-transparent dark:shadow-none dark:backdrop-blur-none",
+  ].join(" ");
+  const previewPageInnerClass =
+    "mx-auto flex w-full min-w-0 max-w-[1400px] flex-1 flex-col space-y-6 px-5 pt-4 pb-6 sm:px-8 sm:pt-5 sm:pb-8 lg:px-10 lg:pt-6 lg:pb-10";
   const [externalSeek, setExternalSeek] = useState(null);
   const displayTitle = title || t("episodes.untitledEpisode");
+
   const resolvedCoverSrc = useMemo(() => {
     if (!coverImageFailed && coverUrl) return coverUrl;
     if (coverThumbB64) return `data:image/jpeg;base64,${coverThumbB64}`;
@@ -188,7 +208,7 @@ export default function Preview() {
       ),
     [audioKey, audioUrl, chapters.length, summary, title, words.length]
   );
-  const showPreviewSaveAction = !isFromDashboardPreview && hasPreviewContent;
+  const showPreviewSaveAction = !isAuthenticated && !isFromDashboardPreview && hasPreviewContent;
 
   const buildPreviewAuthHash = (route = "signup") => {
     const nextParams = new URLSearchParams();
@@ -234,6 +254,7 @@ export default function Preview() {
   // load initial preview data
   useEffect(() => {
     if (episodeId) return;
+
     let saved = sessionStorage.getItem("wecast_preview");
     if (!saved) {
       const backupDraft = getPendingPreviewDraft();
@@ -316,13 +337,15 @@ export default function Preview() {
     setEpisodeNumber(null);
     chaptersRecoveryAttemptedRef.current = false;
 
+    const encId = encodeURIComponent(episodeId);
+
     const loadEpisode = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/podcasts/${episodeId}`, {
+        const res = await fetch(`${API_BASE}/api/podcasts/${encId}`, {
           headers: authHeaders,
           credentials: "include",
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (!res.ok) return;
 
         const podcast = data?.podcast || {};
@@ -337,7 +360,7 @@ export default function Preview() {
 
         let restoredAudioUrl = "";
         if (podcast.audioKey) {
-          const audioRes = await fetch(`${API_BASE}/api/audio/${episodeId}`, {
+          const audioRes = await fetch(`${API_BASE}/api/audio/${encId}`, {
             headers: authHeaders,
             credentials: "include",
           });
@@ -387,11 +410,11 @@ export default function Preview() {
 
     const loadTranscript = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/podcasts/${episodeId}/transcript`, {
+        const res = await fetch(`${API_BASE}/api/podcasts/${encId}/transcript`, {
           headers: authHeaders,
           credentials: "include",
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (res.ok && Array.isArray(data?.words)) {
           if (isMounted) setWords(data.words);
         }
@@ -417,11 +440,14 @@ export default function Preview() {
 
     const ensureChapters = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/podcasts/${episodeId}/chapters/ensure`, {
-          method: "POST",
-          headers: authHeaders,
-          credentials: "include",
-        });
+        const res = await fetch(
+          `${API_BASE}/api/podcasts/${encodeURIComponent(episodeId)}/chapters/ensure`,
+          {
+            method: "POST",
+            headers: authHeaders,
+            credentials: "include",
+          }
+        );
         const data = await res.json().catch(() => ({}));
         if (!res.ok || cancelled) return;
         if (Array.isArray(data?.chapters) && data.chapters.length > 0) {
@@ -669,7 +695,7 @@ export default function Preview() {
       let res = null;
 
       if (episodeId) {
-        res = await fetch(`${API_BASE}/api/podcasts/${episodeId}/save-all`, {
+        res = await fetch(`${API_BASE}/api/podcasts/${encodeURIComponent(episodeId)}/save-all`, {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json", ...authHeaders },
@@ -771,53 +797,77 @@ export default function Preview() {
   return (
     <div
       className={[
-        "min-h-screen bg-cream dark:bg-[#0a0a1a] text-black dark:text-white transition-colors duration-500",
+        "flex min-h-screen min-w-0 max-w-full flex-col overflow-x-clip bg-cream dark:bg-[#0a0a1a] text-black dark:text-white transition-colors duration-500",
         i18n.language === "ar" ? "text-right" : "text-left",
       ].join(" ")}
     >
       <div
-        className={useDashboardGlassTone ? dashboardShellClass : ""}
+        className={[
+          "flex min-h-0 w-full min-w-0 flex-1 flex-col",
+          useDashboardGlassTone ? dashboardShellClass : "",
+        ].join(" ")}
       >
       <div
-        className={useDashboardGlassTone
-          ? dashboardContentClass
-          : "max-w-[1400px] mx-auto px-4 py-8 space-y-6 sm:px-6 sm:py-10"}
+        className={useDashboardGlassTone ? dashboardContentClass : "flex w-full min-w-0 flex-1 flex-col px-0 py-0"}
       >
-        <div className="max-w-7xl space-y-5">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={handleBack}
-              className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition"
-              aria-label={t("preview.back")}
-              title={t("preview.back")}
+        {saveMessage && (
+          <div className="fixed left-4 right-4 top-20 z-50 sm:left-auto sm:right-6">
+            <div
+              className={[
+                "rounded-xl px-4 py-3 shadow-lg border text-sm font-medium",
+                saveMessageType === "success"
+                  ? "bg-emerald-50 text-emerald-900 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-100 dark:border-emerald-800/40"
+                  : saveMessageType === "error"
+                  ? "bg-rose-50 text-rose-900 border-rose-200 dark:bg-rose-900/20 dark:text-rose-100 dark:border-rose-800/40"
+                  : "bg-white text-black border-black/10 dark:bg-neutral-900 dark:text-white dark:border-white/10",
+              ].join(" ")}
             >
-              <ChevronLeft className={`w-5 h-5 ${i18n.language === "ar" ? "rotate-180" : ""}`} />
-            </button>
-            <div>
-              <h1 className="text-xl font-bold text-black dark:text-white">
-                {t("preview.title")}
-              </h1>
-              <p className="text-sm text-black/60 dark:text-white/60">
-                {t("preview.subtitle")}
-              </p>
+              {saveMessage}
             </div>
           </div>
+        )}
 
-          <div className="pt-2">
+        <div className={previewPageGlassShellClass}>
+          <div className={previewPageInnerClass}>
+            <div className="w-full min-w-0 max-w-7xl space-y-1">
+              <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+                <button
+                  onClick={handleBack}
+                  className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition"
+                  aria-label={t("preview.back")}
+                  title={t("preview.back")}
+                >
+                  <ChevronLeft className={`w-5 h-5 ${i18n.language === "ar" ? "rotate-180" : ""}`} />
+                </button>
+                <div className="min-w-0 flex-1">
+                  <h1 className="text-xl font-bold [overflow-wrap:anywhere] text-black dark:text-white">
+                    {t("preview.title")}
+                  </h1>
+                  <p className="text-sm text-black/60 [overflow-wrap:anywhere] dark:text-white/60">
+                    {t("preview.subtitle")}
+                  </p>
+                </div>
+              </div>
+            </div>
+
             <div className={previewTitleCardClass}>
               {resolvedCoverSrc ? (
-                <div className="flex flex-col sm:min-h-[118px] sm:flex-row">
-                  <div className="min-h-[112px] w-full shrink-0 overflow-hidden bg-neutral-100/80 dark:bg-white/10 sm:w-[7.5rem] sm:border-r sm:border-black/10 md:w-32 dark:sm:border-white/10">
+                <div className="flex min-w-0 flex-row items-stretch bg-white dark:bg-neutral-950 sm:items-start md:items-stretch">
+                  <div className="flex w-24 shrink-0 items-stretch justify-start overflow-hidden border-r border-black/10 bg-white p-1.5 dark:border-white/10 dark:bg-neutral-950 max-[360px]:w-20 sm:h-auto sm:w-[7.5rem] sm:p-2 md:h-auto md:w-24 md:p-0">
                     <img
                       src={resolvedCoverSrc}
                       alt={`${displayTitle} cover`}
-                      className="h-full w-full object-cover object-center"
+                      className={[
+                        "w-full h-full",
+                        "object-cover object-center",
+                        "sm:object-contain sm:object-left md:object-cover md:object-center",
+                      ].join(" ")}
                       onError={() => setCoverImageFailed(true)}
                     />
                   </div>
 
-                  <div className="flex min-w-0 flex-1 items-center bg-[linear-gradient(115deg,rgba(255,255,255,0.97)_0%,rgba(255,255,255,0.95)_48%,rgba(250,246,253,0.92)_76%,rgba(241,234,247,0.74)_100%)] p-6 dark:bg-[linear-gradient(115deg,rgba(23,23,26,0.92)_0%,rgba(23,23,26,0.9)_46%,rgba(40,32,52,0.82)_76%,rgba(72,57,95,0.58)_100%)]">
-                    <div className="flex w-full flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 flex-1 items-center bg-[linear-gradient(115deg,rgba(255,255,255,0.97)_0%,rgba(255,255,255,0.95)_48%,rgba(250,246,253,0.92)_76%,rgba(241,234,247,0.74)_100%)] p-4 max-[360px]:p-3 sm:p-5 md:min-h-24 md:py-3 dark:bg-[linear-gradient(115deg,rgba(23,23,26,0.92)_0%,rgba(23,23,26,0.9)_46%,rgba(40,32,52,0.82)_76%,rgba(72,57,95,0.58)_100%)]">
+                    <div className="flex w-full min-w-0 flex-col gap-3 sm:gap-4 sm:flex-row sm:items-center sm:justify-between md:gap-3">
                       <div className="min-w-0 flex-1">
                         <p className="text-xs uppercase tracking-wider text-black/55 dark:text-white/55">
                           {t("preview.titleLabel")}
@@ -831,8 +881,8 @@ export default function Preview() {
                       </div>
 
                       {titleMeta && !category ? (
-                        <div className="flex items-center sm:justify-end">
-                          <span className="inline-flex max-w-full items-center rounded-full border border-black/5 bg-white/75 px-4 py-2 text-sm text-black/60 dark:border-white/10 dark:bg-white/10 dark:text-white/60">
+                        <div className="flex w-full min-w-0 items-center sm:w-auto sm:justify-end">
+                          <span className="inline-flex max-w-full min-w-0 items-center rounded-full border border-black/5 bg-white/75 px-3 py-2 text-sm text-black/60 [overflow-wrap:anywhere] dark:border-white/10 dark:bg-white/10 dark:text-white/60 sm:px-4">
                             {titleMeta}
                           </span>
                         </div>
@@ -841,8 +891,8 @@ export default function Preview() {
                   </div>
                 </div>
               ) : (
-                <div className="bg-[linear-gradient(115deg,rgba(255,255,255,0.97)_0%,rgba(255,255,255,0.95)_48%,rgba(250,246,253,0.92)_76%,rgba(241,234,247,0.74)_100%)] p-6 dark:bg-[linear-gradient(115deg,rgba(23,23,26,0.92)_0%,rgba(23,23,26,0.9)_46%,rgba(40,32,52,0.82)_76%,rgba(72,57,95,0.58)_100%)]">
-                  <div className="flex min-w-0 items-center gap-4">
+                <div className="bg-[linear-gradient(115deg,rgba(255,255,255,0.97)_0%,rgba(255,255,255,0.95)_48%,rgba(250,246,253,0.92)_76%,rgba(241,234,247,0.74)_100%)] p-4 sm:p-6 dark:bg-[linear-gradient(115deg,rgba(23,23,26,0.92)_0%,rgba(23,23,26,0.9)_46%,rgba(40,32,52,0.82)_76%,rgba(72,57,95,0.58)_100%)]">
+                  <div className="flex min-w-0 items-center gap-3 sm:gap-4">
                     <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-black/5 bg-white/70 dark:border-white/10 dark:bg-purple-900/30">
                       <Mic2 className="h-6 w-6 text-purple-600 dark:text-purple-400" />
                     </div>
@@ -862,31 +912,21 @@ export default function Preview() {
                 </div>
               )}
             </div>
-          </div>
-        </div>
-        {saveMessage && (
-          <div className="fixed left-4 right-4 top-20 z-50 sm:left-auto sm:right-6">
-            <div
-              className={[
-                "rounded-xl px-4 py-3 shadow-lg border text-sm font-medium",
-                saveMessageType === "success"
-                  ? "bg-emerald-50 text-emerald-900 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-100 dark:border-emerald-800/40"
-                  : saveMessageType === "error"
-                  ? "bg-rose-50 text-rose-900 border-rose-200 dark:bg-rose-900/20 dark:text-rose-100 dark:border-rose-800/40"
-                  : "bg-white text-black border-black/10 dark:bg-neutral-900 dark:text-white dark:border-white/10",
-              ].join(" ")}
-            >
-              {saveMessage}
-            </div>
-          </div>
-        )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          <div className="lg:col-span-7 space-y-4">
-            <div ref={audioCardRef} className="relative -mt-3 w-full">
+        <div className="grid w-full min-w-0 max-w-full grid-cols-1 items-start gap-6 lg:grid-cols-12">
+          <div className="min-w-0 space-y-4 lg:col-span-7">
+            <div
+              ref={audioCardRef}
+              className={`${previewCardClass} relative w-full min-w-0 max-w-full overflow-hidden p-3 sm:p-4`}
+            >
               <WeCastAudioPlayer
                 src={audioUrl}
                 title={displayTitle}
+                downloadUrl={
+                  episodeId
+                    ? `${API_BASE}/api/audio/${encodeURIComponent(episodeId)}/download`
+                    : ""
+                }
                 onTimeUpdate={(sec) => setCurrentTime(sec)}
                 externalSeek={externalSeek}
               />
@@ -895,12 +935,17 @@ export default function Preview() {
             {/* Transcript */}
             <div
               ref={transcriptCardRef}
-              className={`${previewCardClass} p-5 w-full min-h-[260px]`}
+              className={`${previewCardClass} w-full min-h-[260px] min-w-0 max-w-full p-5`}
               style={transcriptCardHeight ? { minHeight: transcriptCardHeight } : undefined}
             >
-              <div ref={transcriptHeaderRef} className="flex items-center justify-between mb-3">
-                <div className="text-sm font-bold">{t("preview.liveTranscript")}</div>
-                <div className="text-xs text-black/50 dark:text-white/50">
+              <div
+                ref={transcriptHeaderRef}
+                className="mb-3 flex min-w-0 items-center justify-between gap-2"
+              >
+                <div className="min-w-0 text-sm font-bold [overflow-wrap:anywhere]">
+                  {t("preview.liveTranscript")}
+                </div>
+                <div className="shrink-0 text-xs text-black/50 dark:text-white/50">
                   {userInteracting ? t("preview.manualScroll") : t("preview.autoFollow")}
                 </div>
               </div>
@@ -913,12 +958,12 @@ export default function Preview() {
                 onTouchMove={markUserInteraction}
                 onMouseDown={markUserInteraction}
                 className={[
-                  "overflow-y-auto leading-8 text-[15px]",
-                  transcriptDir === "rtl" ? "pl-3 text-right" : "pr-3 text-left",
+                  "min-w-0 max-w-full overflow-y-auto overflow-x-hidden text-[15px] leading-8 [overflow-wrap:anywhere]",
+                  transcriptDir === "rtl" ? "pl-2 text-right sm:pl-3" : "pr-2 text-left sm:pr-3",
                 ].join(" ")}
                 style={transcriptBodyHeight ? { height: transcriptBodyHeight } : undefined}
               >
-                <div dir={transcriptDir} className="leading-8 text-[15px]">
+                <div dir={transcriptDir} className="min-w-0 max-w-full text-[15px] leading-8 [overflow-wrap:anywhere]">
                   {transcriptTokens.map((tok) => {
                     if (tok.type === "speaker") {
                       return (
@@ -962,7 +1007,7 @@ export default function Preview() {
               </div>
 
               {!hasSpeakerInfo && words.length > 0 && (
-                <p ref={transcriptFooterRef} className="text-xs mt-3 text-black/50 dark:text-white/40">
+                <p ref={transcriptFooterRef} className="mt-3 text-xs text-black/50 dark:text-white/40">
                   {t("preview.noSpeakers")}
                 </p>
               )}
@@ -970,10 +1015,10 @@ export default function Preview() {
           </div>
 
           {/* Right rail: chapters + summary */}
-          <div ref={rightColRef} className="lg:col-span-5 w-full">
-            <div className="w-full lg:sticky lg:top-24 lg:-mt-3 space-y-4">
+          <div ref={rightColRef} className="w-full min-w-0 max-w-full lg:col-span-5">
+            <div className="w-full min-w-0 space-y-4 lg:sticky lg:top-24">
               {/* Chapters card */}
-              <div className={`${previewCardClass} overflow-hidden`}>
+              <div className={`${previewCardClass} max-w-full min-w-0 overflow-hidden`}>
                 <button
                   type="button"
                   onClick={() => {
@@ -983,13 +1028,13 @@ export default function Preview() {
                       return next;
                     });
                   }}
-                  className="w-full flex items-center justify-between px-5 py-4 text-sm font-bold"
+                  className="flex w-full min-w-0 items-center justify-between gap-2 px-4 py-3.5 text-sm font-bold sm:px-5 sm:py-4"
                 >
-                  <span>{t("preview.chapters")}</span>
+                  <span className="min-w-0 [overflow-wrap:anywhere]">{t("preview.chapters")}</span>
                   <span className="text-black/50 dark:text-white/50">v</span>
                 </button>
                 {isChaptersOpen && (
-                  <div className="px-5 pb-5 border-t border-black/5 dark:border-white/10">
+                  <div className="border-t border-black/5 px-4 pb-4 dark:border-white/10 sm:px-5 sm:pb-5">
                     {!chapters || chapters.length === 0 ? (
                       <p className="text-sm text-black/60 dark:text-white/60 italic">
                         {t("preview.noChapters")}
@@ -1001,13 +1046,15 @@ export default function Preview() {
                             key={idx}
                             onClick={() => setExternalSeek(c.startSec)}
                             className={[
-                              "w-full px-3 py-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 transition",
+                              "w-full min-w-0 max-w-full rounded-xl px-2 py-2 transition hover:bg-black/5 dark:hover:bg-white/10 sm:px-3",
                               i18n.language === "ar" ? "text-right" : "text-left",
                             ].join(" ")}
                           >
-                            <div className="flex items-center justify-between">
-                              <span className="font-medium">{c.title}</span>
-                              <span className="text-xs text-black/50 dark:text-white/50">
+                            <div className="flex min-w-0 items-center justify-between gap-2">
+                              <span className="min-w-0 flex-1 font-medium [overflow-wrap:anywhere]">
+                                {c.title}
+                              </span>
+                              <span className="shrink-0 tabular-nums text-xs text-black/50 dark:text-white/50">
                                 {formatMMSS(c.startSec)}
                               </span>
                             </div>
@@ -1020,7 +1067,7 @@ export default function Preview() {
               </div>
 
               {/* Summary card */}
-              <div className={`${previewCardClass} overflow-hidden`}>
+              <div className={`${previewCardClass} max-w-full min-w-0 overflow-hidden`}>
                 <button
                   type="button"
                   onClick={() => {
@@ -1030,13 +1077,13 @@ export default function Preview() {
                       return next;
                     });
                   }}
-                  className="w-full flex items-center justify-between px-5 py-4 text-sm font-bold"
+                  className="flex w-full min-w-0 items-center justify-between gap-2 px-4 py-3.5 text-sm font-bold sm:px-5 sm:py-4"
                 >
-                  <span>{t("preview.summary")}</span>
+                  <span className="min-w-0 [overflow-wrap:anywhere]">{t("preview.summary")}</span>
                   <span className="text-black/50 dark:text-white/50">v</span>
                 </button>
                 {isSummaryOpen && (
-                  <div className="px-5 pb-5 text-sm text-black/60 dark:text-white/60 leading-relaxed border-t border-black/5 dark:border-white/10">
+                  <div className="border-t border-black/5 px-4 pb-4 text-sm leading-relaxed text-black/60 [overflow-wrap:anywhere] dark:border-white/10 dark:text-white/60 sm:px-5 sm:pb-5">
                     {isGeneratingSummary ? (
                       <div className="flex items-center space-x-2">
                         <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
@@ -1068,35 +1115,37 @@ export default function Preview() {
           </div>
         </div>
 
-        {showPreviewSaveAction ? (
-          <div className="flex justify-end pt-2">
-            <button
-              type="button"
-              onClick={handleSaveAll}
-              disabled={isSaving}
-              title={t("preview.saveTooltip")}
-              className="inline-flex min-w-[10.5rem] items-center justify-center gap-2 rounded-2xl bg-black px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-black"
-            >
-              <Save className="h-4 w-4" />
-              {isSaving ? t("preview.saving") : t("preview.save")}
-            </button>
+        {(showPreviewSaveAction || episodeId) ? (
+          <div className="flex w-full min-w-0 flex-col gap-3 pt-1 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-3">
+            {showPreviewSaveAction ? (
+              <button
+                type="button"
+                onClick={handleSaveAll}
+                disabled={isSaving}
+                title={t("preview.saveTooltip")}
+                className="inline-flex h-11 w-full min-w-0 shrink-0 items-center justify-center gap-2 rounded-2xl bg-black px-5 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[10.75rem] dark:bg-white dark:text-black"
+              >
+                <Save className="h-4 w-4 shrink-0" />
+                {isSaving ? t("preview.saving") : t("preview.save")}
+              </button>
+            ) : null}
+            {episodeId ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const link = `https://wecast-frontend.onrender.com/#/share/${episodeId}`;
+                  navigator.clipboard.writeText(link);
+                  alert("Share link copied!");
+                }}
+                className="inline-flex h-11 w-full min-w-0 shrink-0 items-center justify-center rounded-2xl bg-purple-600 px-5 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 sm:w-auto sm:min-w-[10.75rem]"
+              >
+                Share Podcast
+              </button>
+            ) : null}
           </div>
         ) : null}
-        {episodeId ? (
-          <div className="flex justify-end pt-2">
-            <button
-              type="button"
-              onClick={() => {
-                const link = `https://wecast-frontend.onrender.com/#/share/${episodeId}`;
-                navigator.clipboard.writeText(link);
-                alert("Share link copied!");
-              }}
-              className="inline-flex items-center justify-center rounded-2xl bg-purple-600 px-5 py-3 text-sm font-semibold text-white transition hover:opacity-90"
-            >
-              Share Podcast
-            </button>
           </div>
-        ) : null}
+        </div>
       </div>
       </div>
       <SavePreviewAuthModal
@@ -1127,8 +1176,8 @@ function SavePreviewAuthModal({
 }) {
   if (!open) return null;
 
-  return createPortal(
-    <div className="fixed inset-0 z-[10020] flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm">
+  const modal = (
+    <div className="wecast-overlay flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm">
       <div className="w-full max-w-md rounded-[28px] border border-black/10 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-neutral-950">
         <div className="space-y-3">
           <h2 className="text-2xl font-extrabold text-black dark:text-white">{title}</h2>
@@ -1158,7 +1207,8 @@ function SavePreviewAuthModal({
           </button>
         </div>
       </div>
-    </div>,
-    document.body
+    </div>
   );
+  const portalTarget = getPortalTarget();
+  return portalTarget ? createPortal(modal, portalTarget) : modal;
 }

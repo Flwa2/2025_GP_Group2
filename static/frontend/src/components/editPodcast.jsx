@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import { createPortal } from "react-dom";
 import {
   Mic2,
   Users,
@@ -23,7 +24,8 @@ import {
   Volume,
   Disc,
   ChevronLeft,
-  ChevronDown
+  ChevronDown,
+  RefreshCw
 } from "lucide-react";
 import Modal from "../components/Modal";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
@@ -33,6 +35,34 @@ import { shouldAutoplayVoicePreview, shouldShowEditingNotifications } from "../u
 const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
   : "http://localhost:5000";
+
+const getPortalTarget = () => {
+  if (typeof document === "undefined") return null;
+  return document.body && document.body.nodeType === 1 ? document.body : null;
+};
+
+const getHashSearchParams = () => {
+  const hash = window.location.hash || "";
+  const query = hash.includes("?") ? hash.slice(hash.indexOf("?") + 1) : "";
+  return new URLSearchParams(query);
+};
+
+const authHeaders = () => ({
+  Authorization: `Bearer ${localStorage.getItem("token") || sessionStorage.getItem("token") || ""}`,
+});
+
+const parseJsonResponse = async (res) => {
+  const data = await res.json().catch(() => ({}));
+  return data || {};
+};
+
+const requestErrorMessage = (error, fallback) => {
+  const message = error?.message || "";
+  if (message === "Failed to fetch") {
+    return `${fallback}. Could not reach the WeCast backend at ${API_BASE}.`;
+  }
+  return message || fallback;
+};
 
 const splitList = (value) => {
   if (Array.isArray(value)) {
@@ -107,8 +137,8 @@ const getVoicePitchTag = (voice) => {
 function LoadingOverlay({ show, logoSrc = "/logo.png", message }) {
   if (!show) return null;
   const safeMessage = String(message || "").replace(/[?؟]/g, "");
-  return (
-    <div className="fixed inset-0 z-[9999] grid place-items-center bg-black/70 backdrop-blur-sm">
+  const overlay = (
+    <div className="wecast-overlay grid place-items-center bg-black/70 backdrop-blur-sm">
       <div className="w-[min(92vw,480px)] rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xl p-6">
         <div className="flex items-center gap-4">
           <img
@@ -127,6 +157,8 @@ function LoadingOverlay({ show, logoSrc = "/logo.png", message }) {
       </div>
     </div>
   );
+  const portalTarget = getPortalTarget();
+  return portalTarget ? createPortal(overlay, portalTarget) : overlay;
 }
 
 /* -------------------- toast notification -------------------- */
@@ -220,8 +252,8 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
     filters.pitch ? { key: "pitch", label: `Pitch: ${filters.pitch}` } : null,
   ].filter(Boolean);
 
-  return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+  const modal = (
+    <div className="wecast-overlay flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
       <div className="w-[min(92vw,560px)] rounded-2xl bg-white dark:bg-neutral-900 shadow-2xl p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold">Filter Voices - Speaker {speakerIndex + 1}</h2>
@@ -356,6 +388,8 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
       </div>
     </div>
   );
+  const portalTarget = getPortalTarget();
+  return portalTarget ? createPortal(modal, portalTarget) : modal;
 }
 
 export default function EditPodcast() {
@@ -371,6 +405,8 @@ export default function EditPodcast() {
   const [originalShowTitle, setOriginalShowTitle] = useState("");
   const [scriptStyle, setScriptStyle] = useState("");
   const [podcastLanguage, setPodcastLanguage] = useState("en");
+  const [coverUrl, setCoverUrl] = useState("");
+  const [coverImageFailed, setCoverImageFailed] = useState(false);
   const [speakers, setSpeakers] = useState([]);
   const [introMusic, setIntroMusic] = useState("");
   const [bodyMusic, setBodyMusic] = useState("");
@@ -480,6 +516,10 @@ export default function EditPodcast() {
   });
 
 const [showFinalizeWarning, setShowFinalizeWarning] = useState(false);
+const resolvedCoverSrc = useMemo(
+  () => (!coverImageFailed && coverUrl ? coverUrl : ""),
+  [coverImageFailed, coverUrl]
+);
 
 const willRegenerateAudio = useCallback(() => {
   const updatedScript = applyShowTitleToScript(
@@ -506,7 +546,8 @@ const willRegenerateAudio = useCallback(() => {
         
         const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
         const urlParams = new URLSearchParams(window.location.search);
-        const idFromUrl = urlParams.get("id");
+        const hashParams = getHashSearchParams();
+        const idFromUrl = urlParams.get("id") || hashParams.get("id");
         const id = editData.podcastId || idFromUrl;
         
         if (!id) {
@@ -518,19 +559,19 @@ const willRegenerateAudio = useCallback(() => {
         setPodcastId(id);
 
         // REAL API CALL
-        const res = await fetch(`${API_BASE}/api/podcast/${id}`, {
+        const res = await fetch(`${API_BASE}/api/podcast/${encodeURIComponent(id)}`, {
           credentials: "include",
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
+            ...authHeaders(),
           }
         });
 
         if (!res.ok) {
-          const errorData = await res.json().catch(() => ({}));
+          const errorData = await parseJsonResponse(res);
           throw new Error(errorData.error || `Failed to load podcast: ${res.status}`);
         }
         
-        const data = await res.json();
+        const data = await parseJsonResponse(res);
         console.log("Loaded podcast data:", data);
 
         const resolvedBaseTitle = data.showTitle || data.title || "Untitled Episode";
@@ -561,6 +602,8 @@ const willRegenerateAudio = useCallback(() => {
         setOriginalShowTitle(baseState.showTitle);
         setScriptStyle(data.scriptStyle || "");
         setPodcastLanguage(data.language || "en");
+        setCoverImageFailed(false);
+        setCoverUrl(data.coverUrl || "");
         setSpeakers(nextState.speakers);
         setOriginalSpeakers(baseState.speakers);
         setIntroMusic(nextState.introMusic);
@@ -639,12 +682,10 @@ useEffect(() => {
         const url = `${API_BASE}/api/voices?${params.toString()}`;
         const res = await fetch(url, { 
           credentials: "include",
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
-          }
+          headers: authHeaders(),
         });
 
-        const data = await res.json();
+        const data = await parseJsonResponse(res);
 
         if (!res.ok) {
           throw new Error(data?.error || `Failed to load voices (${res.status})`);
@@ -740,10 +781,10 @@ useEffect(() => {
       const res = await fetch(`${API_BASE}/api/voices/preview`, {
         method: "POST",
         credentials: "include",
-        headers: { 
-          "Content-Type": "application/json",
-          'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
-        },
+          headers: {
+            "Content-Type": "application/json",
+            ...authHeaders(),
+          },
         body: JSON.stringify({
           voiceId,
           voiceName,
@@ -848,12 +889,12 @@ useEffect(() => {
     setShowExitWarning(false);
     if (podcastId && (draftRestored || hasUnsavedChanges)) {
       try {
-        await fetch(`${API_BASE}/api/podcast/${podcastId}/update`, {
+        await fetch(`${API_BASE}/api/podcast/${encodeURIComponent(podcastId)}/update`, {
           method: "POST",
           credentials: "include",
           headers: {
             "Content-Type": "application/json",
-            'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
+            ...authHeaders(),
           },
           body: JSON.stringify({ mode: "discard_draft" }),
         });
@@ -876,12 +917,12 @@ useEffect(() => {
         applySpeakerLabelRenames(script, originalSpeakers, speakers),
         showTitle
       );
-      const res = await fetch(`${API_BASE}/api/podcast/${podcastId}/update`, {
+      const res = await fetch(`${API_BASE}/api/podcast/${encodeURIComponent(podcastId)}/update`, {
         method: "POST",
         credentials: "include",
         headers: {
           "Content-Type": "application/json",
-          'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
+          ...authHeaders(),
         },
         body: JSON.stringify({
           mode: "draft",
@@ -896,7 +937,7 @@ useEffect(() => {
           description: "",
         }),
       });
-      const data = await res.json();
+      const data = await parseJsonResponse(res);
       if (!res.ok) {
         throw new Error(data.error || "Failed to save draft");
       }
@@ -928,7 +969,7 @@ useEffect(() => {
         window.location.hash = navigateTo;
       }
     } catch (error) {
-      setToast({ type: "error", message: error.message || "Failed to save draft" });
+      setToast({ type: "error", message: requestErrorMessage(error, "Failed to save draft") });
       setTimeout(() => setToast(null), 3000);
     } finally {
       setSaving(false);
@@ -948,12 +989,12 @@ useEffect(() => {
     setDraftTitle(originalShowTitle);
     if (podcastId) {
       try {
-        await fetch(`${API_BASE}/api/podcast/${podcastId}/update`, {
+        await fetch(`${API_BASE}/api/podcast/${encodeURIComponent(podcastId)}/update`, {
           method: "POST",
           credentials: "include",
           headers: {
             "Content-Type": "application/json",
-            'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
+            ...authHeaders(),
           },
           body: JSON.stringify({ mode: "discard_draft" }),
         });
@@ -1039,12 +1080,12 @@ const persistChanges = async ({
   const resolvedScript = String(nextScript || "");
   const resolvedSpeakers = Array.isArray(nextSpeakers) ? nextSpeakers : speakers;
 
-  const res = await fetch(`${API_BASE}/api/podcast/${podcastId}/update`, {
+  const res = await fetch(`${API_BASE}/api/podcast/${encodeURIComponent(podcastId)}/update`, {
       method: "POST",
       credentials: "include",
       headers: { 
         "Content-Type": "application/json",
-        'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
+        ...authHeaders(),
       },
       body: JSON.stringify({
         mode: "final",
@@ -1060,7 +1101,7 @@ const persistChanges = async ({
       }),
     });
 
-    const responseData = await res.json();
+    const responseData = await parseJsonResponse(res);
     console.log("Save response:", responseData);
 
     if (!res.ok) {
@@ -1068,16 +1109,16 @@ const persistChanges = async ({
     }
 
     if (String(nextShowTitle || "").trim()) {
-      const titleRes = await fetch(`${API_BASE}/api/podcasts/${podcastId}/title`, {
+      const titleRes = await fetch(`${API_BASE}/api/podcasts/${encodeURIComponent(podcastId)}/title`, {
         method: "POST",
         credentials: "include",
         headers: {
           "Content-Type": "application/json",
-          'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
+          ...authHeaders(),
         },
         body: JSON.stringify({ title: nextShowTitle }),
       });
-      const titleData = await titleRes.json().catch(() => ({}));
+      const titleData = await parseJsonResponse(titleRes);
       if (!titleRes.ok) {
         throw new Error(titleData.error || "Failed to update episode title");
       }
@@ -1106,10 +1147,15 @@ const persistChanges = async ({
     setDraftSavedAt("");
 
     if (regenerateAfterSave) {
+      setToast({
+        type: "info",
+        message: "Updates saved. Regenerating the episode audio now...",
+      });
       await regenerateAudio({
         scriptOverride: resolvedScript,
         speakersOverride: resolvedSpeakers,
         successMessage,
+        failureMessage: "Updates were saved, but audio regeneration failed. Please check the backend connection and try Regenerate again.",
       });
     } else {
       setToast({ type: "success", message: successMessage });
@@ -1153,7 +1199,7 @@ const finalizeChanges = async () => {
     setTimeout(() => setToast(null), 3000);
   } catch (error) {
     console.error("Save error:", error);
-    setToast({ type: "error", message: error.message || "Failed to apply updates" });
+    setToast({ type: "error", message: requestErrorMessage(error, "Failed to save updates") });
   } finally {
     setSaving(false);
   }
@@ -1164,8 +1210,9 @@ const finalizeChanges = async () => {
     scriptOverride,
     speakersOverride,
     successMessage = "Audio generated successfully!",
+    failureMessage = "Failed to generate audio",
   } = {}) => {
-    if (!podcastId) return;
+    if (!podcastId) return false;
 
     const resolvedScript = String(scriptOverride ?? script);
     const resolvedSpeakers = Array.isArray(speakersOverride) ? speakersOverride : speakers;
@@ -1177,7 +1224,7 @@ const finalizeChanges = async () => {
         credentials: "include",
         headers: { 
           "Content-Type": "application/json",
-          'Authorization': `Bearer ${localStorage.getItem('token') || sessionStorage.getItem('token')}`
+          ...authHeaders(),
         },
         body: JSON.stringify({
           scriptText: resolvedScript,
@@ -1188,7 +1235,7 @@ const finalizeChanges = async () => {
         }),
       });
 
-      const data = await res.json();
+      const data = await parseJsonResponse(res);
 
       if (!res.ok || !data.url) {
         throw new Error(data.error || "Failed to generate audio");
@@ -1199,9 +1246,11 @@ const finalizeChanges = async () => {
         : `${API_BASE}${data.url}`;
 
       setToast({ type: "success", message: successMessage });
+      return true;
     } catch (error) {
       console.error("Audio generation error:", error);
-      setToast({ type: "error", message: error.message || "Failed to generate audio" });
+      setToast({ type: "warning", message: requestErrorMessage(error, failureMessage) });
+      return false;
     } finally {
       setGeneratingAudio(false);
     }
@@ -1285,6 +1334,8 @@ const exportScript = async (format = "pdf") => {
 
   const studioGlassPanelClass = "border border-purple-200/90 dark:border-purple-400/30 bg-white/78 dark:bg-neutral-900/45 backdrop-blur-sm shadow-[0_10px_30px_rgba(0,0,0,0.08)]";
   const studioGlassCardClass = "rounded-[28px] border border-purple-200/90 dark:border-purple-400/30 bg-white/74 dark:bg-neutral-900/42 backdrop-blur-md shadow-[0_12px_36px_rgba(15,23,42,0.10)]";
+  const previewTitleCardClass =
+    "max-w-full min-w-0 overflow-hidden rounded-[28px] border border-[#eadcf6] bg-white/78 shadow-[0_12px_36px_rgba(15,23,42,0.10)] backdrop-blur-md dark:border-[#6f5a86]/30 dark:bg-neutral-900/42";
   const studioFieldClass = "border border-neutral-300/80 dark:border-white/10 bg-white/88 dark:bg-neutral-800/90 text-gray-900 dark:text-gray-100 placeholder:text-black/35 dark:placeholder:text-white/35 caret-black dark:caret-white shadow-sm focus:ring-2 focus:ring-purple-500/35 focus:border-purple-400/50";
 
   if (loading) {
@@ -1296,7 +1347,7 @@ const exportScript = async (format = "pdf") => {
   }
 
  return (
-    <div className="min-h-screen bg-white/35 dark:bg-neutral-900/20 text-black dark:text-white">
+    <div className="min-h-screen overflow-x-clip bg-white/35 dark:bg-neutral-900/20 text-black dark:text-white">
       {/* Header */}
       <LoadingOverlay 
   show={generatingAudio} 
@@ -1333,20 +1384,31 @@ const exportScript = async (format = "pdf") => {
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 pt-6 pb-10 bg-white/35 dark:bg-neutral-900/20">
+      <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 pt-4 pb-8 bg-white/35 dark:bg-neutral-900/20 sm:pt-6 sm:pb-10">
       {/* Title Card */}
-      <div className="pt-2 pb-6">
-        <div className={`${studioGlassCardClass} p-6`}>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 bg-white/70 dark:bg-purple-900/30 rounded-full flex items-center justify-center border border-black/5 dark:border-white/10">
-                <Mic2 className="w-6 h-6 text-purple-600 dark:text-purple-400" />
+      <div className="pt-2 pb-4 sm:pb-6">
+        <div className={previewTitleCardClass}>
+          {resolvedCoverSrc ? (
+            <div className="flex min-w-0 flex-row items-stretch bg-white dark:bg-neutral-950 sm:items-start md:items-stretch">
+              <div className="flex w-20 shrink-0 items-stretch justify-start overflow-hidden border-r border-black/10 bg-white p-1.5 dark:border-white/10 dark:bg-neutral-950 max-[360px]:w-16 sm:h-auto sm:w-[7.5rem] sm:p-2 md:h-auto md:w-24 md:p-0">
+                <img
+                  src={resolvedCoverSrc}
+                  alt={`${showTitle || "Episode"} cover`}
+                  className="h-full w-full object-cover object-center sm:object-contain sm:object-left md:object-cover md:object-center"
+                  onError={() => setCoverImageFailed(true)}
+                />
               </div>
-              <div>
-                <p className="text-xs uppercase tracking-wider text-black/55 dark:text-white/55">Episode Title</p>
+
+              <div className="flex min-w-0 flex-1 items-center bg-[linear-gradient(115deg,rgba(255,255,255,0.97)_0%,rgba(255,255,255,0.95)_48%,rgba(250,246,253,0.92)_76%,rgba(241,234,247,0.74)_100%)] p-4 max-[360px]:p-3 sm:p-5 md:min-h-24 md:py-3 dark:bg-[linear-gradient(115deg,rgba(23,23,26,0.92)_0%,rgba(23,23,26,0.9)_46%,rgba(40,32,52,0.82)_76%,rgba(72,57,95,0.58)_100%)]">
+                <div className="flex w-full min-w-0 flex-col items-start gap-2.5 sm:gap-4 sm:flex-row sm:items-center sm:justify-between md:gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[10px] uppercase tracking-wider text-black/55 dark:text-white/55 sm:text-xs">EPISODE TITLE</p>
                 {!isEditingTitle ? (
-                  <div className="flex items-center gap-3">
-                    <h2 className="text-xl font-semibold text-black dark:text-white">
+                  <div className="mt-1 flex min-w-0 items-start gap-2 sm:mt-1.5 sm:items-center sm:gap-3">
+                    <h2
+                      dir={/[\u0600-\u06FF]/.test(showTitle || "") ? "rtl" : "ltr"}
+                      className="max-w-4xl min-w-0 break-words text-lg font-semibold leading-tight text-black dark:text-white sm:text-xl"
+                    >
                       {showTitle || "Untitled Episode"}
                     </h2>
                     <button
@@ -1354,18 +1416,18 @@ const exportScript = async (format = "pdf") => {
                         setDraftTitle(showTitle);
                         setIsEditingTitle(true);
                       }}
-                      className="p-1 hover:bg-black/5 dark:hover:bg-white/10 rounded"
+                      className="mt-0.5 shrink-0 rounded p-1 hover:bg-black/5 dark:hover:bg-white/10 sm:mt-0"
                     >
                       <Pencil className="w-4 h-4 text-gray-500" />
                     </button>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-2">
+                  <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-2">
                     <input
                       type="text"
                       value={draftTitle}
                       onChange={(e) => setDraftTitle(e.target.value)}
-                      className={`px-3 py-1 rounded-lg text-lg ${studioFieldClass}`}
+                      className={`min-w-0 flex-[1_1_100%] rounded-lg px-3 py-1.5 text-base sm:flex-1 sm:text-lg ${studioFieldClass}`}
                       dir={/[\u0600-\u06FF]/.test(draftTitle || showTitle || "") ? "rtl" : "ltr"}
                       autoFocus
                     />
@@ -1390,7 +1452,7 @@ const exportScript = async (format = "pdf") => {
     });
     setTimeout(() => setToast(null), 3000);
   }}
-  className="px-3 py-1 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700"
+  className="flex-1 rounded-lg bg-purple-600 px-3 py-1.5 text-sm text-white hover:bg-purple-700 sm:flex-none sm:py-1"
 >
   Apply
 </button>
@@ -1400,20 +1462,104 @@ const exportScript = async (format = "pdf") => {
                         setDraftTitle(showTitle);
                         setIsEditingTitle(false);
                       }}
-                      className="px-3 py-1 border border-black/10 dark:border-white/15 rounded-lg text-sm hover:bg-black/5 dark:hover:bg-white/10"
+                      className="flex-1 rounded-lg border border-black/10 px-3 py-1.5 text-sm hover:bg-black/5 dark:border-white/15 dark:hover:bg-white/10 sm:flex-none sm:py-1"
                     >
                       Cancel
                     </button>
                   </div>
                 )}
               </div>
+
+                  <div className="flex max-w-full min-w-0 items-center sm:w-auto sm:justify-end">
+                    <span className="inline-flex w-fit max-w-full min-w-0 items-center rounded-full border border-black/5 bg-white/75 px-2.5 py-1 text-xs leading-tight text-black/60 [overflow-wrap:anywhere] dark:border-white/10 dark:bg-white/10 dark:text-white/60 sm:px-4 sm:py-2 sm:text-sm">
+                      {scriptStyle || "No style selected"}
+                    </span>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div className="flex items-center gap-2 text-sm text-black/60 dark:text-white/60">
-              <span className="px-3 py-1 bg-white/70 dark:bg-white/10 rounded-full border border-black/5 dark:border-white/10">
-                {scriptStyle || "No style selected"}
-              </span>
+          ) : (
+            <div className="bg-[linear-gradient(115deg,rgba(255,255,255,0.97)_0%,rgba(255,255,255,0.95)_48%,rgba(250,246,253,0.92)_76%,rgba(241,234,247,0.74)_100%)] p-4 sm:p-6 dark:bg-[linear-gradient(115deg,rgba(23,23,26,0.92)_0%,rgba(23,23,26,0.9)_46%,rgba(40,32,52,0.82)_76%,rgba(72,57,95,0.58)_100%)]">
+              <div className="flex min-w-0 items-start gap-3 sm:items-center sm:gap-4">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-black/5 bg-white/70 dark:border-white/10 dark:bg-purple-900/30">
+                  <Mic2 className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+                </div>
+                <div className="flex min-w-0 flex-1 flex-col items-start gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[10px] uppercase tracking-wider text-black/55 dark:text-white/55 sm:text-xs">EPISODE TITLE</p>
+                    {!isEditingTitle ? (
+                      <div className="mt-1 flex min-w-0 items-start gap-2 sm:mt-1.5 sm:items-center sm:gap-3">
+                        <h2
+                          dir={/[\u0600-\u06FF]/.test(showTitle || "") ? "rtl" : "ltr"}
+                          className="max-w-4xl min-w-0 break-words text-lg font-semibold leading-tight text-black dark:text-white sm:text-xl"
+                        >
+                          {showTitle || "Untitled Episode"}
+                        </h2>
+                        <button
+                          onClick={() => {
+                            setDraftTitle(showTitle);
+                            setIsEditingTitle(true);
+                          }}
+                          className="mt-0.5 shrink-0 rounded p-1 hover:bg-black/5 dark:hover:bg-white/10 sm:mt-0"
+                        >
+                          <Pencil className="w-4 h-4 text-gray-500" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-2">
+                        <input
+                          type="text"
+                          value={draftTitle}
+                          onChange={(e) => setDraftTitle(e.target.value)}
+                          className={`min-w-0 flex-[1_1_100%] rounded-lg px-3 py-1.5 text-base sm:flex-1 sm:text-lg ${studioFieldClass}`}
+                          dir={/[\u0600-\u06FF]/.test(draftTitle || showTitle || "") ? "rtl" : "ltr"}
+                          autoFocus
+                        />
+                        <button
+                          onClick={() => {
+                            const trimmedTitle = draftTitle.trim();
+                            if (!trimmedTitle) return;
+
+                            const oldTitle = showTitle;
+                            const escapedOldTitle = oldTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                            const nextScript = applyShowTitleToScript(script, trimmedTitle);
+                            const newScript = oldTitle
+                              ? nextScript.replace(new RegExp(escapedOldTitle, 'g'), trimmedTitle)
+                              : nextScript;
+
+                            setShowTitle(trimmedTitle);
+                            setScript(newScript);
+                            setIsEditingTitle(false);
+                            setToast({
+                              type: "success",
+                              message: "Title updated in your draft. Apply updates when you're ready.",
+                            });
+                            setTimeout(() => setToast(null), 3000);
+                          }}
+                          className="flex-1 rounded-lg bg-purple-600 px-3 py-1.5 text-sm text-white hover:bg-purple-700 sm:flex-none sm:py-1"
+                        >
+                          Apply
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setDraftTitle(showTitle);
+                            setIsEditingTitle(false);
+                          }}
+                          className="flex-1 rounded-lg border border-black/10 px-3 py-1.5 text-sm hover:bg-black/5 dark:border-white/15 dark:hover:bg-white/10 sm:flex-none sm:py-1"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <span className="inline-flex w-fit max-w-full min-w-0 items-center rounded-full border border-black/5 bg-white/75 px-2.5 py-1 text-xs leading-tight text-black/60 [overflow-wrap:anywhere] dark:border-white/10 dark:bg-white/10 dark:text-white/60 sm:px-4 sm:py-2 sm:text-sm">
+                    {scriptStyle || "No style selected"}
+                  </span>
+                </div>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
 
@@ -1439,12 +1585,12 @@ const exportScript = async (format = "pdf") => {
                   </p>
                 </div>
               </div>
-              <div className="flex flex-wrap gap-3 lg:justify-end">
+              <div className="flex flex-wrap gap-2 sm:gap-3 lg:justify-end">
                 <button
                   type="button"
                   onClick={restoreOriginalVersion}
                   disabled={saving || generatingAudio}
-                  className="rounded-2xl border border-amber-300/90 bg-white/88 px-5 py-2.5 text-sm font-semibold text-amber-950 transition hover:-translate-y-0.5 hover:bg-white hover:shadow-sm disabled:opacity-50 dark:border-amber-400/25 dark:bg-white/10 dark:text-amber-100 dark:hover:bg-white/14"
+                  className="min-h-10 flex-1 rounded-xl border border-amber-300/90 bg-white/88 px-3 py-2 text-sm font-semibold text-amber-950 transition hover:bg-white hover:shadow-sm disabled:opacity-50 dark:border-amber-400/25 dark:bg-white/10 dark:text-amber-100 dark:hover:bg-white/14 sm:flex-none sm:rounded-2xl sm:px-5 sm:py-2.5 sm:hover:-translate-y-0.5"
                 >
                   Restore Original
                 </button>
@@ -1457,12 +1603,12 @@ const exportScript = async (format = "pdf") => {
       {/* Tabs and Save Button */}
       <div>
         <div className={`${studioGlassPanelClass} rounded-[24px] px-4 py-3 sm:px-6 sm:py-1 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between`}>
-          <nav className="flex flex-wrap gap-4 sm:gap-6">
+          <nav className="flex flex-wrap gap-3 sm:gap-6">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-1 py-4 text-sm font-medium border-b-2 transition ${
+                className={`flex items-center gap-1.5 border-b-2 px-1 py-2.5 text-sm font-medium transition sm:gap-2 sm:py-4 ${
                   activeTab === tab.id
                     ? "border-purple-600 text-purple-600"
                     : "border-transparent text-black/55 hover:text-black/75 dark:text-white/60 dark:hover:text-white"
@@ -1474,7 +1620,7 @@ const exportScript = async (format = "pdf") => {
             ))}
           </nav>
           
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="flex flex-wrap gap-2 sm:flex-row sm:items-center sm:gap-3">
             <button
               onClick={() => {
                 if (isEditingTitle) {
@@ -1485,9 +1631,9 @@ const exportScript = async (format = "pdf") => {
                 saveDraftLocally();
               }}
               disabled={saving || generatingAudio || !hasUnsavedChanges}
-              className={`flex items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-semibold transition ${
+              className={`min-h-10 flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition sm:flex-none sm:rounded-2xl sm:px-4 sm:py-2.5 ${
                 hasUnsavedChanges
-                  ? "border border-purple-300 bg-white text-purple-700 hover:-translate-y-0.5 hover:bg-purple-50 dark:border-purple-400/30 dark:bg-white/5 dark:text-purple-200 dark:hover:bg-purple-900/20"
+                  ? "border border-purple-300 bg-white text-purple-700 hover:bg-purple-50 dark:border-purple-400/30 dark:bg-white/5 dark:text-purple-200 dark:hover:bg-purple-900/20 sm:hover:-translate-y-0.5"
                   : "bg-black/5 text-black/35 cursor-not-allowed dark:bg-white/10 dark:text-white/40"
               }`}
             >
@@ -1511,14 +1657,14 @@ const exportScript = async (format = "pdf") => {
     }
   }}
   disabled={saving || generatingAudio || (!hasUnsavedChanges && !draftRestored)}
-  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition ${
+  className={`min-h-10 flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition sm:flex-none sm:px-4 ${
     hasUnsavedChanges || draftRestored
       ? "bg-purple-600 text-white hover:bg-purple-700"
       : "bg-black/5 text-black/35 cursor-not-allowed dark:bg-white/10 dark:text-white/40"
   }`}
 >
-  <Save className="w-4 h-4" />
-  {saving ? "Applying Updates..." : "Apply Updates"}
+  <RefreshCw className="w-4 h-4" />
+  {saving || generatingAudio ? "Regenerating..." : "Regenerate"}
 </button>
           </div>
         </div>
@@ -1542,7 +1688,7 @@ const exportScript = async (format = "pdf") => {
               </ul>
             </div>
 
-           <div className={`${studioGlassCardClass} p-5`}>
+           <div className={`${studioGlassCardClass} p-4 sm:p-5`}>
   <div className="flex items-center justify-between mb-2">
     <label className="font-medium text-gray-700 dark:text-gray-300">Script Content</label>
     <span className="text-sm text-gray-500 dark:text-gray-400">
@@ -1573,7 +1719,7 @@ const exportScript = async (format = "pdf") => {
       setShowExportMenu((prev) => !prev);
     }}
     disabled={!script.trim()}
-    className="flex items-center gap-2 px-4 py-2 border border-purple-500 text-purple-600 dark:text-purple-300 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50"
+    className="flex min-h-10 items-center gap-2 rounded-lg border border-purple-500 px-3 py-2 text-sm font-medium text-purple-600 hover:bg-purple-50 disabled:opacity-50 dark:text-purple-300 dark:hover:bg-purple-900/20 sm:px-4"
     title="Export script"
   >
     <Download className="w-4 h-4" />
@@ -1622,7 +1768,7 @@ const exportScript = async (format = "pdf") => {
               const hasMoreVoices = pool.length > visibleCount;
 
               return (
-                <div key={index} className={`${studioGlassCardClass} p-6`}>
+                <div key={index} className={`${studioGlassCardClass} p-4 sm:p-6`}>
                   <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
                     <Users className="w-5 h-5 text-purple-600" />
                     Speaker {index + 1}: {speaker.name || "Unnamed"}
@@ -1703,10 +1849,10 @@ const exportScript = async (format = "pdf") => {
                         <p className="text-sm text-red-500">No voices found. Check ElevenLabs config.</p>
                       ) : (
                         <div className="w-full">
-                          <div className="flex items-center gap-3">
+                          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                             <button
                               onClick={() => setActiveFilterSpeaker(index)}
-                              className="relative inline-flex items-center justify-center h-[44px] w-[44px] rounded-xl border border-neutral-300/80 dark:border-white/15 bg-white/82 dark:bg-neutral-900/72 hover:bg-white dark:hover:bg-white/10"
+                              className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-neutral-300/80 bg-white/82 hover:bg-white dark:border-white/15 dark:bg-neutral-900/72 dark:hover:bg-white/10 sm:h-[44px] sm:w-[44px]"
                             >
                               <SlidersHorizontal className="w-5 h-5" />
                               {Object.values(speakerVoiceFilters[index] || {}).some(Boolean) && (
@@ -1714,7 +1860,7 @@ const exportScript = async (format = "pdf") => {
                               )}
                             </button>
 
-                            <div className="relative flex-1">
+                            <div className="relative min-w-[min(100%,12rem)] flex-1">
                               <select
                                 value={safeValue}
                                 onChange={(e) => {
@@ -1762,7 +1908,7 @@ const exportScript = async (format = "pdf") => {
     previewVoice(currentId, selected?.name || "");
   }}
   disabled={!currentId || previewLoadingVoiceId === currentId}
-  className={`inline-flex items-center justify-center gap-2 px-5 h-[44px] rounded-xl border border-purple-500 text-purple-600 font-semibold transition hover:bg-purple-50 dark:hover:bg-purple-900/20 disabled:opacity-50 ${isRTL ? "flex-row-reverse" : ""}`}
+  className={`inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-xl border border-purple-500 px-3 py-2 text-sm font-semibold text-purple-600 transition hover:bg-purple-50 disabled:opacity-50 dark:hover:bg-purple-900/20 sm:h-[44px] sm:flex-none sm:px-5 sm:text-base ${isRTL ? "flex-row-reverse" : ""}`}
   title={previewLoadingVoiceId === currentId ? "Generating preview..." : "Preview voice"}
 >
   <span>{previewLoadingVoiceId === currentId ? "Generating..." : "Preview"}</span>
@@ -1970,7 +2116,7 @@ const exportScript = async (format = "pdf") => {
 
       {/* Exit Warning Modal */}
       {showExitWarning && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+        <div className="wecast-overlay flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
           <div className="w-[min(92vw,440px)] rounded-[20px] border border-neutral-200 bg-white p-5 shadow-[0_24px_56px_rgba(15,23,42,0.22)] dark:border-white/10 dark:bg-neutral-900">
             <div className="mb-4 flex items-start gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600 ring-1 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-400/20">
@@ -2012,60 +2158,78 @@ const exportScript = async (format = "pdf") => {
 
       {/* Finalize Warning Modal */}
 {showFinalizeWarning && (
-  <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-    <div className="w-[min(92vw,480px)] rounded-[24px] border border-purple-200 bg-white p-6 shadow-[0_24px_56px_rgba(139,61,255,0.15)] dark:border-purple-400/20 dark:bg-neutral-900">
-      <div className="mb-5 flex items-start gap-4">
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-purple-100 text-purple-700 ring-1 ring-purple-300 dark:bg-purple-500/15 dark:text-purple-300 dark:ring-purple-400/25">
-          <Volume2 className="h-6 w-6" />
+  <div className="wecast-overlay flex items-center justify-center bg-black/55 p-4 backdrop-blur-md">
+    <div
+      dir={isRTL ? "rtl" : "ltr"}
+      className="w-full max-w-[520px] rounded-[22px] border border-purple-400/20 bg-[#111118] p-5 shadow-[0_28px_70px_rgba(0,0,0,0.48)] ring-1 ring-purple-400/10 sm:p-6"
+    >
+      <div className="flex gap-4 text-start">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-purple-500/12 text-purple-300 ring-1 ring-purple-400/25">
+          <RefreshCw className="h-5 w-5" />
         </div>
-        <div className="space-y-1.5">
-          <h2 className="text-xl font-bold tracking-tight text-neutral-950 dark:text-white">
-            Regenerate Audio?
+        <div className="min-w-0 flex-1">
+          <h2 className="text-[22px] font-bold leading-7 tracking-tight text-white">
+            {isRTL ? "إعادة توليد الصوت؟" : "Regenerate audio?"}
           </h2>
-          <p className="text-sm leading-6 text-neutral-600 dark:text-white/70">
-            Applying these updates will regenerate the full podcast audio so your latest edits are reflected everywhere.
-            This may take a few moments.
+          <p className="mt-3 text-sm leading-6 text-[#A0A0A0]">
+            {isRTL ? (
+              <>
+                سيتم استبدال الصوت الحالي ليعكس آخر تغييراتك.
+                <br />
+                قد يستغرق ذلك بضع لحظات.
+              </>
+            ) : (
+              <>
+                The current audio will be replaced to reflect your latest changes.
+                <br />
+                This may take a few moments.
+              </>
+            )}
           </p>
-          <div className="mt-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-500/10 dark:text-amber-300">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>The following changes require audio regeneration:</span>
+          <div className="mt-5 rounded-2xl border border-amber-400/25 bg-[rgba(255,193,7,0.10)] p-4 text-sm text-amber-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+              <span className="font-semibold">
+                {isRTL
+                  ? "التغييرات التالية تتطلب إعادة توليد الصوت:"
+                  : "The following changes require audio regeneration:"}
+              </span>
             </div>
-            <ul className="mt-2 ml-6 list-disc space-y-0.5 text-xs">
+            <ul className="ms-7 mt-3 list-disc space-y-1.5 text-[13px] leading-5 text-[#D8D8D8]">
               {String(applyShowTitleToScript(
                 applySpeakerLabelRenames(script, originalSpeakers, speakers),
                 showTitle
               )) !== String(originalScript || "") && (
-                <li>Script content has been modified</li>
+                <li>{isRTL ? "تم تعديل محتوى النص" : "Script content has been modified"}</li>
               )}
               {!speakersEqual(speakers, originalSpeakers) && (
-                <li>Speaker names or voices have changed</li>
+                <li>{isRTL ? "تم تغيير أسماء المتحدثين أو الأصوات" : "Speaker names or voices have changed"}</li>
               )}
               {(String(introMusic || "") !== String(originalIntroMusic || "") ||
                 String(bodyMusic || "") !== String(originalBodyMusic || "") ||
                 String(outroMusic || "") !== String(originalOutroMusic || "")) && (
-                <li>Music tracks have been updated</li>
+                <li>{isRTL ? "تم تحديث المقاطع الموسيقية" : "Music tracks have been updated"}</li>
               )}
             </ul>
           </div>
         </div>
       </div>
       
-      <div className="flex gap-3">
+      <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row">
         <button
           onClick={() => setShowFinalizeWarning(false)}
-          className="flex-1 rounded-xl border border-neutral-300 bg-white px-4 py-2.5 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-50 dark:border-white/15 dark:bg-white/5 dark:text-white dark:hover:bg-white/10"
+          className="min-h-11 flex-1 rounded-xl border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white transition hover:border-white/25 hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-purple-300"
         >
-          Cancel
+          {isRTL ? "إلغاء" : "Cancel"}
         </button>
         <button
           onClick={async () => {
             setShowFinalizeWarning(false);
             await finalizeChanges();
           }}
-          className="flex-1 rounded-xl bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_10px_22px_rgba(139,61,255,0.25)] transition hover:bg-purple-700"
+          className="min-h-11 flex-1 rounded-xl bg-gradient-to-r from-[#8b3dff] to-[#6d28d9] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_12px_26px_rgba(139,61,255,0.30)] transition hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-purple-300 focus:ring-offset-2 focus:ring-offset-[#111118]"
         >
-          Apply & Regenerate Audio
+          {isRTL ? "إعادة التوليد" : "Regenerate"}
         </button>
       </div>
     </div>

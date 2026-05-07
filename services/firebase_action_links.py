@@ -1,3 +1,5 @@
+from urllib.parse import parse_qsl, urlencode, urlparse
+
 from services.email_config import (
     EmailConfigError,
     frontend_public_url,
@@ -53,6 +55,23 @@ def _firebase_auth():
     return fb_auth
 
 
+def _build_custom_reset_link(firebase_link):
+    parsed = urlparse(firebase_link or "")
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    required = ("mode", "oobCode", "apiKey")
+    if not all(params.get(key) for key in required):
+        raise FirebaseActionLinkError("Firebase reset link is missing required parameters.")
+
+    keep_params = {
+        key: value
+        for key, value in params.items()
+        if key in {"mode", "oobCode", "apiKey", "continueUrl", "lang", "tenantId"}
+        and value not in (None, "")
+    }
+    query = urlencode(keep_params)
+    return f"{public_app_url().rstrip('/')}/#/reset-password?{query}"
+
+
 def generate_email_verification_link(email):
     normalized_email = (email or "").strip().lower()
     if not normalized_email:
@@ -72,8 +91,9 @@ def generate_password_reset_link(email):
         raise FirebaseActionLinkError("Email is required.")
 
     fb_auth = _firebase_auth()
-    return _generate_link_with_domain_fallback(
+    firebase_link = _generate_link_with_domain_fallback(
         normalized_email,
-        "/#/reset-password",
+        "/reset-password",
         fb_auth.generate_password_reset_link,
     )
+    return _build_custom_reset_link(firebase_link)

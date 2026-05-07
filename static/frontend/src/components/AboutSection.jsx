@@ -9,8 +9,8 @@ export default function AboutSection() {
       id="about"
       className="relative overflow-hidden bg-cream text-neutral-900 transition-colors duration-500 dark:bg-[#0a0a1a] dark:text-gray-100"
     >
-      <div className="section-shell section-block grid grid-cols-1 items-center gap-8 py-14 sm:gap-10 sm:py-20 lg:grid-cols-2">
-        <div className="space-y-4 sm:space-y-5">
+      <div className="section-shell section-block grid min-w-0 grid-cols-1 items-center gap-6 py-14 sm:gap-8 sm:py-20 md:gap-10 lg:grid-cols-2">
+        <div className="min-w-0 space-y-4 text-start sm:space-y-5">
           <h2 className="heading-lg max-w-[14ch] sm:max-w-none">
             {t("AboutTitle")}{" "}
             <span className="curved-wecast font-extrabold text-black dark:text-gray-100">
@@ -31,7 +31,7 @@ export default function AboutSection() {
           </p>
         </div>
 
-        <div className="relative mx-auto mt-2 h-[240px] w-full max-w-[320px] sm:h-[320px] sm:max-w-[420px] md:h-[440px] md:max-w-[520px] lg:justify-self-end">
+        <div className="relative mx-auto mt-2 h-[240px] w-full min-w-0 max-w-[320px] sm:h-[320px] sm:max-w-[420px] md:h-[440px] md:max-w-[520px] lg:justify-self-end">
           <div className="absolute right-2 top-10 h-28 w-28 rounded-full bg-pink-bright/25 blur-3xl animate-pulse sm:h-44 sm:w-44" />
           <div className="absolute bottom-4 right-10 h-24 w-24 rounded-full bg-yellow-bright/25 blur-2xl animate-bounce sm:right-14 sm:h-36 sm:w-36" />
           <div className="absolute right-28 top-5 h-14 w-14 rounded-full bg-purple-medium/20 blur-xl animate-pulse sm:right-40 sm:h-20 sm:w-20" />

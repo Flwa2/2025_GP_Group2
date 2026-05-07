@@ -83,5 +83,6 @@ httpx<0.28
 elevenlabs
 firebase-admin
 pydub
+audioop-lts
 Pillow
 boto3

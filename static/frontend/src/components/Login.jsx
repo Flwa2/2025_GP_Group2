@@ -24,6 +24,7 @@ import {
 } from "firebase/auth";
 
 const REMEMBERED_LOGIN_KEY = "rememberedLoginIdentifier";
+const GENERIC_LOGIN_FAILURE_MESSAGE = "Email or password is incorrect.";
 
 function redirectAfterAuth() {
   const { redirect, id, from } = getAuthRedirectIntent();
@@ -48,13 +49,56 @@ function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function buildApiError(data, fallbackMessage) {
+  const error = new Error(data?.message || data?.error || fallbackMessage);
+  error.code = data?.code || "";
+  error.data = data || {};
+  return error;
+}
+
+async function resolveLoginIdentifier(identifier) {
+  const res = await fetch(`${API_BASE}/api/auth/resolve-identifier`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ identifier }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw buildApiError(
+      data,
+      "We couldn't look up that account right now. Please try again."
+    );
+  }
+
+  return data;
+}
+
 function buildPasswordResetSuccessMessage(email) {
   return `If an account exists for ${email}, a password reset link is on the way. Check your inbox and spam folder next.`;
 }
 
 function mapLoginError(error) {
-  const code = error?.code || "";
+  const code = String(error?.code || "").trim().toLowerCase();
 
+  if (code === "email_not_verified") {
+    return "Please verify your email first before logging in.";
+  }
+  if (
+    code === "wrong_password" ||
+    code === "account_not_found" ||
+    code === "provider_mismatch" ||
+    code === "auth/wrong-password" ||
+    code === "auth/user-not-found" ||
+    code === "auth/invalid-credential" ||
+    code === "auth/invalid-login-credentials"
+  ) {
+    return GENERIC_LOGIN_FAILURE_MESSAGE;
+  }
+  if (code === "username_conflict") {
+    return "This username matches more than one account. Please use your email address.";
+  }
   if (code === "auth/invalid-email") {
     return "Enter a valid email address and try again.";
   }
@@ -76,14 +120,6 @@ function mapLoginError(error) {
   if (code === "auth/user-disabled") {
     return "This Firebase account is disabled. Re-enable it in Firebase Authentication before signing in.";
   }
-  if (
-    code === "auth/wrong-password" ||
-    code === "auth/user-not-found" ||
-    code === "auth/invalid-credential"
-  ) {
-    return "Invalid email or password.";
-  }
-
   if (error?.message) {
     return error.message;
   }
@@ -132,6 +168,7 @@ export default function Login() {
   const [showPwd, setShowPwd] = useState(false);
 
   const [error, setError] = useState("");
+  const [warning, setWarning] = useState("");
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
   const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
@@ -153,6 +190,69 @@ export default function Login() {
     return data;
   };
 
+  const storeAuthenticatedSession = (data, rememberedIdentifier) => {
+    if (data.token) {
+      if (rememberMe) {
+        localStorage.setItem("token", data.token);
+        sessionStorage.removeItem("token");
+      } else {
+        sessionStorage.setItem("token", data.token);
+        localStorage.removeItem("token");
+      }
+    }
+
+    if (rememberMe) {
+      localStorage.setItem(REMEMBERED_LOGIN_KEY, rememberedIdentifier);
+    } else {
+      localStorage.removeItem(REMEMBERED_LOGIN_KEY);
+    }
+
+    if (data.user) {
+      const userJson = JSON.stringify(data.user);
+      if (rememberMe) {
+        localStorage.setItem("user", userJson);
+        sessionStorage.removeItem("user");
+      } else {
+        sessionStorage.setItem("user", userJson);
+        localStorage.removeItem("user");
+      }
+    }
+
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: "token", newValue: data.token || "" })
+    );
+  };
+
+  const clearStatusMessages = () => {
+    setError("");
+    setWarning("");
+    setInfo("");
+  };
+
+  const showErrorMessage = (message) => {
+    setWarning("");
+    setInfo("");
+    setError(message);
+  };
+
+  const showInfoMessage = (message) => {
+    setError("");
+    setWarning("");
+    setInfo(message);
+  };
+
+  const setVerificationPendingState = (email, message) => {
+    const normalizedPendingEmail = normalizeEmail(email);
+    sessionStorage.setItem(
+      "wecast:pendingVerificationEmail",
+      normalizedPendingEmail
+    );
+    setPendingVerificationEmail(normalizedPendingEmail);
+    setError("");
+    setInfo("");
+    setWarning(message || "Please verify your email first before logging in.");
+  };
+
   useEffect(() => {
     storeAuthRedirectIntent(readHashRedirectParams());
   }, []);
@@ -168,7 +268,6 @@ export default function Login() {
     if (pendingEmail) {
       setIdentifier(pendingEmail);
       setPendingVerificationEmail(pendingEmail);
-      setInfo("Verify your email first, then log in to finish setting up your account.");
     }
   }, []);
 
@@ -188,7 +287,7 @@ export default function Login() {
       } catch (err) {
         if (!cancelled) {
           console.error("SOCIAL REDIRECT LOGIN ERROR:", err);
-          setError(err.message || "Social login failed. Please try again.");
+          showErrorMessage(err.message || "Social login failed. Please try again.");
         }
       } finally {
         if (!cancelled) {
@@ -206,8 +305,7 @@ export default function Login() {
 
   const switchToLogin = () => {
     setMode("login");
-    setError("");
-    setInfo("");
+    clearStatusMessages();
     setPendingVerificationEmail("");
     setResetRequestComplete(false);
     setResetSubmittedEmail("");
@@ -215,8 +313,7 @@ export default function Login() {
 
   const switchToReset = () => {
     setMode("reset");
-    setError("");
-    setInfo("");
+    clearStatusMessages();
     setPendingVerificationEmail("");
     setResetRequestComplete(false);
     setResetSubmittedEmail("");
@@ -231,12 +328,11 @@ export default function Login() {
   // ------------------ LOGIN SUBMIT ------------------
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError("");
-    setInfo("");
+    clearStatusMessages();
     setPendingVerificationEmail("");
 
     if (!identifier.trim() || !pwd.trim()) {
-      setError("Please enter both email/username and password.");
+      showErrorMessage("Please enter both email/username and password.");
       return;
     }
 
@@ -244,33 +340,48 @@ export default function Login() {
 
     try {
       const trimmedIdentifier = identifier.trim();
-      const normalizedIdentifier = looksLikeEmail(trimmedIdentifier)
+      const usingEmail = looksLikeEmail(trimmedIdentifier);
+      const normalizedIdentifier = usingEmail
         ? normalizeEmail(trimmedIdentifier)
         : trimmedIdentifier;
+      const resolvedIdentifier = await resolveLoginIdentifier(
+        normalizedIdentifier
+      );
+      const loginStrategy =
+        resolvedIdentifier.loginStrategy ||
+        (usingEmail ? "firebase_email" : "legacy_password");
+      const resolvedEmail = normalizeEmail(
+        resolvedIdentifier.email || normalizedIdentifier
+      );
+      const firebaseEmail =
+        loginStrategy === "legacy_password" ? "" : resolvedEmail;
+      const backendIdentifier =
+        loginStrategy === "legacy_password" && resolvedEmail
+          ? resolvedEmail
+          : resolvedEmail || normalizedIdentifier;
 
-      if (identifier.includes("@")) {
+      if (firebaseEmail) {
         try {
           ensureFirebaseClientReady();
           const credential = await signInWithEmailAndPassword(
             auth,
-            normalizedIdentifier,
+            firebaseEmail,
             pwd
           );
           const firebaseUser = credential.user;
 
           if (!firebaseUser.emailVerified) {
             await signOut(auth);
-            sessionStorage.setItem(
-              "wecast:pendingVerificationEmail",
-              normalizedIdentifier
+            setVerificationPendingState(
+              firebaseEmail,
+              "Please verify your email first before logging in."
             );
-            setPendingVerificationEmail(normalizedIdentifier);
-            setInfo("Your account is almost ready. Verify your email first, then log in.");
             setLoading(false);
             return;
           }
 
           sessionStorage.removeItem("wecast:pendingVerificationEmail");
+          setPendingVerificationEmail("");
 
           const idToken = await firebaseUser.getIdToken(true);
           const firebaseRes = await fetch(`${API_BASE}/api/firebase-email-login`, {
@@ -288,40 +399,20 @@ export default function Login() {
           }
 
           if (!firebaseRes.ok) {
-            throw new Error(firebaseData.error || "Login failed.");
-          }
-
-          if (firebaseData.token) {
-            if (rememberMe) {
-              localStorage.setItem("token", firebaseData.token);
-              sessionStorage.removeItem("token");
-            } else {
-              sessionStorage.setItem("token", firebaseData.token);
-              localStorage.removeItem("token");
+            const apiError = buildApiError(firebaseData, "Login failed.");
+            if (apiError.code === "email_not_verified") {
+              await signOut(auth).catch(() => {});
+              setVerificationPendingState(
+                apiError.data?.email || firebaseEmail,
+                apiError.message
+              );
+              setLoading(false);
+              return;
             }
+            throw apiError;
           }
 
-          if (rememberMe) {
-            localStorage.setItem(REMEMBERED_LOGIN_KEY, normalizedIdentifier);
-          } else {
-            localStorage.removeItem(REMEMBERED_LOGIN_KEY);
-          }
-
-          if (firebaseData.user) {
-            const userJson = JSON.stringify(firebaseData.user);
-            if (rememberMe) {
-              localStorage.setItem("user", userJson);
-              sessionStorage.removeItem("user");
-            } else {
-              sessionStorage.setItem("user", userJson);
-              localStorage.removeItem("user");
-            }
-          }
-
-          window.dispatchEvent(
-            new StorageEvent("storage", { key: "token", newValue: firebaseData.token || "" })
-          );
-
+          storeAuthenticatedSession(firebaseData, normalizedIdentifier);
           redirectAfterAuth();
           return;
         } catch (firebaseError) {
@@ -329,7 +420,9 @@ export default function Login() {
           const shouldFallback =
             code === "auth/user-not-found" ||
             code === "auth/invalid-credential" ||
-            code === "auth/invalid-email";
+            code === "auth/invalid-login-credentials" ||
+            code === "auth/invalid-email" ||
+            code === "auth/wrong-password";
 
           if (!shouldFallback) {
             throw firebaseError;
@@ -342,8 +435,8 @@ export default function Login() {
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
-          identifier: normalizedIdentifier,
-          email: normalizedIdentifier,
+          identifier: backendIdentifier,
+          email: backendIdentifier,
           password: pwd,
         }),
       });
@@ -356,67 +449,40 @@ export default function Login() {
       }
 
       if (!res.ok) {
+        const apiError = buildApiError(data, "Login failed.");
+        if (apiError.code === "email_not_verified") {
+          setVerificationPendingState(
+            apiError.data?.email || firebaseEmail || normalizedIdentifier,
+            apiError.message
+          );
+          setLoading(false);
+          return;
+        }
+
         // account locked case (from backend)
         if (data.locked) {
-          const mins = data.lockMinutes ?? 15;
-          setError(
-            data.error ||
-            `Too many failed attempts. Your account is temporarily locked for ${mins} minutes.`
-          );
+          showErrorMessage(GENERIC_LOGIN_FAILURE_MESSAGE);
           setLoading(false);
           return;
         }
 
         // remaining attempts
         if (typeof data.remainingAttempts === "number") {
-          setError(
-            data.error ||
-            `Invalid email or password. You have ${data.remainingAttempts} attempts left.`
-          );
+          showErrorMessage(GENERIC_LOGIN_FAILURE_MESSAGE);
           setLoading(false);
           return;
         }
 
-        setError(data.error || "Invalid email or password.");
-        setLoading(false);
-        return;
+        throw apiError;
       }
 
-      if (data.token) {
-        if (rememberMe) {
-          // Keep user logged in across browser restarts
-          localStorage.setItem("token", data.token);
-        } else {
-          // Only until the tab or browser is closed
-          sessionStorage.setItem("token", data.token);
-        }
-      }
-
-      if (rememberMe) {
-        localStorage.setItem(REMEMBERED_LOGIN_KEY, normalizedIdentifier);
-      } else {
-        localStorage.removeItem(REMEMBERED_LOGIN_KEY);
-      }
-
-      if (data.user) {
-        const userJson = JSON.stringify(data.user);
-        if (rememberMe) {
-          localStorage.setItem("user", userJson);
-          sessionStorage.removeItem("user");
-        } else {
-          sessionStorage.setItem("user", userJson);
-          localStorage.removeItem("user");
-        }
-      }
-
-      window.dispatchEvent(
-        new StorageEvent("storage", { key: "token", newValue: data.token || "" })
-      );
-
+      sessionStorage.removeItem("wecast:pendingVerificationEmail");
+      setPendingVerificationEmail("");
+      storeAuthenticatedSession(data, normalizedIdentifier);
       redirectAfterAuth();
     } catch (err) {
       console.error("LOGIN NETWORK ERROR:", err);
-      setError(mapLoginError(err));
+      showErrorMessage(mapLoginError(err));
     } finally {
       setLoading(false);
     }
@@ -552,8 +618,7 @@ export default function Login() {
 
   // ------------------ SOCIAL LOGINS ------------------
   const handleGoogleLogin = async () => {
-    setError("");
-    setInfo("");
+    clearStatusMessages();
     setLoading(true);
 
     try {
@@ -564,13 +629,13 @@ export default function Login() {
         remember: rememberMe,
       });
       if (result.redirected) {
-        setInfo("Redirecting to Google sign-in...");
+        showInfoMessage("Redirecting to Google sign-in...");
         return;
       }
       redirectAfterAuth();
     } catch (err) {
       console.error("GOOGLE LOGIN ERROR:", err);
-      setError(err.message || "Google login failed. Please try again.");
+      showErrorMessage(err.message || "Google login failed. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -621,18 +686,20 @@ export default function Login() {
   };
 
   const handleResendVerification = async () => {
-    setError("");
-    setInfo("");
+    clearStatusMessages();
 
-    if (!identifier.trim() || !pwd.trim()) {
-      setError("Enter your email and password to resend the verification email.");
+    const email = normalizeEmail(
+      pendingVerificationEmail || (looksLikeEmail(identifier) ? identifier : "")
+    );
+
+    if (!email || !pwd.trim()) {
+      showErrorMessage("Enter your email and password to resend the verification email.");
       return;
     }
 
     setLoading(true);
     try {
       ensureFirebaseClientReady();
-      const email = normalizeEmail(identifier);
       const credential = await signInWithEmailAndPassword(auth, email, pwd);
       const firebaseUser = credential.user;
 
@@ -640,7 +707,7 @@ export default function Login() {
         await signOut(auth);
         sessionStorage.removeItem("wecast:pendingVerificationEmail");
         setPendingVerificationEmail("");
-        setInfo("Your email is already verified. You can log in now.");
+        showInfoMessage("Your email is already verified. You can log in now.");
         return;
       }
 
@@ -649,19 +716,16 @@ export default function Login() {
 
       sessionStorage.setItem("wecast:pendingVerificationEmail", email);
       setPendingVerificationEmail(email);
-      setInfo(
-        "A new verification email has been sent. Check your inbox and spam folder."
-      );
+      showInfoMessage("A new verification email has been sent. Check your inbox and spam folder.");
     } catch (err) {
-      setError(mapVerificationResendError(err));
+      showErrorMessage(mapVerificationResendError(err));
     } finally {
       setLoading(false);
     }
   };
 
   const handleGithubLogin = async () => {
-    setError("");
-    setInfo("");
+    clearStatusMessages();
     setLoading(true);
 
     try {
@@ -672,13 +736,13 @@ export default function Login() {
         remember: rememberMe,
       });
       if (result.redirected) {
-        setInfo("Redirecting to GitHub sign-in...");
+        showInfoMessage("Redirecting to GitHub sign-in...");
         return;
       }
       redirectAfterAuth();
     } catch (err) {
       console.error("GITHUB LOGIN ERROR:", err);
-      setError(err.message || "GitHub login failed. Please try again.");
+      showErrorMessage(err.message || "GitHub login failed. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -692,7 +756,7 @@ export default function Login() {
   // UI
   // ------------------------------------------------------------------
   return (
-    <div className="min-h-screen relative overflow-hidden flex items-center justify-center bg-cream dark:bg-[#0a0a1a] transition-colors px-4 pb-12 pt-6 sm:px-6 md:pb-28">
+    <div className="relative flex min-h-screen min-w-0 items-center justify-center overflow-hidden bg-cream px-4 pb-12 pt-6 transition-colors sm:px-6 md:pb-28 dark:bg-[#0a0a1a]">
       {/* RIGHT animated shapes */}
       <div className="pointer-events-none absolute right-[-24px] top-24 w-72 h-72 rounded-full blur-3xl opacity-40 bg-pink-400/70 dark:bg-pink-300/20 animate-pulse" />
       <div className="pointer-events-none absolute right-24 bottom-20 w-40 h-40 rounded-2xl blur-xl opacity-40 bg-blue-400/70 dark:bg-blue-300/20 animate-bounce" />
@@ -711,7 +775,7 @@ export default function Login() {
       />
 
       {/* LOGIN / RESET CARD */}
-      <div className="relative z-10 w-full max-w-md">
+      <div className="relative z-10 w-full min-w-0 max-w-md">
         <div
           className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-5 shadow-sm transition-colors sm:p-8"
         >
@@ -725,7 +789,7 @@ export default function Login() {
               onClick={switchToLogin}
               className="mb-4 inline-flex items-center text-sm text-black/70 dark:text-white/70 hover:text-black dark:hover:text-white"
             >
-              <ArrowLeft className="w-4 h-4 mr-1" />
+              <ArrowLeft className="h-4 w-4 me-1 rtl:rotate-180" />
               Back to login
             </button>
           )}
@@ -764,8 +828,18 @@ export default function Login() {
 
           {/* Messages */}
           {error && (
-            <p className="mb-3 text-sm font-medium text-red-500 text-center">
-              {error}
+            <div className="mb-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-center">
+              <p className="text-sm font-medium text-red-700">
+                {error}
+              </p>
+            </div>
+          )}
+          {warning && (
+            <p
+              className="mb-3 mt-3 text-center text-sm font-medium text-red-600 transition-opacity"
+              dir="auto"
+            >
+              {warning}
             </p>
           )}
           {info && (
@@ -774,18 +848,18 @@ export default function Login() {
             </p>
           )}
           {mode === "login" && pendingVerificationEmail && (
-            <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-center dark:border-amber-500/20 dark:bg-amber-500/10">
-              <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+            <div className="mb-5 rounded-2xl border border-yellow-300 bg-yellow-50 px-4 py-4 text-center">
+              <p className="text-sm font-medium text-yellow-800">
                 Verification pending for <span className="font-semibold">{pendingVerificationEmail}</span>
               </p>
-              <p className="mt-1 text-sm text-amber-700 dark:text-amber-100/80">
+              <p className="mt-1 text-sm text-yellow-800">
                 Didn’t get the email? Enter your password and resend the verification link.
               </p>
               <button
                 type="button"
                 onClick={handleResendVerification}
                 disabled={loading}
-                className="mt-3 inline-flex items-center justify-center rounded-xl border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-400/20 dark:bg-transparent dark:text-amber-100 dark:hover:bg-amber-500/10"
+                className="mt-3 inline-flex items-center justify-center rounded-xl border border-yellow-300 bg-white px-4 py-2 text-sm font-semibold text-yellow-800 transition hover:bg-yellow-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Resend verification email
               </button>
@@ -801,8 +875,8 @@ export default function Login() {
                   Email or username
                 </label>
                 <div className="flex items-center border rounded-lg bg-white dark:bg-white/5 border-black/10 dark:border-white/15 focus-within:ring-2 focus-within:ring-purple-500">
-                  <span className="pl-3 text-black/60 dark:text-white/60">
-                    <Mail className="w-5 h-5" />
+                  <span className="ps-3 text-black/60 dark:text-white/60">
+                    <Mail className="h-5 w-5" />
                   </span>
                   <input
                     type="text"
@@ -820,12 +894,12 @@ export default function Login() {
               <div className={resetRequestComplete ? "hidden" : ""}>
                 <label className="form-label">Password</label>
                 <div className="relative">
-                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500 dark:text-neutral-400">
-                    <Lock className="w-5 h-5" />
+                  <span className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-neutral-500 dark:text-neutral-400">
+                    <Lock className="h-5 w-5" />
                   </span>
                   <input
                     type={showPwd ? "text" : "password"}
-                    className="form-input pl-10 pr-10"
+                    className="form-input ps-10 pe-10"
                     placeholder="Your password"
                     value={pwd}
                     onChange={(e) => setPwd(e.target.value)}
@@ -835,7 +909,7 @@ export default function Login() {
                   <button
                     type="button"
                     onClick={() => setShowPwd((v) => !v)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-500 dark:text-neutral-400 hover:text-black dark:hover:text-white transition"
+                    className="absolute end-3 top-1/2 -translate-y-1/2 text-neutral-500 dark:text-neutral-400 transition hover:text-black dark:hover:text-white"
                     aria-label={showPwd ? "Hide password" : "Show password"}
                   >
                     {showPwd ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
@@ -959,8 +1033,8 @@ export default function Login() {
                   Email address
                 </label>
                 <div className="flex items-center border rounded-lg bg-white dark:bg-white/5 border-black/10 dark:border-white/15 focus-within:ring-2 focus-within:ring-purple-500">
-                  <span className="pl-3 text-black/60 dark:text-white/60">
-                    <Mail className="w-5 h-5" />
+                  <span className="ps-3 text-black/60 dark:text-white/60">
+                    <Mail className="h-5 w-5" />
                   </span>
                   <input
                     type="email"
@@ -976,7 +1050,7 @@ export default function Login() {
               </div>
 
               {resetRequestComplete ? (
-                <div className="rounded-[28px] border border-emerald-200 bg-[linear-gradient(180deg,rgba(240,253,244,0.98),rgba(255,255,255,0.98))] px-5 py-5 text-left shadow-[0_18px_40px_rgba(5,150,105,0.12)] dark:border-emerald-500/25 dark:bg-[linear-gradient(180deg,rgba(6,95,70,0.22),rgba(10,10,10,0.96))]">
+                <div className="rounded-[28px] border border-emerald-200 bg-[linear-gradient(180deg,rgba(240,253,244,0.98),rgba(255,255,255,0.98))] px-5 py-5 text-start shadow-[0_18px_40px_rgba(5,150,105,0.12)] dark:border-emerald-500/25 dark:bg-[linear-gradient(180deg,rgba(6,95,70,0.22),rgba(10,10,10,0.96))]">
                   <div className="flex items-start gap-3">
                     <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-emerald-200 bg-white/85 text-emerald-700 shadow-sm dark:border-emerald-400/20 dark:bg-emerald-500/12 dark:text-emerald-300">
                       <CheckCircle2 className="h-5 w-5" />

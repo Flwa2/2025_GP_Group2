@@ -20,6 +20,8 @@ import os
 import re
 import requests
 import base64
+import math
+import numbers
 import secrets
 from firebase_admin import firestore
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -51,6 +53,100 @@ def is_music_tag(text: str) -> bool:
 def is_section_header(text: str) -> bool:
     stripped = str(text or "").strip()
     return bool(re.match(r"^(INTRO|BODY|OUTRO|مقدمة|النص|الخاتمة)\s*:?$", stripped, re.IGNORECASE))
+
+UNTITLED_EPISODE_FALLBACKS = {
+    "Untitled Episode",
+    "\u062d\u0644\u0642\u0629 \u0628\u062f\u0648\u0646 \u0639\u0646\u0648\u0627\u0646",
+}
+
+EPISODE_TITLE_FIELDS = (
+    "title",
+    "episodeTitle",
+    "podcastTitle",
+    "showTitle",
+    "show_title",
+    "generatedTitle",
+    "generated_title",
+    "previewTitle",
+    "preview_title",
+    "draftTitle",
+    "draft_title",
+    "audioTitle",
+)
+
+def _clean_episode_title(value, allow_fallback=False):
+    title = str(value or "").strip()
+    if not title:
+        return ""
+    if not allow_fallback and title in UNTITLED_EPISODE_FALLBACKS:
+        return ""
+    return title
+
+def resolve_episode_title(*sources, fallback="Untitled Episode"):
+    for source in sources:
+        if not source:
+            continue
+        if isinstance(source, str):
+            title = _clean_episode_title(source)
+            if title:
+                return title
+            continue
+        if isinstance(source, dict):
+            for field in EPISODE_TITLE_FIELDS:
+                title = _clean_episode_title(source.get(field))
+                if title:
+                    return title
+    for source in sources:
+        if isinstance(source, str):
+            title = _clean_episode_title(source, allow_fallback=True)
+            if title:
+                return title
+        if isinstance(source, dict):
+            for field in EPISODE_TITLE_FIELDS:
+                title = _clean_episode_title(source.get(field), allow_fallback=True)
+                if title:
+                    return title
+    return fallback
+
+def title_needs_repair(value):
+    return not _clean_episode_title(value)
+
+def infer_episode_title_from_script(script_text):
+    text = str(script_text or "").replace("\r", "\n")
+    if not text.strip():
+        return ""
+
+    quote_patterns = (
+        r"(?:Welcome to|Hello and welcome to|Thanks for joining us on)[^'\"\u201c\u201d\u2018\u2019\u00ab\u00bb]{0,80}['\"\u201c\u201d\u2018\u2019\u00ab]([^'\"\u201c\u201d\u2018\u2019\u00ab\u00bb]{3,120})['\"\u201c\u201d\u2018\u2019\u00bb]",
+        r"(?:\u0645\u0631\u062d\u0628\u0627|\u0645\u0631\u062d\u0628\u0627\u064b|\u0623\u0647\u0644\u0627|\u0623\u0647\u0644\u0627\u064b)[^'\"\u201c\u201d\u2018\u2019\u00ab\u00bb]{0,80}['\"\u201c\u201d\u2018\u2019\u00ab]([^'\"\u201c\u201d\u2018\u2019\u00ab\u00bb]{3,120})['\"\u201c\u201d\u2018\u2019\u00bb]",
+    )
+    for pattern in quote_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            title = _clean_episode_title(match.group(1))
+            if title and SHOW_TITLE_PLACEHOLDER not in title:
+                return title
+
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = re.sub(r"^#{1,6}\s+", "", line).strip()
+        if not line:
+            continue
+        if SHOW_TITLE_PLACEHOLDER in line:
+            continue
+        if is_section_header(line) or is_music_tag(line):
+            continue
+        if re.match(r"^[\[\(].*[\]\)]$", line):
+            continue
+        if re.match(r"^[^:]{1,40}:\s+.+$", line):
+            continue
+        title = _clean_episode_title(line.rstrip(":"))
+        if title and 3 <= len(title) <= 120:
+            return title
+
+    return ""
 
 def localize_script_structure(script: str, language: str) -> str:
     if not script:
@@ -128,23 +224,35 @@ def _configured_frontend_origins():
 app = Flask(__name__)
 FRONTEND_ORIGINS = _configured_frontend_origins()
 
+
+def _cors_origin_specs():
+    """
+    Origins allowed for credentialed cross-origin requests (JWT + cookies).
+    Includes explicit FRONTEND_ORIGINS plus common Vite dev URLs (LAN IP, any port)
+    so OPTIONS preflight succeeds and the browser sends GET /api/episodes.
+    """
+    specs = list(FRONTEND_ORIGINS)
+    # localhost / 127.0.0.1 with any port (Vite, alternate dev ports)
+    specs.append(re.compile(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$", re.I))
+    # RFC1918 LAN — access dev machine from phone / another PC on the network
+    specs.append(re.compile(r"^https?://192\.168\.\d{1,3}\.\d{1,3}:\d+$", re.I))
+    specs.append(re.compile(r"^https?://10\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+$", re.I))
+    specs.append(
+        re.compile(
+            r"^https?://172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}:\d+$",
+            re.I,
+        )
+    )
+    return specs
+
+
 CORS(
     app,
-    resources={r"/*": {"origins": FRONTEND_ORIGINS}},
+    resources={r"/*": {"origins": _cors_origin_specs()}},
     supports_credentials=True,
     allow_headers=["Content-Type", "Authorization"],
-    methods=["GET", "POST", "OPTIONS"],
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 )
-
-@app.after_request
-def add_cors_headers(response):
-    origin = request.headers.get("Origin")
-    if origin in FRONTEND_ORIGINS:
-        response.headers["Access-Control-Allow-Origin"] = origin
-    response.headers["Access-Control-Allow-Credentials"] = "true"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    return response
 
 
 # Server-side sessions 
@@ -194,6 +302,7 @@ print("DEBUG PATH starts with:", os.environ["PATH"].split(os.pathsep)[0])
 
 app.secret_key = app.config["SECRET_KEY"]
 RECYCLE_BIN_RETENTION_DAYS = int(os.getenv("RECYCLE_BIN_RETENTION_DAYS", "30"))
+USERNAME_RESERVATIONS_COLLECTION = "username_reservations"
 
 
 
@@ -351,6 +460,58 @@ def resolve_podcast_media_urls(data, *, include_audio: bool = True, include_cove
     return payload
 
 
+def _safe_audio_filename(title: str, podcast_id: str):
+    base = re.sub(r"[^A-Za-z0-9._-]+", "-", str(title or "").strip()).strip("-._")
+    if not base:
+        base = f"wecast-{podcast_id}"
+    if not base.lower().endswith(".mp3"):
+        base = f"{base}.mp3"
+    return base[:140]
+
+
+def _stream_audio_download_response(podcast_id: str, podcast: dict):
+    audio_key = str((podcast or {}).get("audioKey") or "").strip().lstrip("/")
+    audio_url = str((podcast or {}).get("audioUrl") or "").strip()
+
+    if not audio_key:
+        if audio_url.startswith(("http://", "https://")):
+            return redirect(audio_url)
+        return jsonify(error="Audio not found"), 404
+
+    if not r2_client:
+        if audio_url.startswith(("http://", "https://")):
+            return redirect(audio_url)
+        return jsonify(error="Audio storage is not configured"), 500
+
+    try:
+        obj = r2_client.get_object(Bucket=R2_BUCKET_NAME, Key=audio_key)
+        body = obj["Body"]
+        filename = _safe_audio_filename((podcast or {}).get("title"), podcast_id)
+        content_type = obj.get("ContentType") or "audio/mpeg"
+
+        def generate():
+            try:
+                while True:
+                    chunk = body.read(1024 * 64)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                body.close()
+
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "private, max-age=0, no-store",
+        }
+        if obj.get("ContentLength"):
+            headers["Content-Length"] = str(obj["ContentLength"])
+
+        return Response(generate(), mimetype=content_type, headers=headers)
+    except Exception as exc:
+        print(f"Audio download failed for {podcast_id}: {exc}")
+        return jsonify(error="Failed to download audio"), 500
+
+
 def _normalize_public_url(value: str) -> str:
     src = (value or "").strip()
     if not src:
@@ -358,6 +519,57 @@ def _normalize_public_url(value: str) -> str:
     if src.startswith(("http://", "https://", "/")):
         return src
     return f"/{src.lstrip('/')}"
+
+
+def _json_safe_firestore_value(value):
+    """
+    Recursively convert Firestore / odd Python values to JSON-serializable structures.
+    Prevents 500s from jsonify on GeoPoint, bytes, numpy scalars, NaN/inf floats, etc.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return base64.b64encode(bytes(value)).decode("ascii")
+        except Exception:
+            return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, numbers.Integral):
+        return int(value)
+    if isinstance(value, numbers.Real):
+        x = float(value)
+        if math.isnan(x) or math.isinf(x):
+            return None
+        return x
+    if isinstance(value, datetime):
+        try:
+            return value.isoformat()
+        except Exception:
+            return str(value)
+    if isinstance(value, dict):
+        return {str(k): _json_safe_firestore_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_firestore_value(v) for v in value]
+    try:
+        from google.cloud.firestore import GeoPoint
+
+        if isinstance(value, GeoPoint):
+            return {"latitude": value.latitude, "longitude": value.longitude}
+    except Exception:
+        pass
+    ref_path = getattr(value, "path", None)
+    if isinstance(ref_path, str) and ref_path:
+        return ref_path
+    mod = getattr(type(value), "__module__", "") or ""
+    if "firestore" in mod:
+        try:
+            return str(value)
+        except Exception:
+            return None
+    return str(value)
 
 
 def _delete_podcast_assets(data):
@@ -405,6 +617,411 @@ def normalize_auth_provider(provider_value, password_hash=None):
     if password_hash:
         return "password"
     return raw or "unknown"
+
+
+class AuthFlowError(RuntimeError):
+    def __init__(self, code, message, status=400, **extra):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status = status
+        self.extra = extra
+
+
+def auth_error_response(code, message, status=400, **extra):
+    payload = {
+        "code": code,
+        "message": message,
+        "error": message,
+    }
+    payload.update(extra)
+    return jsonify(payload), status
+
+
+def _clean_username(value):
+    return (value or "").strip()
+
+
+def _normalize_username(value):
+    return _clean_username(value).lower()
+
+
+def _stored_username_display(data):
+    return (
+        data.get("username")
+        or data.get("displayName")
+        or data.get("name")
+        or ""
+    ).strip()
+
+
+def _stored_username_lower(data):
+    return _normalize_username(
+        data.get("username_lower")
+        or data.get("username")
+        or data.get("displayName")
+        or data.get("name")
+        or ""
+    )
+
+
+def _user_doc_matches_identity(doc, *, email="", firebase_uid="", user_ref=None):
+    if not doc or not doc.exists:
+        return False
+
+    data = doc.to_dict() or {}
+    if user_ref and doc.reference.path == user_ref.path:
+        return True
+    if firebase_uid and (data.get("firebaseUid") or "").strip() == (firebase_uid or "").strip():
+        return True
+    if email and _normalize_email(data.get("email")) == _normalize_email(email):
+        return True
+    return False
+
+
+def _reservation_owned_by(data, *, email="", firebase_uid="", user_ref=None):
+    if not data:
+        return False
+    if user_ref and (data.get("userRef") or "").strip() == user_ref.path:
+        return True
+    if firebase_uid and (data.get("firebaseUid") or "").strip() == (firebase_uid or "").strip():
+        return True
+    if email and _normalize_email(data.get("email")) == _normalize_email(email):
+        return True
+    return False
+
+
+def _username_reservation_ref(username_lower):
+    return db.collection(USERNAME_RESERVATIONS_COLLECTION).document(username_lower)
+
+
+def get_user_docs_by_username(username):
+    normalized_username = _normalize_username(username)
+    if not normalized_username:
+        return []
+
+    matches = []
+    seen_paths = set()
+
+    reservation_doc = _username_reservation_ref(normalized_username).get()
+    if reservation_doc.exists:
+        reservation_data = reservation_doc.to_dict() or {}
+        reserved_path = (reservation_data.get("userRef") or "").strip()
+        reserved_email = _normalize_email(reservation_data.get("email"))
+
+        if reserved_path:
+            try:
+                reserved_doc = db.document(reserved_path).get()
+            except Exception as reservation_error:
+                print(
+                    f"Username reservation lookup failed for {normalized_username}: "
+                    f"{reservation_error}"
+                )
+                reserved_doc = None
+            if reserved_doc and reserved_doc.exists:
+                matches.append(reserved_doc)
+                seen_paths.add(reserved_doc.reference.path)
+                if len(matches) >= 2:
+                    return matches[:2]
+
+        if reserved_email:
+            reserved_doc = get_user_doc_by_candidates(reserved_email, email=reserved_email)
+            if (
+                reserved_doc
+                and reserved_doc.exists
+                and reserved_doc.reference.path not in seen_paths
+            ):
+                matches.append(reserved_doc)
+                seen_paths.add(reserved_doc.reference.path)
+                if len(matches) >= 2:
+                    return matches[:2]
+
+    query_matches = list(
+        db.collection("users").where("username_lower", "==", normalized_username).limit(2).stream()
+    )
+    for doc in query_matches:
+        if doc.reference.path in seen_paths:
+            continue
+        matches.append(doc)
+        seen_paths.add(doc.reference.path)
+        if len(matches) >= 2:
+            break
+
+    for doc in db.collection("users").stream():
+        if doc.reference.path in seen_paths:
+            continue
+        data = doc.to_dict() or {}
+        if not (
+            data.get("password_hash")
+            or data.get("username")
+            or data.get("username_lower")
+        ):
+            continue
+        legacy_candidates = {
+            _normalize_username(data.get("username")),
+            _normalize_username(data.get("name")),
+            _normalize_username(data.get("displayName")),
+        }
+        if normalized_username in legacy_candidates:
+            matches.append(doc)
+            seen_paths.add(doc.reference.path)
+            if len(matches) >= 2:
+                break
+
+    return matches[:2]
+
+
+def _username_login_match_metadata(username, doc):
+    data = doc.to_dict() or {}
+    normalized_username = _normalize_username(username)
+    explicit_username_match = normalized_username in {
+        _normalize_username(data.get("username")),
+        _normalize_username(data.get("username_lower")),
+    }
+    legacy_display_match = normalized_username in {
+        _normalize_username(data.get("displayName")),
+        _normalize_username(data.get("name")),
+    }
+    has_password_hash = bool(data.get("password_hash"))
+
+    return {
+        "doc": doc,
+        "data": data,
+        "loginStrategy": "legacy_password" if has_password_hash else "firebase_email",
+        "score": (
+            1 if has_password_hash else 0,
+            1 if explicit_username_match else 0,
+            1 if legacy_display_match else 0,
+        ),
+        "explicitUsernameMatch": explicit_username_match,
+        "legacyDisplayMatch": legacy_display_match,
+        "hasPasswordHash": has_password_hash,
+    }
+
+
+def resolve_login_user_doc_by_username(username):
+    username_docs = get_user_docs_by_username(username)
+    if not username_docs:
+        return None, []
+
+    candidates = [
+        _username_login_match_metadata(username, doc)
+        for doc in username_docs
+    ]
+    best_score = max(candidate["score"] for candidate in candidates)
+    best_candidates = [
+        candidate
+        for candidate in candidates
+        if candidate["score"] == best_score
+    ]
+
+    if len(best_candidates) != 1:
+        return None, candidates
+
+    return best_candidates[0], candidates
+
+
+def resolve_login_strategy_for_email(email):
+    normalized_email = _normalize_email(email)
+    user_doc = get_user_doc_by_candidates(normalized_email, email=normalized_email)
+    user_data = user_doc.to_dict() or {} if user_doc and user_doc.exists else {}
+    firebase_state = _firebase_account_state_for_email(normalized_email, user_data=user_data)
+    stored_hash = user_data.get("password_hash")
+    auth_provider = normalize_auth_provider(
+        user_data.get("authProvider"),
+        stored_hash,
+    )
+
+    login_strategy = "legacy_password" if stored_hash else "firebase_email"
+    if (
+        firebase_state
+        and firebase_state.get("authProvider") in {"google", "github"}
+        and not firebase_state.get("hasPasswordProvider")
+    ):
+        login_strategy = "social_only"
+
+    return {
+        "userDoc": user_doc,
+        "userData": user_data,
+        "firebaseState": firebase_state,
+        "authProvider": auth_provider,
+        "loginStrategy": login_strategy,
+    }
+
+
+def _username_is_taken(username_lower, *, email="", firebase_uid="", user_ref=None):
+    if not username_lower:
+        return False
+
+    reservation_doc = _username_reservation_ref(username_lower).get()
+    if reservation_doc.exists:
+        reservation_data = reservation_doc.to_dict() or {}
+        if not _reservation_owned_by(
+            reservation_data,
+            email=email,
+            firebase_uid=firebase_uid,
+            user_ref=user_ref,
+        ):
+            return True
+
+    for doc in get_user_docs_by_username(username_lower):
+        if _user_doc_matches_identity(
+            doc,
+            email=email,
+            firebase_uid=firebase_uid,
+            user_ref=user_ref,
+        ):
+            continue
+        return True
+
+    return False
+
+
+def _write_user_profile_with_username(
+    *,
+    user_ref,
+    payload,
+    username,
+    current_username="",
+    email="",
+    firebase_uid="",
+    delete_ref=None,
+):
+    cleaned_username = _clean_username(username)
+    normalized_username = _normalize_username(cleaned_username)
+    current_username_lower = _normalize_username(current_username)
+
+    if cleaned_username:
+        payload["username"] = cleaned_username
+        payload["username_lower"] = normalized_username
+
+    if not normalized_username:
+        user_ref.set(payload, merge=True)
+        if delete_ref and delete_ref.path != user_ref.path:
+            delete_ref.delete()
+        return
+
+    if _username_is_taken(
+        normalized_username,
+        email=email,
+        firebase_uid=firebase_uid,
+        user_ref=user_ref,
+    ):
+        raise AuthFlowError(
+            "username_taken",
+            "This username is already taken.",
+            409,
+            username=cleaned_username,
+            normalizedUsername=normalized_username,
+        )
+
+    reservation_ref = _username_reservation_ref(normalized_username)
+    previous_reservation_ref = None
+    if current_username_lower and current_username_lower != normalized_username:
+        previous_reservation_ref = _username_reservation_ref(current_username_lower)
+
+    reservation_payload = {
+        "username": cleaned_username,
+        "username_lower": normalized_username,
+        "email": _normalize_email(email),
+        "firebaseUid": (firebase_uid or "").strip(),
+        "userRef": user_ref.path,
+        "updatedAt": firestore.SERVER_TIMESTAMP,
+    }
+
+    transaction = db.transaction()
+
+    @firestore.transactional
+    def commit(transaction):
+        reservation_snapshot = reservation_ref.get(transaction=transaction)
+        if reservation_snapshot.exists:
+            reservation_data = reservation_snapshot.to_dict() or {}
+            if not _reservation_owned_by(
+                reservation_data,
+                email=email,
+                firebase_uid=firebase_uid,
+                user_ref=user_ref,
+            ):
+                raise AuthFlowError(
+                    "username_taken",
+                    "This username is already taken.",
+                    409,
+                    username=cleaned_username,
+                    normalizedUsername=normalized_username,
+                )
+
+        transaction.set(user_ref, payload, merge=True)
+        transaction.set(reservation_ref, reservation_payload, merge=True)
+
+        if delete_ref and delete_ref.path != user_ref.path:
+            transaction.delete(delete_ref)
+
+        if previous_reservation_ref:
+            previous_snapshot = previous_reservation_ref.get(transaction=transaction)
+            previous_data = previous_snapshot.to_dict() or {}
+            if previous_snapshot.exists and _reservation_owned_by(
+                previous_data,
+                email=email,
+                firebase_uid=firebase_uid,
+                user_ref=user_ref,
+            ):
+                transaction.delete(previous_reservation_ref)
+
+    commit(transaction)
+
+
+def _firebase_account_state_for_email(email, user_data=None):
+    from firebase_admin import auth as fb_auth
+
+    normalized_email = _normalize_email(email)
+    if not normalized_email:
+        return None
+
+    user_data = user_data or {}
+    stored_provider = normalize_auth_provider(
+        user_data.get("authProvider"),
+        user_data.get("password_hash"),
+    )
+
+    try:
+        user_record = fb_auth.get_user_by_email(normalized_email)
+    except fb_auth.UserNotFoundError:
+        return None
+
+    provider_ids = {
+        (getattr(provider, "provider_id", "") or "").strip().lower()
+        for provider in (getattr(user_record, "provider_data", None) or [])
+        if (getattr(provider, "provider_id", "") or "").strip()
+    }
+
+    has_password_provider = "password" in provider_ids or (
+        not provider_ids and stored_provider == "password"
+    )
+
+    if "google.com" in provider_ids or stored_provider == "google":
+        auth_provider = "google"
+    elif "github.com" in provider_ids or stored_provider == "github":
+        auth_provider = "github"
+    else:
+        auth_provider = "password"
+
+    return {
+        "firebaseUid": (getattr(user_record, "uid", "") or "").strip(),
+        "emailVerified": bool(getattr(user_record, "email_verified", False)),
+        "hasPasswordProvider": has_password_provider,
+        "authProvider": auth_provider,
+    }
+
+
+def _auth_provider_label(provider):
+    normalized = normalize_auth_provider(provider)
+    if normalized == "google":
+        return "Google"
+    if normalized == "github":
+        return "GitHub"
+    if normalized == "password":
+        return "email"
+    return "your sign-in provider"
 
 
 def user_id_candidates(user_id):
@@ -494,6 +1111,111 @@ def get_current_user_identity():
     }
 
 
+def get_current_podcast_owner_candidates(explicit_user_id=""):
+    identity = get_current_user_identity()
+    data = identity.get("data") or {}
+    doc = identity.get("doc")
+    firebase_uid = (identity.get("firebaseUid") or data.get("firebaseUid") or "").strip()
+    candidates = []
+    seen = set()
+
+    def add(raw_value):
+        for candidate in user_id_candidates(raw_value):
+            candidate = (candidate or "").strip()
+            if candidate and candidate not in seen:
+                candidates.append(candidate)
+                seen.add(candidate)
+
+    # Prefer the stored profile email/doc id first so legacy-case email owners keep working.
+    add(data.get("email"))
+    if doc and doc.exists:
+        add(doc.reference.id)
+
+    add(firebase_uid)
+    add(explicit_user_id)
+    add(session.get("user_id"))
+    add(get_current_user_email())
+    add(identity.get("email"))
+
+    for previous_email in data.get("previousEmails") or []:
+        add(previous_email)
+
+    return candidates
+
+
+def get_current_podcast_owner_uid_candidates():
+    identity = get_current_user_identity()
+    data = identity.get("data") or {}
+    candidates = []
+    seen = set()
+    for raw in (
+        identity.get("firebaseUid"),
+        data.get("firebaseUid"),
+        session.get("firebase_uid"),
+        get_current_user_firebase_uid(),
+    ):
+        value = (raw or "").strip()
+        if value and value not in seen:
+            candidates.append(value)
+            seen.add(value)
+    return candidates
+
+
+def get_current_podcast_owner_id(explicit_user_id=""):
+    candidates = get_current_podcast_owner_candidates(explicit_user_id)
+    return candidates[0] if candidates else ""
+
+
+def _podcast_owned_by_user(podcast_or_user_id, explicit_user_id=""):
+    if isinstance(podcast_or_user_id, dict):
+        data = podcast_or_user_id or {}
+        owner_values = [
+            data.get("userId"),
+            data.get("ownerEmail"),
+            data.get("email"),
+        ]
+        uid_values = [
+            data.get("ownerUid"),
+            data.get("firebaseUid"),
+        ]
+    else:
+        owner_values = [podcast_or_user_id]
+        uid_values = []
+
+    for candidate in get_current_podcast_owner_candidates(explicit_user_id):
+        for owner_value in owner_values:
+            if user_ids_match(owner_value, candidate):
+                return True
+
+    for candidate in get_current_podcast_owner_uid_candidates():
+        for uid_value in uid_values:
+            if user_ids_match(uid_value, candidate):
+                return True
+    return False
+
+
+def _current_user_podcast_docs():
+    seen_paths = set()
+    queries = []
+    for candidate in get_current_podcast_owner_candidates():
+        queries.append(("userId", candidate))
+    for uid_candidate in get_current_podcast_owner_uid_candidates():
+        queries.append(("ownerUid", uid_candidate))
+        queries.append(("firebaseUid", uid_candidate))
+
+    for field, value in queries:
+        if not value:
+            continue
+        try:
+            for doc in db.collection("podcasts").where(field, "==", value).stream():
+                if doc.reference.path in seen_paths:
+                    continue
+                seen_paths.add(doc.reference.path)
+                yield doc
+        except Exception as exc:
+            print(f"Podcast query failed for {field}={value}: {exc}")
+
+
 def _prepare_user_storage(existing_doc, firebase_uid="", fallback_email=""):
     existing_data = (
         existing_doc.to_dict() or {}
@@ -566,6 +1288,35 @@ def _firebase_web_api_key():
     return ""
 
 
+def _verify_firebase_email_password(email, password):
+    """True if Identity Toolkit accepts this email/password (Firebase Auth source of truth)."""
+    api_key = _firebase_web_api_key()
+    if not api_key:
+        return False
+    normalized = _normalize_email(email)
+    if not normalized or password is None or password == "":
+        return False
+    endpoint = (
+        "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
+        f"?key={api_key}"
+    )
+    try:
+        response = requests.post(
+            endpoint,
+            json={
+                "email": normalized,
+                "password": password,
+                "returnSecureToken": True,
+            },
+            headers={"Content-Type": "application/json"},
+            timeout=20,
+        )
+    except Exception as exc:
+        print(f"Firebase password verify request failed: {exc}")
+        return False
+    return bool(response.ok)
+
+
 def _password_reset_continue_url():
     return f"{_wecast_frontend_url()}/#/login"
 
@@ -594,7 +1345,11 @@ def _resend_is_configured():
 def _build_email_action_url(mode, token):
     base = _wecast_frontend_url().rstrip("/")
     action_mode = (mode or "").strip()
-    action_path = "#/email-change-confirm" if action_mode == "change-email" else "#/email-action"
+    action_path = (
+        "#/email-change-confirm"
+        if action_mode in {"change-email", "cancel-email-change"}
+        else "#/email-action"
+    )
     return (
         f"{base}/{action_path}"
         f"?mode={quote(action_mode, safe='')}"
@@ -771,10 +1526,12 @@ def _upsert_firebase_user_profile(
     *,
     email,
     display_name="",
+    username="",
     auth_provider="password",
     email_verified=False,
     firebase_uid="",
     mark_login=False,
+    reserve_username=False,
 ):
     normalized_email = (email or "").strip().lower()
     if not normalized_email:
@@ -821,9 +1578,6 @@ def _upsert_firebase_user_profile(
         payload["name"] = resolved_name
         payload["displayName"] = resolved_name
 
-    if not existing_data.get("username_lower") and resolved_name:
-        payload["username_lower"] = resolved_name.lower()
-
     if mark_login:
         payload["last_login"] = now_iso
         payload["failed_attempts"] = 0
@@ -832,7 +1586,6 @@ def _upsert_firebase_user_profile(
     if not (existing_doc and existing_doc.exists):
         payload.setdefault("name", resolved_name)
         payload.setdefault("displayName", resolved_name)
-        payload.setdefault("username_lower", resolved_name.lower())
         payload["bio"] = existing_data.get("bio", "")
         payload["avatarUrl"] = existing_data.get("avatarUrl", "")
         payload["created_at"] = existing_data.get("created_at") or now_iso
@@ -847,9 +1600,26 @@ def _upsert_firebase_user_profile(
         if "avatarUrl" not in existing_data:
             payload["avatarUrl"] = ""
 
-    user_ref.set(payload, merge=True)
-    if delete_ref and delete_ref.path != user_ref.path:
-        delete_ref.delete()
+    target_username = _clean_username(username)
+    existing_username = _stored_username_display(existing_data)
+    if existing_username:
+        payload.setdefault("username", existing_username)
+        payload.setdefault("username_lower", _stored_username_lower(existing_data))
+
+    if reserve_username and target_username:
+        _write_user_profile_with_username(
+            user_ref=user_ref,
+            payload=payload,
+            username=target_username,
+            current_username=existing_username,
+            email=normalized_email,
+            firebase_uid=firebase_uid,
+            delete_ref=delete_ref,
+        )
+    else:
+        user_ref.set(payload, merge=True)
+        if delete_ref and delete_ref.path != user_ref.path:
+            delete_ref.delete()
     final_doc = user_ref.get()
     return final_doc.to_dict() or {}
 
@@ -958,7 +1728,7 @@ def _build_email_change_confirmation_email(display_name, current_email, new_emai
     safe_app_url = html.escape(_wecast_frontend_url(), quote=True)
     safe_logo_url = html.escape(_wecast_logo_url(), quote=True)
 
-    subject = "Confirm your new WeCast email address"
+    subject = "Confirm New Email"
     text = (
         f"Hi {display_name or 'there'},\n\n"
         f"We received a request to change your WeCast email from {current_email} to {new_email}.\n"
@@ -1005,7 +1775,7 @@ def _build_email_change_confirmation_email(display_name, current_email, new_emai
                 <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 22px;">
                   <tr>
                     <td align="center" bgcolor="#111111" style="border-radius:14px;">
-                      <a href="{safe_link}" style="display:inline-block;padding:15px 24px;font-size:16px;font-weight:700;line-height:1;color:#ffffff;text-decoration:none;">Confirm email</a>
+                      <a href="{safe_link}" style="display:inline-block;padding:15px 24px;font-size:16px;font-weight:700;line-height:1;color:#ffffff;text-decoration:none;">Confirm New Email</a>
                     </td>
                   </tr>
                 </table>
@@ -1042,7 +1812,7 @@ def _build_email_change_notice_email(display_name, old_email, new_email):
     safe_new_email = html.escape((new_email or "").strip())
     safe_app_url = html.escape(_wecast_frontend_url(), quote=True)
 
-    subject = "Your WeCast email address was changed"
+    subject = "Email Changed Successfully"
     text = (
         f"Hi {display_name or 'there'},\n\n"
         f"Your WeCast sign-in email was changed from {old_email} to {new_email}.\n"
@@ -1293,7 +2063,7 @@ def _build_email_change_confirmation_email(display_name, current_email, new_emai
     resolved_link = (confirm_link or "").strip()
     brand_name = _wecast_brand_name()
 
-    subject = f"Confirm your new {brand_name} email address"
+    subject = "Confirm New Email"
     text = (
         f"Hi {resolved_name},\n\n"
         f"We received a request to change your {brand_name} email from {resolved_current_email} to {resolved_new_email}.\n"
@@ -1310,7 +2080,7 @@ def _build_email_change_confirmation_email(display_name, current_email, new_emai
             f"You requested a sign-in email change from {resolved_current_email} to {resolved_new_email}.",
             "Confirm the new address below to finish the update and keep your account secure.",
         ],
-        action_label="Confirm email",
+        action_label="Confirm New Email",
         action_link=resolved_link,
         detail_label="Before you continue",
         detail_lines=[
@@ -1326,13 +2096,52 @@ def _build_email_change_confirmation_email(display_name, current_email, new_emai
     return subject, text, html_body
 
 
+def _build_email_change_requested_email(display_name, old_email, new_email, cancel_link):
+    resolved_name = (display_name or "").strip() or "there"
+    resolved_old_email = (old_email or "").strip()
+    resolved_new_email = (new_email or "").strip()
+    resolved_link = (cancel_link or "").strip()
+    brand_name = _wecast_brand_name()
+
+    subject = "Email Change Requested"
+    text = (
+        f"Hi {resolved_name},\n\n"
+        f"A request was made to change the email address on your {brand_name} account from {resolved_old_email} to {resolved_new_email}.\n"
+        "No change will happen unless the new email address is verified.\n"
+        f"If this was not you, cancel the pending email change here:\n{resolved_link}\n\n"
+        f"{brand_name}"
+    )
+    html_body = _render_wecast_email(
+        preheader=f"A request was made to change your {brand_name} email address.",
+        eyebrow="Security Notice",
+        title="A request was made to change your email",
+        greeting_name=resolved_name,
+        intro_lines=[
+            f"A request was made to change your sign-in email from {resolved_old_email} to {resolved_new_email}.",
+            "No change will happen unless the new email address is verified.",
+        ],
+        action_label="Cancel email change",
+        action_link=resolved_link,
+        detail_label="Requested new email",
+        detail_lines=[
+            resolved_new_email,
+        ],
+        support_lines=[
+            "If this was not you, cancel the request immediately.",
+        ],
+        accent_start="#f0a49e",
+        accent_end="#fde3df",
+    )
+    return subject, text, html_body
+
+
 def _build_email_change_notice_email(display_name, old_email, new_email):
     resolved_name = (display_name or "").strip() or "there"
     resolved_old_email = (old_email or "").strip()
     resolved_new_email = (new_email or "").strip()
     brand_name = _wecast_brand_name()
 
-    subject = f"Your {brand_name} email address was changed"
+    subject = "Email Changed Successfully"
     text = (
         f"Hi {resolved_name},\n\n"
         f"Your {brand_name} sign-in email was changed from {resolved_old_email} to {resolved_new_email}.\n"
@@ -1420,6 +2229,21 @@ def _send_email_change_confirmation_via_resend(new_email, display_name, current_
     )
     return _send_email_via_resend(
         to_email=new_email,
+        subject=subject,
+        text_body=text_body,
+        html_body=html_body,
+    )
+
+
+def _send_email_change_requested_via_resend(old_email, display_name, new_email, cancel_link):
+    subject, text_body, html_body = _build_email_change_requested_email(
+        display_name,
+        old_email,
+        new_email,
+        cancel_link,
+    )
+    return _send_email_via_resend(
+        to_email=old_email,
         subject=subject,
         text_body=text_body,
         html_body=html_body,
@@ -1859,9 +2683,11 @@ def save_generated_podcast_to_firestore(user_id: str, title: str, script_style: 
         lang = detect_language(description)
 
     # Podcast doc
+    resolved_title = resolve_episode_title({"title": title})
+    print(f"[WeCast guest restore] title saved in Firestore: {resolved_title}")
     podcast_ref.set({
         "userId": user_id,
-        "title": title or "Untitled Episode",
+        "title": resolved_title,
         "description": description,
         "language": lang,
         "style": script_style,
@@ -2707,7 +3533,7 @@ def api_voice_preview():
     ), 502
 
 def _require_login_user():
-    user_id = session.get("user_id") or get_current_user_email()
+    user_id = get_current_podcast_owner_id()
     if not user_id:
         return None, (jsonify(error="Not logged in"), 401)
     return user_id, None
@@ -2720,7 +3546,7 @@ def _assert_podcast_owner(podcast_id: str, user_id: str):
         return None, (jsonify(error="Podcast not found"), 404)
 
     pdata = doc.to_dict() or {}
-    if pdata.get("userId") != user_id:
+    if not _podcast_owned_by_user(pdata, user_id):
         return None, (jsonify(error="Forbidden"), 403)
 
     return pdata, None
@@ -3024,7 +3850,7 @@ def api_cover_generate(podcast_id):
 @app.post("/api/podcast/<podcast_id>/update")
 def api_update_podcast(podcast_id):
     """Save edit draft or finalize podcast changes."""
-    user_id = session.get("user_id") or get_current_user_email()
+    user_id = get_current_podcast_owner_id()
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
@@ -3042,7 +3868,7 @@ def api_update_podcast(podcast_id):
     podcast_data = podcast_doc.to_dict() or {}
     
     # Verify ownership
-    if podcast_data.get("userId") != user_id:
+    if not _podcast_owned_by_user(podcast_data, user_id):
         return jsonify(error="Forbidden"), 403
 
     mode = str(data.get("mode") or "final").strip().lower()
@@ -3227,7 +4053,7 @@ def api_cover_upload(podcast_id):
 
 @app.post("/api/podcasts/<podcast_id>/title")
 def api_podcast_update_title(podcast_id):
-    user_id = session.get("user_id") or get_current_user_email()
+    user_id = get_current_podcast_owner_id()
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
@@ -3237,11 +4063,11 @@ def api_podcast_update_title(podcast_id):
         return jsonify(error="Podcast not found"), 404
 
     pdata = doc.to_dict() or {}
-    if pdata.get("userId") != user_id:
+    if not _podcast_owned_by_user(pdata, user_id):
         return jsonify(error="Forbidden"), 403
 
     payload = request.get_json(silent=True) or {}
-    title = (payload.get("title") or "").strip()
+    title = resolve_episode_title(payload, fallback="")
     if not title:
         return jsonify(error="Title is required"), 400
 
@@ -3258,7 +4084,7 @@ def api_podcast_update_title(podcast_id):
         session["create_draft"] = draft
         session.modified = True
 
-    return jsonify(ok=True, podcastId=podcast_id, title=title)
+    return jsonify(success=True, ok=True, podcastId=podcast_id, title=title)
 
 @app.post("/api/podcasts/<podcast_id>/cover/clear")
 def api_cover_clear(podcast_id):
@@ -3322,17 +4148,25 @@ def api_me():
             data.get("authProvider")
             or ("password" if data.get("password_hash") else "unknown")
         )
-
-        return jsonify(
-            email=data.get("email", user_id),
-            displayName=data.get("name", data.get("displayName", "WeCast User")),
-            bio=data.get("bio", "I create AI-powered podcasts."),
-            avatarUrl=avatar_url,
-            authProvider=auth_provider,
-            emailVerified=bool(data.get("emailVerified")),
-            handle=data.get("handle", f"@{data.get('name', 'user').lower().replace(' ', '')}"),
-            createdAt=data.get("created_at"),
+        display_name = (
+            data.get("name")
+            or data.get("displayName")
+            or "WeCast User"
         )
+        handle_name = display_name or data.get("email") or user_id or "user"
+
+        return jsonify(_json_safe_firestore_value(
+            {
+                "email": data.get("email", user_id),
+                "displayName": display_name,
+                "bio": data.get("bio", "I create AI-powered podcasts."),
+                "avatarUrl": avatar_url,
+                "authProvider": auth_provider,
+                "emailVerified": bool(data.get("emailVerified")),
+                "handle": data.get("handle", f"@{handle_name.lower().replace(' ', '')}"),
+                "createdAt": data.get("created_at"),
+            }
+        ))
     except Exception as e:
         print(f"Error fetching user profile: {e}")
         return jsonify(error="Failed to fetch profile"), 500
@@ -3395,6 +4229,13 @@ def api_profile_update():
 
     # Prepare update data
     update_data = {}
+    should_update_username = bool(display_name) and (
+        bool(_stored_username_lower(existing_data))
+        or normalize_auth_provider(
+            existing_data.get('authProvider'),
+            existing_data.get('password_hash'),
+        ) == "password"
+    )
     
     if display_name:
         update_data['name'] = display_name
@@ -3418,7 +4259,17 @@ def api_profile_update():
 
     try:
         # Update Firestore
-        user_ref.set(update_data, merge=True)
+        if should_update_username:
+            _write_user_profile_with_username(
+                user_ref=user_ref,
+                payload=update_data,
+                username=display_name,
+                current_username=_stored_username_display(existing_data),
+                email=existing_data.get('email') or user_id,
+                firebase_uid=firebase_uid,
+            )
+        else:
+            user_ref.set(update_data, merge=True)
         if 'avatar_key' in locals() and old_avatar_key and old_avatar_key != avatar_key:
             delete_from_r2_quietly(old_avatar_key, label="Avatar replace")
 
@@ -3442,7 +4293,14 @@ def api_profile_update():
             "email": updated_data.get('email', ''),
             "handle": updated_data.get('handle', '')
         })
-        
+
+    except AuthFlowError as auth_error:
+        return auth_error_response(
+            auth_error.code,
+            auth_error.message,
+            auth_error.status,
+            **auth_error.extra,
+        )
     except Exception as e:
         print(f"Profile update error: {e}")
         return jsonify(error="Failed to update profile"), 500
@@ -3624,6 +4482,7 @@ def api_password_reset_validate():
 @app.post("/api/password-reset/confirm")
 def api_password_reset_confirm():
     from firebase_admin import auth as fb_auth
+    from services.email_service import send_password_changed_email
 
     data = request.get_json(silent=True) or {}
     token = (data.get("token") or "").strip()
@@ -3656,7 +4515,17 @@ def api_password_reset_confirm():
             merge=True,
         )
 
-        return jsonify(ok=True, email=_normalize_email(user_data.get("email")))
+        resolved_email = _normalize_email(user_data.get("email"))
+        if not resolved_email and doc and doc.exists:
+            resolved_email = _normalize_email(doc.reference.id)
+
+        if is_reasonably_valid_email(resolved_email):
+            try:
+                send_password_changed_email(resolved_email)
+            except Exception as email_error:
+                print(f"Password changed confirmation email failed: {email_error}")
+
+        return jsonify(ok=True, email=resolved_email)
     except Exception as e:
         print(f"Password reset confirmation error: {e}")
         return jsonify(error="This reset link is invalid, expired, or already used."), 400
@@ -3853,8 +4722,21 @@ def api_change_email_request():
     if not password:
         return jsonify(error="Enter your current password to continue."), 400
 
-    stored_hash = user_data.get("password_hash")
-    if not stored_hash or not check_password_hash(stored_hash, password):
+    # Legacy accounts store werkzeug hashes in Firestore. Firebase email/password users
+    # often have no password_hash here — verify against Firebase Auth instead.
+    stored_hash = (user_data.get("password_hash") or "").strip()
+    password_ok = bool(stored_hash) and check_password_hash(stored_hash, password)
+    api_key = _firebase_web_api_key()
+    if not password_ok and api_key:
+        password_ok = _verify_firebase_email_password(current_email, password)
+    if not password_ok:
+        if not stored_hash and not api_key:
+            return jsonify(
+                error=(
+                    "Password verification is not available right now. "
+                    "Configure FIREBASE_WEB_API_KEY (or VITE_FIREBASE_API_KEY) on the server."
+                )
+            ), 503
         return jsonify(error="Your current password could not be verified."), 401
 
     env_status = validate_email_environment()
@@ -3901,6 +4783,7 @@ def api_change_email_request():
             expires_in_seconds=EMAIL_CHANGE_ACTION_TTL_SECONDS,
         )
         confirm_link = _build_email_action_url("change-email", action_token)
+        cancel_link = _build_email_action_url("cancel-email-change", action_token)
         expires_at = datetime.utcnow() + timedelta(seconds=EMAIL_CHANGE_ACTION_TTL_SECONDS)
 
         doc.reference.set(
@@ -3917,6 +4800,7 @@ def api_change_email_request():
             merge=True,
         )
 
+        # Variant 4 → new email only; Variant 5 → current (old) email only
         confirm_result = send_confirm_new_email(
             new_email,
             current_email=current_email,
@@ -3925,6 +4809,7 @@ def api_change_email_request():
         alert_result = send_email_change_requested(
             current_email,
             new_email=new_email,
+            action_url=cancel_link,
         )
         if not confirm_result.get("ok") or not alert_result.get("ok"):
             doc.reference.set({"pendingEmailChange": firestore.DELETE_FIELD}, merge=True)
@@ -4078,17 +4963,8 @@ def api_account_email_change_request():
         expires_in_seconds=EMAIL_CHANGE_ACTION_TTL_SECONDS,
     )
     confirm_link = _build_email_action_url("change-email", action_token)
-
-    try:
-        _send_email_change_confirmation_via_resend(
-            new_email,
-            display_name,
-            current_email,
-            confirm_link,
-        )
-    except Exception as send_error:
-        print(f"Email change confirmation send failed for {current_email}: {send_error}")
-        return jsonify(error="We couldn't send the confirmation email right now. Please try again."), 500
+    cancel_link = _build_email_action_url("cancel-email-change", action_token)
+    expires_at = datetime.utcnow() + timedelta(seconds=EMAIL_CHANGE_ACTION_TTL_SECONDS)
 
     doc.reference.set(
         {
@@ -4097,12 +4973,30 @@ def api_account_email_change_request():
                 "currentEmail": current_email,
                 "newEmail": new_email,
                 "requestedAt": datetime.utcnow().isoformat(),
-                "expiresAt": (datetime.utcnow() + timedelta(seconds=EMAIL_CHANGE_ACTION_TTL_SECONDS)).isoformat(),
+                "expiresAt": expires_at.isoformat(),
             },
             "firebaseUid": firebase_uid,
         },
         merge=True,
     )
+
+    try:
+        _send_email_change_confirmation_via_resend(
+            new_email,
+            display_name,
+            current_email,
+            confirm_link,
+        )
+        _send_email_change_requested_via_resend(
+            current_email,
+            display_name,
+            new_email,
+            cancel_link,
+        )
+    except Exception as send_error:
+        doc.reference.set({"pendingEmailChange": firestore.DELETE_FIELD}, merge=True)
+        print(f"Email change request email send failed for {current_email}: {send_error}")
+        return jsonify(error="We couldn't send the email change messages right now. Please try again."), 500
 
     return jsonify(
         ok=True,
@@ -4133,6 +5027,30 @@ def api_account_email_change_validate():
     except Exception as e:
         print(f"Email change validation error: {e}")
         return jsonify(error="This email change link is invalid or has expired."), 400
+
+
+@app.post("/api/account/email-change/cancel")
+def api_account_email_change_cancel():
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    if not token:
+        return jsonify(error="Missing email change token."), 400
+
+    try:
+        doc, user_data, _ = _validate_pending_email_change(token)
+        pending = user_data.get("pendingEmailChange") or {}
+        current_email = _normalize_email(pending.get("currentEmail") or user_data.get("email"))
+        new_email = _normalize_email(pending.get("newEmail"))
+        doc.reference.set({"pendingEmailChange": firestore.DELETE_FIELD}, merge=True)
+        return jsonify(
+            ok=True,
+            currentEmail=current_email,
+            newEmail=new_email,
+            maskedNewEmail=_mask_email(new_email),
+        )
+    except Exception as e:
+        print(f"Email change cancellation error: {e}")
+        return jsonify(error="This email change request is invalid, expired, or already cancelled."), 400
 
 
 @app.post("/api/account/email-change/confirm")
@@ -4200,7 +5118,7 @@ def api_account_email_change_confirm():
 @app.get("/api/podcast/<podcast_id>")
 def api_get_podcast(podcast_id):
     """Fetch full podcast data for editing"""
-    user_id = session.get("user_id") or get_current_user_email()
+    user_id = get_current_podcast_owner_id()
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
@@ -4214,7 +5132,7 @@ def api_get_podcast(podcast_id):
     podcast_data = podcast_doc.to_dict() or {}
     
     # Verify ownership
-    if podcast_data.get("userId") != user_id:
+    if not _podcast_owned_by_user(podcast_data, user_id):
         return jsonify(error="Forbidden"), 403
 
     # Get speakers from subcollection
@@ -4305,10 +5223,7 @@ def api_generate():
     script_template = script  
     show_title = title or "Podcast Show"
     # figure out user (prefer session)
-    user_id = session.get("user_id")
-    if not user_id:
-        # fallback to JWT header if you want
-        user_id = get_current_user_email()
+    user_id = get_current_podcast_owner_id()
 
     is_guest_session = not bool(user_id)
 
@@ -4349,7 +5264,7 @@ def api_generate():
 
 @app.get("/api/episodes")
 def api_episodes_list():
-    user_id = session.get("user_id") or get_current_user_email()
+    user_id = get_current_podcast_owner_id()
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
@@ -4414,50 +5329,25 @@ def api_episodes_list():
                 return None
         return None
 
-    def _purge_episode_document(ref):
-        snapshot = ref.get()
-        if snapshot.exists:
-            _delete_podcast_assets(snapshot.to_dict() or {})
-        for sub_name in ("scripts", "speakers", "transcripts"):
-            try:
-                for sub_doc in ref.collection(sub_name).stream():
-                    sub_doc.reference.delete()
-            except Exception:
-                pass
-        ref.delete()
+    def _is_explicitly_deleted(data):
+        status = str(data.get("status") or "").strip().lower()
+        return (
+            status == "deleted"
+            or bool(data.get("deletedAt"))
+            or data.get("deleted") is True
+            or data.get("isDeleted") is True
+        )
 
-    query = db.collection("podcasts").where("userId", "==", user_id)
-    now_utc = datetime.now(timezone.utc)
-    recycle_cutoff = now_utc - timedelta(days=RECYCLE_BIN_RETENTION_DAYS)
     items = []
     recycle_items = []
-    for doc in query.stream():
+    docs = list(_current_user_podcast_docs())
+    print("Firestore docs count:", len(docs))
+
+    for doc in docs:
         data = doc.to_dict() or {}
         deleted_at = _coerce_datetime(data.get("deletedAt"))
         if deleted_at and deleted_at.tzinfo is None:
             deleted_at = deleted_at.replace(tzinfo=timezone.utc)
-        if deleted_at and deleted_at <= recycle_cutoff:
-            _purge_episode_document(doc.reference)
-            continue
-
-        # Show only finalized/saved episodes.
-        # Legacy compatibility: older saved episodes may still carry status="draft"
-        # from historical flows, so we treat rich, finalized-looking records as saved.
-        status = str(data.get("status") or "").strip().lower()
-        if status == "deleted" and deleted_at:
-            is_saved = True
-            legacy_saved = False
-        else:
-            is_saved = status == "saved" or bool(data.get("savedAt"))
-            legacy_saved = (
-                status == "draft"
-                and bool(data.get("audioUrl") or data.get("audioKey"))
-                and bool(data.get("summary"))
-                and isinstance(data.get("chapters"), list)
-                and len(data.get("chapters")) > 0
-            )
-        if not (is_saved or legacy_saved):
-            continue
 
         title = data.get("title") or ""
         prefer_arabic_brief = _has_arabic(title) or (data.get("language") == "ar")
@@ -4485,14 +5375,17 @@ def api_episodes_list():
         payload["hasEditDraft"] = bool(data.get("hasEditDraft"))
         payload["editDraftUpdatedAt"] = data.get("editDraftUpdatedAt") or ""
 
-        if deleted_at:
-            payload["deletedAt"] = deleted_at.isoformat()
-            payload["deleteAfter"] = (
-                deleted_at + timedelta(days=RECYCLE_BIN_RETENTION_DAYS)
-            ).isoformat()
+        if _is_explicitly_deleted(data):
+            if deleted_at:
+                payload["deletedAt"] = deleted_at.isoformat()
+                payload["deleteAfter"] = (
+                    deleted_at + timedelta(days=RECYCLE_BIN_RETENTION_DAYS)
+                ).isoformat()
             recycle_items.append(payload)
         else:
             items.append(payload)
+
+    print("Episodes returned:", len(items))
 
     return jsonify(
         items=items,
@@ -4503,7 +5396,7 @@ def api_episodes_list():
 
 @app.post("/api/episodes/<episode_id>/trash")
 def api_trash_episode(episode_id):
-    user_id = session.get("user_id") or get_current_user_email()
+    user_id = get_current_podcast_owner_id()
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
@@ -4513,7 +5406,7 @@ def api_trash_episode(episode_id):
         return jsonify(error="Episode not found"), 404
 
     data = doc.to_dict() or {}
-    if data.get("userId") != user_id:
+    if not _podcast_owned_by_user(data, user_id):
         return jsonify(error="Forbidden"), 403
 
     current_status = str(data.get("status") or "").strip() or "saved"
@@ -4533,7 +5426,7 @@ def api_trash_episode(episode_id):
 
 @app.post("/api/episodes/<episode_id>/restore")
 def api_restore_episode(episode_id):
-    user_id = session.get("user_id") or get_current_user_email()
+    user_id = get_current_podcast_owner_id()
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
@@ -4543,7 +5436,7 @@ def api_restore_episode(episode_id):
         return jsonify(error="Episode not found"), 404
 
     data = doc.to_dict() or {}
-    if data.get("userId") != user_id:
+    if not _podcast_owned_by_user(data, user_id):
         return jsonify(error="Forbidden"), 403
 
     fallback_status = "saved" if data.get("savedAt") else "draft"
@@ -4565,7 +5458,7 @@ def api_restore_episode(episode_id):
 
 @app.post("/api/episodes/<episode_id>/delete")
 def api_delete_episode(episode_id):
-    user_id = session.get("user_id") or get_current_user_email()
+    user_id = get_current_podcast_owner_id()
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
@@ -4575,7 +5468,7 @@ def api_delete_episode(episode_id):
         return jsonify(error="Episode not found"), 404
 
     data = doc.to_dict() or {}
-    if data.get("userId") != user_id:
+    if not _podcast_owned_by_user(data, user_id):
         return jsonify(error="Forbidden"), 403
 
     _delete_podcast_assets(data)
@@ -4851,14 +5744,14 @@ def api_audio():
     session.modified = True
 
     # NEW: save live transcript (word timeline) to Firestore
-    user_id = session.get("user_id") or get_current_user_email()
+    user_id = get_current_podcast_owner_id()
     if user_id and podcast_id:
         podcast_ref = db.collection("podcasts").document(podcast_id)
         doc = podcast_ref.get()
 
         if doc.exists:
             pdata = doc.to_dict() or {}
-            if pdata.get("userId") == user_id:
+            if _podcast_owned_by_user(pdata, user_id):
                 words = result.get("words") or []
                 transcript_text = build_transcript_text_with_speakers(words)
                 old_audio_key = (pdata.get("audioKey") or "").strip()
@@ -4908,7 +5801,7 @@ def api_audio():
 
 @app.get("/api/audio/<podcast_id>")
 def get_audio(podcast_id):
-    user_id = session.get("user_id") or get_current_user_email()
+    user_id = get_current_podcast_owner_id()
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
@@ -4919,7 +5812,7 @@ def get_audio(podcast_id):
         return jsonify(error="Podcast not found"), 404
 
     data = doc.to_dict() or {}
-    if data.get("userId") != user_id:
+    if not _podcast_owned_by_user(data, user_id):
         return jsonify(error="Forbidden"), 403
 
     audio_key = data.get("audioKey")
@@ -4933,6 +5826,25 @@ def get_audio(podcast_id):
     except Exception as e:
         print(f"DEBUG AUDIO ERROR {podcast_id}: {e}")
         return jsonify(error=str(e)), 500
+
+
+@app.get("/api/audio/<podcast_id>/download")
+def download_audio(podcast_id):
+    user_id = get_current_podcast_owner_id()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
+
+    ref = db.collection("podcasts").document(podcast_id)
+    doc = ref.get()
+
+    if not doc.exists:
+        return jsonify(error="Podcast not found"), 404
+
+    data = doc.to_dict() or {}
+    if not _podcast_owned_by_user(data, user_id):
+        return jsonify(error="Forbidden"), 403
+
+    return _stream_audio_download_response(podcast_id, data)
     
 @app.get("/api/transcript/last")
 def api_transcript_last():
@@ -4970,7 +5882,7 @@ def summarize_transcript():
         if not podcast_id:
             return jsonify({"error": "Missing podcastId"}), 400
 
-        user_id = session.get("user_id") or get_current_user_email()
+        user_id = get_current_podcast_owner_id()
         if not user_id:
             return jsonify({"error": "Not logged in"}), 401
 
@@ -5011,7 +5923,7 @@ def summarize_transcript():
             return jsonify({"error": "Podcast not found"}), 404
 
         pdata = doc.to_dict() or {}
-        if pdata.get("userId") != user_id:
+        if not _podcast_owned_by_user(pdata, user_id):
             return jsonify({"error": "Forbidden"}), 403
 
         podcast_ref.set({
@@ -5029,7 +5941,7 @@ def summarize_transcript():
 
 @app.get("/api/podcasts/<podcast_id>")
 def get_podcast(podcast_id):
-    user_id = session.get("user_id") or get_current_user_email()
+    user_id = get_current_podcast_owner_id()
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
@@ -5039,17 +5951,17 @@ def get_podcast(podcast_id):
         return jsonify(error="Podcast not found"), 404
 
     data = doc.to_dict() or {}
-    if data.get("userId") != user_id:
+    if not _podcast_owned_by_user(data, user_id):
         return jsonify(error="Forbidden"), 403
 
     # Always prefer long-lived URLs for production stability
     podcast_payload = resolve_podcast_media_urls(data, include_audio=True, include_cover=True, prefer_long_lived=True)
-    return jsonify(ok=True, podcast={**podcast_payload, "id": podcast_id})
+    return jsonify(ok=True, podcast=_json_safe_firestore_value({**podcast_payload, "id": podcast_id}))
 
 
 @app.get("/api/podcasts/<podcast_id>/transcript")
 def get_podcast_transcript(podcast_id):
-    user_id = session.get("user_id") or get_current_user_email()
+    user_id = get_current_podcast_owner_id()
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
@@ -5059,7 +5971,7 @@ def get_podcast_transcript(podcast_id):
         return jsonify(error="Podcast not found"), 404
 
     data = doc.to_dict() or {}
-    if data.get("userId") != user_id:
+    if not _podcast_owned_by_user(data, user_id):
         return jsonify(error="Forbidden"), 403
 
     tdoc = ref.collection("transcripts").document("main").get()
@@ -5067,12 +5979,12 @@ def get_podcast_transcript(podcast_id):
         return jsonify(words=[])
 
     tdata = tdoc.to_dict() or {}
-    return jsonify(words=tdata.get("words") or [])
+    return jsonify(words=_json_safe_firestore_value(tdata.get("words") or []))
 
 
 @app.post("/api/podcasts/<podcast_id>/chapters/ensure")
 def ensure_podcast_chapters(podcast_id):
-    user_id = session.get("user_id") or get_current_user_email()
+    user_id = get_current_podcast_owner_id()
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
@@ -5082,7 +5994,7 @@ def ensure_podcast_chapters(podcast_id):
         return jsonify(error="Podcast not found"), 404
 
     data = doc.to_dict() or {}
-    if data.get("userId") != user_id:
+    if not _podcast_owned_by_user(data, user_id):
         return jsonify(error="Forbidden"), 403
 
     existing_chapters = data.get("chapters") or []
@@ -5126,7 +6038,7 @@ def ensure_podcast_chapters(podcast_id):
 
 @app.post("/api/podcasts/<podcast_id>/save-all")
 def save_all_podcast(podcast_id):
-    user_id = session.get("user_id") or get_current_user_email()
+    user_id = get_current_podcast_owner_id()
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
@@ -5136,7 +6048,7 @@ def save_all_podcast(podcast_id):
         return jsonify(error="Podcast not found"), 404
 
     data = doc.to_dict() or {}
-    if data.get("userId") != user_id:
+    if not _podcast_owned_by_user(data, user_id):
         return jsonify(error="Forbidden"), 403
 
     payload = request.get_json(silent=True) or {}
@@ -5149,6 +6061,7 @@ def save_all_podcast(podcast_id):
     chapters = payload.get("chapters")
     words = payload.get("words")
     transcript_text = payload.get("transcriptText")
+    category = (payload.get("category") or "").strip()
 
     updates = {}
     if title:
@@ -5166,6 +6079,8 @@ def save_all_podcast(podcast_id):
     if isinstance(chapters, list):
         updates["chapters"] = chapters
         updates["chaptersUpdatedAt"] = firestore.SERVER_TIMESTAMP
+    if category:
+        updates["category"] = category
 
     if words and not transcript_text:
         try:
@@ -5182,6 +6097,7 @@ def save_all_podcast(podcast_id):
 
     if updates:
         ref.set(updates, merge=True)
+        print(f"[WeCast guest restore] title saved in Firestore: {updates.get('title') or data.get('title') or ''}")
 
     if isinstance(words, list) and words:
         ref.collection("transcripts").document("main").set({
@@ -5194,12 +6110,11 @@ def save_all_podcast(podcast_id):
 
 @app.post("/api/preview/save")
 def save_preview_snapshot():
-    user_id = session.get("user_id") or get_current_user_email()
+    user_id = get_current_podcast_owner_id()
     if not user_id:
         return jsonify(error="Not logged in"), 401
 
     payload = request.get_json(silent=True) or {}
-    title = (payload.get("title") or "").strip() or "Untitled Episode"
     audio_url = _normalize_public_url((payload.get("audioUrl") or payload.get("audio_url") or session.get("last_audio_url") or "").strip())
     audio_key = (payload.get("audioKey") or payload.get("audio_key") or session.get("last_audio_key") or "").strip()
     summary = payload.get("summary")
@@ -5209,9 +6124,12 @@ def save_preview_snapshot():
     transcript_text = payload.get("transcriptText")
     description = (payload.get("description") or "").strip()
     style = (payload.get("style") or "").strip()
+    category = (payload.get("category") or "").strip()
     speakers_info = payload.get("speakers") if isinstance(payload.get("speakers"), list) else None
 
     draft = session.get("create_draft") or {}
+    title = resolve_episode_title(payload, draft)
+    print(f"[WeCast guest restore] title payload received after login: {title}")
     if not description:
         description = (draft.get("description") or "").strip()
     if not style:
@@ -5260,6 +6178,8 @@ def save_preview_snapshot():
     if isinstance(chapters, list):
         updates["chapters"] = chapters
         updates["chaptersUpdatedAt"] = firestore.SERVER_TIMESTAMP
+    if category:
+        updates["category"] = category
     if transcript_text:
         updates["transcriptText"] = transcript_text
         updates["transcriptUpdatedAt"] = firestore.SERVER_TIMESTAMP
@@ -5311,6 +6231,117 @@ def api_audio_last():
             print(f"Last audio URL refresh failed: {exc}")
     return jsonify(url=url or None, audioKey=key or None)
 
+
+@app.post("/api/username-availability")
+def api_username_availability():
+    data = request.get_json(silent=True) or {}
+    username = _clean_username(data.get("username"))
+
+    if not username:
+        return auth_error_response(
+            "username_required",
+            "Username is required.",
+            400,
+        )
+
+    identity = get_current_user_identity()
+    current_doc = identity.get("doc")
+
+    normalized_username = _normalize_username(username)
+    if _username_is_taken(
+        normalized_username,
+        email=identity.get("email"),
+        firebase_uid=identity.get("firebaseUid"),
+        user_ref=current_doc.reference if current_doc and current_doc.exists else None,
+    ):
+        return auth_error_response(
+            "username_taken",
+            "This username is already taken.",
+            409,
+            available=False,
+            username=username,
+            normalizedUsername=normalized_username,
+        )
+
+    return jsonify(
+        {
+            "available": True,
+            "username": username,
+            "normalizedUsername": normalized_username,
+        }
+    )
+
+
+@app.post("/api/auth/resolve-identifier")
+def api_auth_resolve_identifier():
+    data = request.get_json(silent=True) or {}
+    identifier = (data.get("identifier") or "").strip()
+
+    if not identifier:
+        return auth_error_response(
+            "invalid_login",
+            "Email/username and password are required.",
+            400,
+        )
+
+    if "@" in identifier:
+        normalized_email = _normalize_email(identifier)
+        if not is_reasonably_valid_email(normalized_email):
+            return auth_error_response(
+                "invalid_email",
+                "Enter a valid email address and try again.",
+                400,
+            )
+        email_resolution = resolve_login_strategy_for_email(normalized_email)
+        return jsonify(
+            {
+                "identifierType": "email",
+                "normalizedIdentifier": normalized_email,
+                "email": normalized_email,
+                "loginStrategy": email_resolution.get("loginStrategy") or "firebase_email",
+                "authProvider": email_resolution.get("authProvider") or "password",
+            }
+        )
+
+    preferred_username_match, username_candidates = resolve_login_user_doc_by_username(identifier)
+    if not username_candidates:
+        return auth_error_response(
+            "account_not_found",
+            "We couldn't find an account with that username.",
+            404,
+        )
+
+    if not preferred_username_match:
+        return auth_error_response(
+            "username_conflict",
+            "Multiple users match this username. Please use your email address.",
+            409,
+        )
+
+    user_data = preferred_username_match.get("data") or {}
+    user_doc = preferred_username_match.get("doc")
+    resolved_email = _normalize_email(user_data.get("email") or user_doc.id)
+    if not resolved_email:
+        return auth_error_response(
+            "account_not_found",
+            "We couldn't find an account with that username.",
+            404,
+        )
+
+    return jsonify(
+        {
+            "identifierType": "username",
+            "normalizedIdentifier": _normalize_username(identifier),
+            "email": resolved_email,
+            "username": _stored_username_display(user_data),
+            "loginStrategy": preferred_username_match.get("loginStrategy") or "firebase_email",
+            "authProvider": normalize_auth_provider(
+                user_data.get("authProvider"),
+                user_data.get("password_hash"),
+            ),
+        }
+    )
+
 @app.route("/api/signup", methods=["POST"])
 def signup():
     data = request.get_json() or {}
@@ -5333,19 +6364,36 @@ def signup():
             ), 401
 
         email = (decoded.get("email") or "").strip().lower()
-        display_name = (data.get("name") or decoded.get("name") or "").strip()
+        display_name = _clean_username(
+            data.get("username") or data.get("name") or decoded.get("name") or ""
+        )
 
         if not email:
             return jsonify({"error": "Unable to read email from Firebase token"}), 400
+        if not display_name:
+            return auth_error_response(
+                "username_required",
+                "Username is required.",
+                400,
+            )
 
         try:
             final_data = _upsert_firebase_user_profile(
                 email=email,
                 display_name=display_name,
+                username=display_name,
                 auth_provider=decoded.get("firebase", {}).get("sign_in_provider", "password"),
                 email_verified=bool(decoded.get("email_verified")),
                 firebase_uid=decoded.get("uid") or "",
                 mark_login=False,
+                reserve_username=True,
+            )
+        except AuthFlowError as auth_error:
+            return auth_error_response(
+                auth_error.code,
+                auth_error.message,
+                auth_error.status,
+                **auth_error.extra,
             )
         except Exception as sync_error:
             print(f"Firebase signup profile sync failed for {email}: {sync_error}")
@@ -5369,57 +6417,109 @@ def signup():
     email = (data.get("email") or "").strip().lower()
     password = (data.get("password") or "").strip()
     confirm_password = (data.get("confirmPassword") or "").strip()
-    name = (data.get("name") or "").strip()
+    name = _clean_username(data.get("username") or data.get("name"))
 
-    if not email or not password:
-        return jsonify({"error": "Email and password are required"}), 400
+    if not name:
+        return auth_error_response(
+            "username_required",
+            "Username is required.",
+            400,
+        )
+    if not email:
+        return auth_error_response(
+            "email_required",
+            "Email is required.",
+            400,
+        )
+    if not password:
+        return auth_error_response(
+            "password_required",
+            "Password is required.",
+            400,
+        )
+    if not confirm_password:
+        return auth_error_response(
+            "confirm_password_required",
+            "Confirm password is required.",
+            400,
+        )
 
     if not is_reasonably_valid_email(email):
-        return jsonify({"error": "Please enter a valid email address."}), 400
+        return auth_error_response(
+            "invalid_email",
+            "Please enter a valid email address.",
+            400,
+        )
 
     if password != confirm_password:
-        return jsonify({"error": "Passwords do not match."}), 400
+        return auth_error_response(
+            "password_mismatch",
+            "Passwords do not match.",
+            400,
+        )
 
     if len(password) < 8:
-        return jsonify(
-            {"error": "Password must be at least 8 characters long."}
-        ), 400
+        return auth_error_response(
+            "weak_password",
+            (
+                "Password must be at least 8 characters and include one "
+                "uppercase letter, one number, and one special symbol."
+            ),
+            400,
+        )
 
     if not re.search(r"[A-Z]", password) or not re.search(r"\d", password) or not re.search(r"[^A-Za-z0-9]", password):
-        return jsonify(
-            {
-                "error": (
-                    "Password must be at least 8 characters and include one "
-                    "uppercase letter, one number, and one special symbol."
-                )
-            }
-        ), 400
+        return auth_error_response(
+            "weak_password",
+            (
+                "Password must be at least 8 characters and include one "
+                "uppercase letter, one number, and one special symbol."
+            ),
+            400,
+        )
 
     existing_user_doc = get_user_doc_by_candidates(email, email=email)
     if existing_user_doc and existing_user_doc.exists:
-        return jsonify({"error": "This email is already in use."}), 409
+        return auth_error_response(
+            "email_already_exists",
+            "This email is already registered.",
+            409,
+        )
 
     user_ref = db.collection("users").document(email)
     password_hash = generate_password_hash(password)
+    now_iso = datetime.utcnow().isoformat()
+    payload = {
+        "email": email,
+        "name": name,
+        "displayName": name,
+        "bio": "",
+        "avatarUrl": "",
+        "authProvider": "password",
+        "emailVerified": False,
+        "created_at": now_iso,
+        "last_login": now_iso,
+        "role": "user",
+        "failed_attempts": 0,
+        "lock_until": None,
+        "password_hash": password_hash,
+    }
 
-    user_ref.set(
-        {
-            "email": email,
-            "name": name or "",
-            "displayName": name or "",
-            "bio": "",
-            "avatarUrl": "",
-            "username_lower": (name or "").lower(),
-            "password_hash": password_hash,
-            "authProvider": "password",
-            "emailVerified": False,
-            "created_at": datetime.utcnow().isoformat(),
-            "last_login": datetime.utcnow().isoformat(),
-            "role": "user",
-            "failed_attempts": 0,
-            "lock_until": None,
-        }
-    )
+    try:
+        _write_user_profile_with_username(
+            user_ref=user_ref,
+            payload=payload,
+            username=name,
+            current_username="",
+            email=email,
+        )
+    except AuthFlowError as auth_error:
+        return auth_error_response(
+            auth_error.code,
+            auth_error.message,
+            auth_error.status,
+            **auth_error.extra,
+        )
 
     token = create_token(email, email)
     session["user_id"] = email
@@ -5431,12 +6531,7 @@ def signup():
             {
                 "message": "User created successfully",
                 "token": token,
-                "user": {
-                    "email": email,
-                    "name": name or "",
-                    "role": "user",
-                    "authProvider": "password",
-                },
+                "user": _session_user_payload(payload, email),
             }
         ),
         201,
@@ -5450,43 +6545,141 @@ def login():
     password = data.get("password") or ""
 
     if not identifier or not password:
-        return jsonify({"error": "Email/username and password are required"}), 400
-
-    users = db.collection("users")
-    user_data = None
-    user_email = None
-
-    if "@" in identifier:
-        email_candidates = [identifier, identifier.lower()]
-        for candidate in email_candidates:
-            doc = get_user_doc_by_candidates(candidate, email=candidate)
-            if doc and doc.exists:
-                user_data = doc.to_dict() or {}
-                user_email = user_data.get("email") or candidate
-                break
-    else:
-        username = identifier.lower()
-        username_docs = list(
-            users.where("username_lower", "==", username).limit(2).stream()
+        return auth_error_response(
+            "invalid_login",
+            "Email/username and password are required.",
+            400,
         )
-        if not username_docs:
-            username_docs = list(users.where("name", "==", identifier).limit(2).stream())
 
-        if len(username_docs) > 1:
-            return jsonify({"error": "Multiple users match this username. Please log in with email."}), 409
-        if len(username_docs) == 1:
-            user_data = username_docs[0].to_dict() or {}
-            user_email = user_data.get("email") or username_docs[0].id
+    using_email = "@" in identifier
+    user_doc = None
+    user_data = {}
+    user_email = ""
+
+    if using_email:
+        user_email = _normalize_email(identifier)
+        if not is_reasonably_valid_email(user_email):
+            return auth_error_response(
+                "invalid_email",
+                "Enter a valid email address and try again.",
+                400,
+            )
+        user_doc = get_user_doc_by_candidates(user_email, email=user_email)
+    else:
+        preferred_username_match, username_candidates = resolve_login_user_doc_by_username(identifier)
+        if not username_candidates:
+            return auth_error_response(
+                "account_not_found",
+                "We couldn't find an account with that username.",
+                404,
+            )
+        if not preferred_username_match:
+            return auth_error_response(
+                "username_conflict",
+                "Multiple users match this username. Please use your email address.",
+                409,
+            )
+        user_doc = preferred_username_match.get("doc")
+
+    if user_doc and user_doc.exists:
+        user_data = user_doc.to_dict() or {}
+        user_email = _normalize_email(user_data.get("email") or user_email or user_doc.id)
+
+    firebase_state = _firebase_account_state_for_email(user_email, user_data=user_data)
+    stored_hash = user_data.get("password_hash")
+    auth_provider = normalize_auth_provider(
+        user_data.get("authProvider"),
+        stored_hash,
+    )
 
     if not user_data:
-        return jsonify({"error": "Invalid email/username or password"}), 401
+        if firebase_state:
+            if (
+                firebase_state.get("authProvider") in {"google", "github"}
+                and not firebase_state.get("hasPasswordProvider")
+            ):
+                provider = firebase_state.get("authProvider")
+                provider_label = _auth_provider_label(provider)
+                return auth_error_response(
+                    "provider_mismatch",
+                    f"This account uses {provider_label} sign-in. Use that button to continue.",
+                    409,
+                    authProvider=provider,
+                )
+            return auth_error_response(
+                "wrong_password",
+                "The password you entered is incorrect.",
+                401,
+            )
 
-    stored_hash = user_data.get("password_hash")
+        return auth_error_response(
+            "account_not_found",
+            (
+                "We couldn't find an account with that email address."
+                if using_email
+                else "We couldn't find an account with that username."
+            ),
+            404,
+        )
 
-    if not stored_hash or not check_password_hash(stored_hash, password):
-        return jsonify({"error": "Invalid email/username or password"}), 401
+    if stored_hash:
+        if not check_password_hash(stored_hash, password):
+            return auth_error_response(
+                "wrong_password",
+                "The password you entered is incorrect.",
+                401,
+            )
 
-    firebase_uid = (user_data.get("firebaseUid") or "").strip()
+        if (
+            user_data.get("emailVerified") is False
+            and firebase_state
+            and firebase_state.get("hasPasswordProvider")
+            and not firebase_state.get("emailVerified", True)
+        ):
+            return auth_error_response(
+                "email_not_verified",
+                "Please verify your email first before logging in.",
+                403,
+                email=user_email,
+                emailVerified=False,
+                pendingVerification=True,
+            )
+    else:
+        if firebase_state:
+            if (
+                firebase_state.get("authProvider") in {"google", "github"}
+                and not firebase_state.get("hasPasswordProvider")
+            ):
+                provider = firebase_state.get("authProvider")
+                provider_label = _auth_provider_label(provider)
+                return auth_error_response(
+                    "provider_mismatch",
+                    f"This account uses {provider_label} sign-in. Use that button to continue.",
+                    409,
+                    authProvider=provider,
+                )
+            if auth_provider == "password" or firebase_state.get("hasPasswordProvider"):
+                return auth_error_response(
+                    "wrong_password",
+                    "The password you entered is incorrect.",
+                    401,
+                )
+
+        return auth_error_response(
+            "account_not_found",
+            (
+                "We couldn't find an account with that email address."
+                if using_email
+                else "We couldn't find an account with that username."
+            ),
+            404,
+        )
+
+    firebase_uid = (
+        user_data.get("firebaseUid")
+        or (firebase_state or {}).get("firebaseUid")
+        or ""
+    ).strip()
     token = create_token(user_email, user_email, firebase_uid=firebase_uid)
     
     session["user_id"] = user_email
@@ -5498,12 +6691,13 @@ def login():
             {
                 "message": "Login successful",
                 "token": token,
-                "user": {
-                    "email": user_data.get("email"),
-                    "name": user_data.get("name"),
-                    "role": user_data.get("role", "user"),
-                    "authProvider": user_data.get("authProvider") or ("password" if user_data.get("password_hash") else "unknown"),
-                },
+                "user": _session_user_payload(
+                    {
+                        **user_data,
+                        "firebaseUid": firebase_uid or user_data.get("firebaseUid", ""),
+                    },
+                    user_email,
+                ),
             }
         ),
         200,
@@ -5511,6 +6705,8 @@ def login():
 
 @app.post("/api/reset-password-direct")
 def reset_password_direct():
+    from services.email_service import send_password_changed_email
+
     data = request.get_json(silent=True) or {}
 
     email = (data.get("email") or "").strip().lower()
@@ -5540,6 +6736,12 @@ def reset_password_direct():
             "lock_until": None,
         }
     )
+
+    if is_reasonably_valid_email(email):
+        try:
+            send_password_changed_email(email)
+        except Exception as email_error:
+            print(f"Password changed confirmation email failed: {email_error}")
 
     return jsonify(message="Password updated successfully. You can now log in."), 200
 
@@ -5614,7 +6816,14 @@ def firebase_email_login():
             return jsonify(error="Unable to read email from Firebase token"), 400
 
         if not email_verified:
-            return jsonify(error="Please verify your email before signing in."), 403
+            return auth_error_response(
+                "email_not_verified",
+                "Please verify your email first before logging in.",
+                403,
+                email=email,
+                emailVerified=False,
+                pendingVerification=True,
+            )
 
         final_data = _upsert_firebase_user_profile(
             email=email,
@@ -5635,6 +6844,13 @@ def firebase_email_login():
             message="Login successful",
             token=token,
             user=_session_user_payload(final_data, email),
+        )
+    except AuthFlowError as auth_error:
+        return auth_error_response(
+            auth_error.code,
+            auth_error.message,
+            auth_error.status,
+            **auth_error.extra,
         )
     except Exception as e:
         print("Firebase email login error:", e)
@@ -5773,6 +6989,25 @@ def get_shared_podcast(podcast_id):
     except Exception as e:
         print("Public share route error:", str(e))
         return jsonify({"error": "Failed to load shared podcast"}), 500
+
+
+@app.get("/api/share/<podcast_id>/download")
+def download_shared_podcast(podcast_id):
+    try:
+        ref = db.collection("podcasts").document(podcast_id)
+        doc = ref.get()
+
+        if not doc.exists:
+            return jsonify({"error": "Podcast not found"}), 404
+
+        podcast = doc.to_dict() or {}
+        if str(podcast.get("status") or "").strip().lower() == "deleted":
+            return jsonify({"error": "Podcast not found"}), 404
+
+        return _stream_audio_download_response(podcast_id, podcast)
+    except Exception as e:
+        print("Public share download error:", str(e))
+        return jsonify({"error": "Failed to download shared podcast"}), 500
 
 
 # ------------------------------------------------------------

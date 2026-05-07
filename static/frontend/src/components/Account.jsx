@@ -6,6 +6,11 @@ import { useTranslation } from "react-i18next";
 import { API_BASE } from "../utils/api";
 import { DEFAULT_ACCOUNT_PREFERENCES, loadAccountPreferences, saveAccountPreferences } from "../utils/accountPreferences";
 
+const getPortalTarget = () => {
+  if (typeof document === "undefined") return null;
+  return document.body && document.body.nodeType === 1 ? document.body : null;
+};
+
 /* ---- Dark mode helper ---- */
 function applyDarkMode(enabled) {
   const root = document.documentElement;
@@ -76,6 +81,21 @@ function looksLikeEmail(value) {
   return /\S+@\S+\.\S+/.test(String(value || "").trim());
 }
 
+function storedAccountEmail() {
+  for (const storage of [localStorage, sessionStorage]) {
+    try {
+      const raw = storage.getItem("user");
+      if (!raw) continue;
+      const user = JSON.parse(raw);
+      const email = String(user?.email || "").trim().toLowerCase();
+      if (looksLikeEmail(email)) return email;
+    } catch {
+      // ignore stale storage values
+    }
+  }
+  return "";
+}
+
 const ACCOUNT_ACTION_BUTTON_CLASS =
   "inline-flex w-full items-center justify-center gap-2 rounded-xl px-6 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[11.5rem]";
 const ACCOUNT_SECONDARY_BUTTON_CLASS =
@@ -98,6 +118,7 @@ export default function Account() {
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [sendingResetLink, setSendingResetLink] = useState(false);
   const [showResetPasswordModal, setShowResetPasswordModal] = useState(false);
+  const [showResetLinkSentModal, setShowResetLinkSentModal] = useState(false);
   const [showEmailChangeModal, setShowEmailChangeModal] = useState(false);
   const [requestingEmailChange, setRequestingEmailChange] = useState(false);
   const [newEmail, setNewEmail] = useState("");
@@ -108,7 +129,7 @@ export default function Account() {
     displayName: "WeCast User",
     bio: "I create AI-powered podcasts.",
     avatarUrl: "",
-    email: "user@example.com",
+    email: "",
   });
 
   const [originalProfile, setOriginalProfile] = useState({});
@@ -135,8 +156,8 @@ export default function Account() {
   const hasUnsavedChanges = JSON.stringify(profile) !== JSON.stringify(originalProfile) || avatarFile !== null;
   const normalizedAuthProvider = normalizeAuthProvider(authProvider);
   const providerLabel = formatAuthProviderLabel(normalizedAuthProvider);
-  const canSendResetLink = normalizedAuthProvider === "password" && Boolean(String(profile.email || "").trim());
-  const canChangeEmail = normalizedAuthProvider === "password" && Boolean(String(profile.email || "").trim());
+  const canSendResetLink = normalizedAuthProvider === "password" && looksLikeEmail(profile.email);
+  const canChangeEmail = normalizedAuthProvider === "password" && looksLikeEmail(profile.email);
   const isProviderManaged = normalizedAuthProvider === "google" || normalizedAuthProvider === "github";
 
   useEffect(() => {
@@ -346,7 +367,12 @@ export default function Account() {
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || "Failed to update profile");
+        const serverError = new Error(
+          errorData.message || errorData.error || "Failed to update profile"
+        );
+        serverError.code = errorData.code || "";
+        serverError.serverRejected = true;
+        throw serverError;
       }
 
       const data = await res.json();
@@ -380,6 +406,11 @@ export default function Account() {
       
     } catch (error) {
       console.error("Save error:", error);
+
+      if (error?.serverRejected || error?.code) {
+        showToast(error.message || "Failed to update profile", "error");
+        return;
+      }
       
       // Fallback to localStorage
       const userToStore = {
@@ -419,6 +450,7 @@ export default function Account() {
 
   function openResetPasswordModal() {
     if (!canSendResetLink) return;
+    setShowResetLinkSentModal(false);
     setShowResetPasswordModal(true);
   }
 
@@ -427,18 +459,47 @@ export default function Account() {
     setShowResetPasswordModal(false);
   }
 
+  async function resolveResetEmail() {
+    const token = localStorage.getItem("token") || sessionStorage.getItem("token") || "";
+    if (token) {
+      try {
+        const response = await fetch(`${API_BASE}/api/me`, {
+          method: "GET",
+          credentials: "include",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await response.json().catch(() => ({}));
+        const apiEmail = String(data?.email || "").trim().toLowerCase();
+        if (looksLikeEmail(apiEmail)) {
+          return apiEmail;
+        }
+      } catch {
+        // fallback to local state/storage values
+      }
+    }
+
+    const fallbackEmail = looksLikeEmail(profile.email)
+      ? String(profile.email || "").trim().toLowerCase()
+      : storedAccountEmail();
+    return looksLikeEmail(fallbackEmail) ? fallbackEmail : "";
+  }
+
   async function handleSendResetLink() {
-    const email = String(profile.email || "").trim().toLowerCase();
-    if (!email) {
-      showToast(t("account.passwordInvalidEmail"), "error");
+    const email = await resolveResetEmail();
+    if (!looksLikeEmail(email)) {
+      showToast(t("account.passwordMissingEmail"), "error");
       return;
     }
 
     setSendingResetLink(true);
     try {
+      const token = localStorage.getItem("token") || sessionStorage.getItem("token") || "";
       const res = await fetch(`${API_BASE}/api/send-password-reset-email`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         credentials: "include",
         body: JSON.stringify({ email }),
       });
@@ -446,20 +507,22 @@ export default function Account() {
 
       if (!res.ok) {
         throw {
-          code: data?.code || "",
-          message: data?.error || t("account.passwordSendFailed"),
+          code: data?.code || data?.errorType || "",
+          status: res.status,
         };
       }
 
       setShowResetPasswordModal(false);
-      showToast(t("account.passwordSent", { email }), "success");
+      setShowResetLinkSentModal(true);
+      showToast(t("account.passwordSent"), "success");
     } catch (error) {
       const code = error?.code || "";
-      let message = error?.message || t("account.passwordSendFailed");
+      const status = Number(error?.status || 0);
+      let message = t("account.passwordSendFailed");
 
-      if (code === "auth/too-many-requests") {
+      if (code === "auth/too-many-requests" || status === 429) {
         message = t("account.passwordTooManyRequests");
-      } else if (code === "auth/invalid-email") {
+      } else if (code === "auth/invalid-email" || status === 400) {
         message = t("account.passwordInvalidEmail");
       }
 
@@ -634,7 +697,7 @@ export default function Account() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-6 space-y-6 sm:p-6 sm:space-y-8">
+    <div className="mx-auto w-full max-w-5xl overflow-x-hidden px-4 py-6 space-y-6 sm:p-6 sm:space-y-8">
       <header className="space-y-1">
         <h1 className="text-3xl font-extrabold sm:text-4xl">{t("account.title")}</h1>
         <p className="text-sm text-gray-600 dark:text-gray-300">
@@ -654,18 +717,18 @@ export default function Account() {
         subtitle="Update your public identity, avatar, and bio in one place."
         icon={<Save className="w-5 h-5" />}
       >
-        <div className="flex flex-col gap-6">
-          {/* Avatar + name row */}
-          <div className="flex flex-col md:flex-row items-start gap-6">
-            <div className="relative shrink-0">
+        <div className="flex min-w-0 flex-col gap-5 md:gap-6">
+          {/* Avatar + profile details */}
+          <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-5 max-[360px]:gap-x-2 min-[420px]:gap-x-4 md:grid-cols-[auto_minmax(0,1fr)] md:items-start md:gap-6">
+            <div className="flex shrink-0 flex-col items-center gap-2 self-center md:self-start">
               <img
                 src={shownAvatar}
                 alt="Avatar"
-                className="w-28 h-28 rounded-[24px] object-cover border border-gray-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 shadow-sm"
+                className="h-20 w-20 rounded-[18px] border border-gray-200 bg-white object-cover shadow-sm dark:border-neutral-700 dark:bg-neutral-800 min-[420px]:h-24 min-[420px]:w-24 md:h-28 md:w-28 md:rounded-[24px]"
               />
               <button
                 onClick={onPickAvatar}
-                className="absolute -bottom-3 left-1/2 -translate-x-1/2 text-xs px-3 py-1.5 rounded-full
+                className="whitespace-nowrap text-xs px-3 py-1.5 rounded-full
                   bg-black text-white dark:bg-white dark:text-black border
                   border-black dark:border-white shadow-md"
               >
@@ -680,23 +743,22 @@ export default function Account() {
               />
             </div>
 
-            <div className="flex-1 grid md:grid-cols-2 gap-4 items-start">
-              <div className="md:col-span-2 rounded-2xl border border-black/5 dark:border-white/10 bg-white/70 dark:bg-white/5 px-4 py-3">
+            <div className="min-w-0 self-center md:self-stretch">
+              <div className="flex min-h-[5.5rem] min-w-0 flex-col justify-center rounded-2xl border border-black/5 bg-white/70 px-3 py-3 dark:border-white/10 dark:bg-white/5 max-[360px]:px-2.5 min-[420px]:min-h-[6rem] min-[420px]:px-4 md:min-h-0 md:py-3">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/45 dark:text-white/45">
                   Profile snapshot
                 </p>
-                <p className="mt-2 text-lg font-semibold text-black dark:text-white">
+                <p className="mt-1.5 truncate text-base font-semibold leading-tight text-black dark:text-white min-[420px]:text-lg md:whitespace-normal">
                   {profile.displayName || "WeCast User"}
                 </p>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
+                <p className="mt-0.5 truncate text-xs text-gray-600 dark:text-gray-400 min-[420px]:text-sm md:whitespace-normal">
                   {profile.email || "No email available"}
                 </p>
               </div>
+            </div>
 
-              <Field
-                label={t("account.username")}
-                hint={t("account.usernameHint")}
-              >
+            <div className="col-span-2 grid min-w-0 grid-cols-1 gap-4 min-[520px]:grid-cols-2 md:col-start-2 md:grid-cols-2">
+              <Field label={t("account.username")} hint={t("account.usernameHint")}>
                 <input
                   className="form-input"
                   placeholder="Enter your name"
@@ -735,7 +797,7 @@ export default function Account() {
             />
           </Field>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:justify-end">
+          <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:justify-end">
             <button
               type="button"
               onClick={resetProfileChanges}
@@ -949,6 +1011,7 @@ export default function Account() {
       <PasswordResetModal
         open={showResetPasswordModal}
         sending={sendingResetLink}
+        email={profile.email}
         onCancel={closeResetPasswordModal}
         onConfirm={handleSendResetLink}
         title={t("account.passwordModalTitle")}
@@ -957,6 +1020,14 @@ export default function Account() {
         cancelLabel={t("account.passwordModalCancel")}
         confirmLabel={t("account.passwordModalConfirm")}
         sendingLabel={t("account.passwordSending")}
+        emailUnavailableLabel={t("account.passwordEmailUnavailable")}
+      />
+      <PasswordResetSentModal
+        open={showResetLinkSentModal}
+        title={t("account.passwordSentModalTitle")}
+        body={t("account.passwordSentModalBody")}
+        doneLabel={t("account.passwordSentModalDone")}
+        onDone={() => setShowResetLinkSentModal(false)}
       />
       <EmailChangeModal
         open={showEmailChangeModal}
@@ -984,9 +1055,9 @@ export default function Account() {
 /* ---------- UI helpers ---------- */
 function Card({ title, subtitle, icon, children }) {
   return (
-    <div className="ui-card">
+    <div className="ui-card !p-4 sm:!p-6">
       {(title || subtitle) && (
-        <div className="mb-6 flex items-start justify-between gap-4">
+        <div className="mb-4 flex items-start justify-between gap-4 sm:mb-6">
           <div>
             {title && (
               <div className="flex items-center gap-2">
@@ -1008,6 +1079,7 @@ function Card({ title, subtitle, icon, children }) {
 function PasswordResetModal({
   open,
   sending,
+  email,
   onCancel,
   onConfirm,
   title,
@@ -1016,24 +1088,32 @@ function PasswordResetModal({
   cancelLabel,
   confirmLabel,
   sendingLabel,
+  emailUnavailableLabel,
 }) {
   if (!open) return null;
 
-  return createPortal(
-    <div className="fixed inset-0 z-[10020] flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-[28px] border border-black/10 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-neutral-950">
-        <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-purple-100 text-purple-700 dark:bg-purple-500/15 dark:text-purple-200">
-            <AlertCircle className="h-5 w-5" />
+  const modal = (
+    <div className="wecast-overlay flex items-center justify-center bg-black/50 px-4 backdrop-blur-sm">
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="w-full max-w-[460px] rounded-3xl border border-black/10 bg-white p-6 shadow-[0_26px_60px_rgba(0,0,0,0.2)] dark:border-white/10 dark:bg-neutral-950 sm:p-7"
+      >
+        <div className="flex items-start gap-4">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-purple-200 bg-purple-50 text-purple-700 dark:border-purple-400/30 dark:bg-purple-500/10 dark:text-purple-200">
+            <AlertCircle className="h-4 w-4" />
           </div>
-          <div className="space-y-2">
-            <h3 className="text-xl font-semibold text-black dark:text-white">{title}</h3>
-            <p className="text-sm text-gray-600 dark:text-gray-300">{body}</p>
-            <p className="text-sm text-gray-600 dark:text-gray-300">{note}</p>
+          <div className="space-y-3">
+            <h3 className="text-xl font-semibold tracking-tight text-black dark:text-white">{title}</h3>
+            <p className="text-sm leading-6 text-gray-700 dark:text-gray-300">{body}</p>
+            <div className="rounded-2xl border border-purple-200 bg-purple-50/70 px-4 py-3 text-sm font-semibold text-purple-900 dark:border-purple-400/25 dark:bg-purple-500/10 dark:text-purple-100">
+              {looksLikeEmail(email) ? email : emailUnavailableLabel}
+            </div>
+            <p className="text-sm leading-6 text-gray-600 dark:text-gray-300">{note}</p>
           </div>
         </div>
 
-        <div className="mt-5">
+        <div className="mt-6">
           <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <button
               type="button"
@@ -1047,7 +1127,7 @@ function PasswordResetModal({
               type="button"
               onClick={onConfirm}
               disabled={sending}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-black/90 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-black dark:hover:bg-white/90"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-purple-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-purple-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-purple-300/60 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-purple-500 dark:hover:bg-purple-400"
             >
               {sending ? (
                 <>
@@ -1061,9 +1141,47 @@ function PasswordResetModal({
           </div>
         </div>
       </div>
-    </div>,
-    document.body
+    </div>
   );
+  const portalTarget = getPortalTarget();
+  return portalTarget ? createPortal(modal, portalTarget) : modal;
+}
+
+function PasswordResetSentModal({ open, title, body, doneLabel, onDone }) {
+  if (!open) return null;
+
+  const modal = (
+    <div className="wecast-overlay flex items-center justify-center bg-black/50 px-4 backdrop-blur-sm">
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="w-full max-w-[460px] rounded-3xl border border-black/10 bg-white p-6 shadow-[0_26px_60px_rgba(0,0,0,0.2)] dark:border-white/10 dark:bg-neutral-950 sm:p-7"
+      >
+        <div className="flex items-start gap-4">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-500/10 dark:text-emerald-200">
+            <Check className="h-4 w-4" />
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-xl font-semibold tracking-tight text-black dark:text-white">
+              {title}
+            </h3>
+            <p className="text-sm leading-6 text-gray-700 dark:text-gray-300">{body}</p>
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end">
+          <button
+            type="button"
+            onClick={onDone}
+            className="inline-flex items-center justify-center rounded-xl bg-purple-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-purple-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-purple-300/60 dark:bg-purple-500 dark:hover:bg-purple-400"
+          >
+            {doneLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+  const portalTarget = getPortalTarget();
+  return portalTarget ? createPortal(modal, portalTarget) : modal;
 }
 
 function EmailChangeModal({
@@ -1079,8 +1197,8 @@ function EmailChangeModal({
 }) {
   if (!open) return null;
 
-  return createPortal(
-    <div className="fixed inset-0 z-[10020] flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm">
+  const modal = (
+    <div className="wecast-overlay flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm">
       <div className="w-full max-w-md rounded-[28px] border border-black/10 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-neutral-950">
         <div className="flex items-start gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-200">
@@ -1153,9 +1271,10 @@ function EmailChangeModal({
           </div>
         </div>
       </div>
-    </div>,
-    document.body
+    </div>
   );
+  const portalTarget = getPortalTarget();
+  return portalTarget ? createPortal(modal, portalTarget) : modal;
 }
 
 function DeleteAccountModal({
@@ -1168,8 +1287,8 @@ function DeleteAccountModal({
 }) {
   if (!open) return null;
 
-  return createPortal(
-    <div className="fixed inset-0 z-[10020] flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm">
+  const modal = (
+    <div className="wecast-overlay flex items-center justify-center bg-black/55 px-4 backdrop-blur-sm">
       <div className="w-full max-w-md rounded-[28px] border border-red-200 bg-white p-6 shadow-2xl dark:border-red-500/20 dark:bg-neutral-950">
         <div className="flex items-start gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-red-100 text-red-600 dark:bg-red-500/15 dark:text-red-300">
@@ -1225,16 +1344,19 @@ function DeleteAccountModal({
           </div>
         </div>
       </div>
-    </div>,
-    document.body
+    </div>
   );
+  const portalTarget = getPortalTarget();
+  return portalTarget ? createPortal(modal, portalTarget) : modal;
 }
 
 function Field({ label, hint, children, full }) {
   return (
-    <label className={`flex flex-col gap-2 ${full ? "md:col-span-2" : ""}`}>
+    <label
+      className={`flex w-full min-w-0 max-w-full flex-col gap-2 ${full ? "md:col-span-2" : ""}`}
+    >
       {label && <span className="form-label">{label}</span>}
-      {children}
+      <span className="block min-w-0 w-full max-w-full">{children}</span>
       {hint && <span className="form-help">{hint}</span>}
     </label>
   );
@@ -1247,7 +1369,7 @@ function Toggle({ checked, onChange }) {
       role="switch"
       aria-checked={checked}
       onClick={() => onChange(!checked)}
-      className={`w-14 h-7 rounded-full flex items-center px-1 transition ${
+      className={`flex h-7 w-14 shrink-0 items-center rounded-full px-1 transition ${
         checked
           ? "bg-black dark:bg-white justify-end"
           : "bg-gray-300 justify-start"
@@ -1261,18 +1383,19 @@ function Toggle({ checked, onChange }) {
 
 function PreferenceRow({ icon, title, hint, control }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-2xl border border-black/5 dark:border-white/10 bg-white/60 dark:bg-white/5 px-4 py-4">
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-black text-white dark:bg-white dark:text-black">
+    <div className="flex w-full min-w-0 max-w-full flex-col gap-3 rounded-2xl border border-black/5 bg-white/60 p-4 dark:border-white/10 dark:bg-white/5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+      <div className="flex min-w-0 flex-1 items-start gap-3">
+        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-black text-white dark:bg-white dark:text-black">
           {icon}
         </div>
-        <div>
-          <p className="font-semibold text-black dark:text-white">{title}</p>
-          <p className="text-sm text-gray-600 dark:text-gray-400">{hint}</p>
+        <div className="min-w-0 flex-1">
+          <p className="font-semibold [overflow-wrap:anywhere] text-black dark:text-white">{title}</p>
+          <p className="mt-0.5 text-sm text-gray-600 [overflow-wrap:anywhere] dark:text-gray-400">
+            {hint}
+          </p>
         </div>
       </div>
-      <div className="shrink-0">{control}</div>
+      <div className="flex shrink-0 justify-end sm:items-center">{control}</div>
     </div>
   );
 }
-

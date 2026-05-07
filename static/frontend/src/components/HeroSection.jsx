@@ -3,8 +3,7 @@ import CurvedWeCast from "./CurvedWeCast";
 import { useTranslation } from "react-i18next";
 
 function HeroSection() {
-  const { t, i18n } = useTranslation();
-  const isRTL = i18n.language === "ar";
+  const { t } = useTranslation();
   const [flashMessage, setFlashMessage] = useState("");
   const heroTitleLines = String(t("Give Your Words a Voice with WeCast")).split("\n");
 
@@ -26,12 +25,13 @@ function HeroSection() {
   return (
     <section className="relative overflow-hidden bg-cream text-black transition-colors duration-500 dark:bg-[#0a0a1a] dark:text-white">
       {flashMessage && (
-        <div className="absolute left-0 right-0 top-4 z-20 flex justify-center px-4">
-          <div className="mx-auto mt-8 flex w-full max-w-xl items-center justify-between rounded-xl border border-green-300 bg-green-50 px-4 py-3 text-green-700 shadow-sm dark:border-green-700 dark:bg-green-900/20 dark:text-green-300">
-            <span className="text-sm font-medium md:text-base">{flashMessage}</span>
+        <div className="absolute inset-x-0 top-4 z-20 flex justify-center px-4">
+          <div className="mx-auto mt-8 flex min-w-0 w-full max-w-xl items-center justify-between gap-2 rounded-xl border border-green-300 bg-green-50 px-4 py-3 text-green-700 shadow-sm dark:border-green-700 dark:bg-green-900/20 dark:text-green-300">
+            <span className="min-w-0 flex-1 text-sm font-medium md:text-base">{flashMessage}</span>
             <button
+              type="button"
               onClick={() => setFlashMessage("")}
-              className="ml-3 rounded-md px-3 py-1 text-sm font-medium transition hover:bg-white/80 dark:hover:bg-green-800/50"
+              className="ms-3 shrink-0 rounded-md px-3 py-1 text-sm font-medium transition hover:bg-white/80 dark:hover:bg-green-800/50"
             >
               {t("create.common.close")}
             </button>
@@ -39,19 +39,22 @@ function HeroSection() {
         </div>
       )}
 
-      <div className="section-shell section-block relative grid grid-cols-1 items-center gap-8 pt-8 sm:pt-16 lg:grid-cols-2 lg:gap-10 lg:pt-24">
-        <div className={`order-1 space-y-3 sm:space-y-5 ${isRTL ? "text-right" : "text-left"}`}>
-          <h1 className={`text-[2.05rem] font-black leading-[0.94] tracking-tight text-black min-[380px]:text-[2.25rem] sm:text-6xl dark:text-gray-100 ${isRTL ? "ml-auto max-w-[12.4ch] sm:max-w-[12.8ch]" : "max-w-[12ch] min-[380px]:max-w-[13ch] sm:max-w-xl"}`}>
+      <div className="section-shell section-block relative grid min-w-0 grid-cols-1 items-center gap-6 pt-8 sm:gap-8 sm:pt-16 lg:grid-cols-2 lg:gap-10 lg:pt-24">
+        <div className="order-1 min-w-0 space-y-3 text-start sm:space-y-5">
+          <h1 className="max-w-[12ch] text-[2.05rem] font-black leading-[0.94] tracking-tight text-black min-[380px]:max-w-[13ch] min-[380px]:text-[2.25rem] sm:max-w-xl sm:text-6xl dark:text-gray-100">
             {heroTitleLines.map((line, index) => (
-              <span key={`${line}-${index}`} className="block whitespace-nowrap">
+              <span
+                key={`${line}-${index}`}
+                className="block break-words [overflow-wrap:anywhere] sm:whitespace-nowrap"
+              >
                 {line}
               </span>
             ))}
           </h1>
-          <p className={`text-[0.98rem] leading-7 text-black/78 sm:text-[1.35rem] sm:leading-8 dark:text-gray-200 ${isRTL ? "ml-auto max-w-[32rem]" : "max-w-[32rem]"}`}>
+          <p className="max-w-[32rem] text-[0.98rem] leading-7 text-black/78 sm:text-[1.35rem] sm:leading-8 dark:text-gray-200">
             {t("Hero Description")}
           </p>
-          <div className={`flex flex-col gap-3 pt-1 sm:flex-wrap sm:items-center ${isRTL ? "w-full sm:ml-auto sm:max-w-[32rem] sm:flex-row sm:justify-start" : "sm:flex-row"}`}>
+          <div className="flex w-full max-w-[32rem] flex-col gap-3 pt-1 sm:flex-row sm:flex-wrap sm:items-center sm:justify-start">
             <button
               onClick={navigateToCreate}
               className="btn-primary w-full justify-center sm:w-auto"
@@ -62,12 +65,12 @@ function HeroSection() {
               href="#about"
               className="btn-secondary w-full justify-center text-center sm:w-auto"
             >
-              {isRTL ? "اعرف المزيد" : t("Learn More")}
+              {t("Learn More")}
             </a>
           </div>
         </div>
 
-        <div className="order-2 relative min-h-[200px] sm:min-h-[300px] md:min-h-[350px]">
+        <div className="order-2 relative min-h-[200px] min-w-0 sm:min-h-[300px] md:min-h-[350px]">
           <div className="absolute left-1/2 top-[50%] z-20 w-fit -translate-x-1/2 -translate-y-1/2 sm:top-1/2">
             <div dir="ltr" className="inline-block">
               <CurvedWeCast
@@ -77,7 +80,7 @@ function HeroSection() {
             </div>
           </div>
 
-          <div className="absolute left-[8%] top-[18%] hidden rotate-12 text-sm font-semibold text-black dark:text-gray-100 sm:block sm:text-base">
+          <div className="absolute start-[8%] top-[18%] hidden rotate-12 text-sm font-semibold text-black dark:text-gray-100 sm:block sm:text-base">
             <span className="animate-pulse body-sm">{t("Start Casting!!")}</span>
             <div className="relative mt-2 h-6 w-6">
               <div className="absolute inset-0 rounded-full bg-pink-bright animate-spin" />
@@ -86,7 +89,7 @@ function HeroSection() {
             </div>
           </div>
 
-          <div className="absolute right-[2%] top-[18%] hidden -rotate-12 text-sm font-semibold text-black dark:text-gray-100 sm:block sm:text-base">
+          <div className="absolute end-[2%] top-[18%] hidden -rotate-12 text-sm font-semibold text-black dark:text-gray-100 sm:block sm:text-base">
             <span className="animate-pulse body-sm">{t("Turn Text to speech!")}</span>
             <div className="relative mt-2 h-6 w-6">
               <div className="absolute inset-0 rounded-full bg-blue-bright animate-spin" style={{ animationDirection: "reverse" }} />

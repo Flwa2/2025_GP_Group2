@@ -23,7 +23,7 @@
       <div class="preview-shell" style="width:860px;max-width:100%;margin:0 auto 28px;">
         <h1 style="margin:0;color:#16131e;font-size:30px;line-height:1.2;font-weight:850;">WeCast email design previews</h1>
         <p style="margin:10px 0 0;color:#625f57;font-size:15px;line-height:1.6;">
-          Preview-only page. All variants use the same shared design system: native-size logo mark, centered wordmark, clean SaaS card, consistent CTA styling, fallback link, support footer, and mobile-friendly spacing.
+          Preview-only page. All variants use the same shared design system: native-size logo mark, centered wordmark, clean SaaS card, consistent CTA styling, support footer, and mobile-friendly spacing.
         </p>
       </div>
       <div id="email-previews"></div>
@@ -60,14 +60,15 @@
         {
           label: "Variant 3: Password Changed Confirmation",
           eyebrow: "Security confirmation",
-          title: "Your password was changed",
+          title: "Your password has been updated",
           message: [
-            "This confirms that the password for your WeCast account was changed successfully.",
-            "If this was you, no further action is needed. If this was not you, contact support immediately so we can help protect your account."
+            "This confirms that your WeCast password was successfully changed.",
+            "If you made this change, no further action is required.",
+            "If you did not change your password, please contact support immediately."
           ],
-          buttonText: "Review Account Security",
-          buttonUrl: "https://example.com/wecast-account-security",
-          notice: "Keep your account secure by using a unique password and signing out of shared devices."
+          buttonText: "Go to WeCast",
+          buttonUrl: "https://wecast-frontend.onrender.com/#/",
+          notice: ""
         },
         {
           label: "Variant 4: Confirm New Email",
@@ -95,7 +96,7 @@
           ],
           detailLabel: "Requested new email",
           detailLines: ["new@example.com"],
-          buttonText: "Secure My Account",
+          buttonText: "Cancel email change",
           buttonUrl: "https://example.com/wecast-secure-account",
           notice: "Your current email remains active while this request is pending."
         },
@@ -164,13 +165,21 @@
             <td align="center" style="padding:30px 0 0;">
               <a class="wecast-button" href="${buttonUrl}" target="_blank" style="display:inline-block;background:#17131f;color:#ffffff;text-decoration:none;border-radius:16px;padding:15px 28px;font-size:16px;line-height:1;font-weight:800;box-shadow:0 12px 24px rgba(23,19,31,0.18);">${buttonText}</a>
             </td>
-          </tr>
+          </tr>`;
+      }
+
+      function renderNotice(variant) {
+        if (!variant.notice) return "";
+        return `
           <tr>
-            <td align="center" style="padding:22px 0 0;">
-              <p style="margin:0;color:#747b8a;font-size:13px;line-height:1.65;">
-                If the button does not work, use this link:
-                <a href="${buttonUrl}" target="_blank" style="color:#5b2bd8;text-decoration:underline;font-weight:700;">Open secure link</a>
-              </p>
+            <td style="padding:30px 0 0;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#fbf8f2;border:1px solid #eee2cc;border-radius:18px;">
+                <tr>
+                  <td style="padding:16px 18px;">
+                    <p style="margin:0;color:#6d7480;font-size:13px;line-height:1.65;">${escapeHtml(variant.notice)}</p>
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>`;
       }
@@ -221,17 +230,7 @@
                                 </tr>
                                 ${renderDetails(variant)}
                                 ${renderButton(variant)}
-                                <tr>
-                                  <td style="padding:30px 0 0;">
-                                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#fbf8f2;border:1px solid #eee2cc;border-radius:18px;">
-                                      <tr>
-                                        <td style="padding:16px 18px;">
-                                          <p style="margin:0;color:#6d7480;font-size:13px;line-height:1.65;">${escapeHtml(variant.notice)}</p>
-                                        </td>
-                                      </tr>
-                                    </table>
-                                  </td>
-                                </tr>
+                                ${renderNotice(variant)}
                               </table>
                             </td>
                           </tr>

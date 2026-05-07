@@ -291,6 +291,7 @@ const dashboardContentClass =
                 <WeCastAudioPlayer
                   src={audioUrl}
                   title={title || "Untitled Podcast"}
+                  downloadUrl={podcastId ? `${API_BASE}/api/share/${podcastId}/download` : ""}
                   onTimeUpdate={(sec) => setCurrentTime(sec)}
                   externalSeek={externalSeek}
                 />

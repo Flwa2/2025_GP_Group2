@@ -53,6 +53,12 @@ def _render_template(
     except Exception:
         resolved_logo_url = "https://wecast-frontend.onrender.com/logo.png"
 
+    resolved_notice_text = (
+        "This secure link helps protect your WeCast account. If you did not request this email, you can safely ignore it."
+        if notice_text is None
+        else notice_text
+    )
+
     return generate_wecast_email_template(
         title=title,
         message=message,
@@ -61,8 +67,7 @@ def _render_template(
         logo_url=resolved_logo_url,
         support_email=support_email(),
         eyebrow=eyebrow,
-        notice_text=notice_text
-        or "This secure link helps protect your WeCast account. If you did not request this email, you can safely ignore it.",
+        notice_text=resolved_notice_text,
         detail_label=detail_label,
         detail_lines=detail_lines,
     )
@@ -271,22 +276,23 @@ def send_password_reset_email(email, action_url=None, *, dry_run=False):
 
 
 def _password_changed_content(action_url):
-    url = action_url or _default_url("/#/account?section=security")
+    url = action_url or _default_url("/#/")
     lines = [
-        "This confirms that the password for your WeCast account was changed successfully.",
-        "If this was you, no further action is needed. If this was not you, contact support immediately so we can help protect your account.",
+        "This confirms that your WeCast password was successfully changed.",
+        "If you made this change, no further action is required.",
+        "If you did not change your password, please contact support immediately.",
     ]
     return EmailContent(
-        subject="Your WeCast password was changed",
+        subject="Your password has been updated",
         html_body=_render_template(
-            title="Your password was changed",
+            title="Your password has been updated",
             message=lines,
-            button_text="Review Account Security",
+            button_text="Go to WeCast",
             button_url=url,
             eyebrow="Security confirmation",
-            notice_text="Keep your account secure by using a unique password and signing out of shared devices.",
+            notice_text="",
         ),
-        text_body=_text_body(*lines, button_url=url),
+        text_body=_text_body(*lines),
     )
 
 
@@ -302,7 +308,7 @@ def _confirm_new_email_content(action_url, current_email):
         "If you did not request this change, you can ignore this email.",
     ]
     return EmailContent(
-        subject="Confirm your new WeCast email",
+        subject="Confirm New Email",
         html_body=_render_template(
             title="Confirm your new email",
             message=lines,
@@ -318,6 +324,7 @@ def _confirm_new_email_content(action_url, current_email):
 
 
 def send_confirm_new_email(new_email, current_email="", action_url=None, *, dry_run=False):
+    """Variant 4: send the confirm-new-email template to the *new* address only."""
     content = _confirm_new_email_content(action_url, current_email)
     return _send_email(new_email, content, dry_run=dry_run)
 
@@ -330,11 +337,11 @@ def _email_change_requested_content(action_url, new_email):
         "If this was not you, secure your account immediately.",
     ]
     return EmailContent(
-        subject="A request was made to change your WeCast email",
+        subject="Email Change Requested",
         html_body=_render_template(
             title="A request was made to change your email",
             message=lines,
-            button_text="Secure My Account",
+            button_text="Cancel email change",
             button_url=url,
             eyebrow="Security notice",
             detail_label="Requested new email",
@@ -357,7 +364,7 @@ def _email_changed_success_content(action_url, old_email, new_email):
         "If this was not you, contact support immediately so we can help protect your account.",
     ]
     return EmailContent(
-        subject="Your WeCast account email was changed",
+        subject="Email Changed Successfully",
         html_body=_render_template(
             title="Your account email was changed",
             message=lines,
