@@ -63,9 +63,9 @@ export default function Footer() {
     <footer className="min-w-0 shrink-0 bg-[#f9e7c4] text-[#2c2217] transition-colors duration-500 dark:bg-[linear-gradient(145deg,#070910_0%,#0c1222_52%,#1c1540_100%)] dark:text-white">
       <div className="h-1.5 w-full bg-[#e6c34a] dark:bg-purple-gradient" />
 
-      <div className="section-shell pt-14 pb-8 md:pt-16 md:pb-10">
-        <div className="grid min-w-0 grid-cols-1 gap-y-8 text-center md:text-start lg:grid-cols-12 lg:gap-x-10 lg:gap-y-10">
-          <section className="min-w-0 lg:col-span-5">
+      <div className="section-shell pt-12 pb-7 md:pt-14 md:pb-9">
+        <div className="grid min-w-0 grid-cols-1 gap-y-7 text-center md:text-start lg:mx-auto lg:max-w-6xl lg:grid-cols-12 lg:gap-x-5 lg:gap-y-8">
+          <section className="min-w-0 order-1 lg:col-span-5">
             <div className="flex items-center justify-center gap-3.5 md:justify-start">
               <img
                 src="/logo.png"
@@ -79,17 +79,18 @@ export default function Footer() {
                 WeCast
               </h4>
             </div>
-            <p className="mx-auto mt-4 max-w-[35ch] text-sm leading-6 text-[#3f3428]/80 dark:text-[#b8b8c7] md:mx-0">
+            <p className="mx-auto mt-3.5 max-w-[35ch] text-sm leading-6 text-[#3f3428]/80 dark:text-[#b8b8c7] md:mx-0">
               Turn your ideas into polished podcast episodes with voice, script, and preview in one flow.
             </p>
-            <p className="mt-3 text-sm font-semibold text-purple-700 dark:text-purple-300">
+            <p className="mt-2.5 text-sm font-semibold text-purple-700 dark:text-purple-300">
               Built for creators. Powered by AI.
             </p>
+
           </section>
 
-          <section className="min-w-0 lg:col-span-7">
+          <section className="min-w-0 order-3 lg:order-2 lg:col-span-4 lg:ps-4">
             <h5 className="text-base font-semibold text-[#2c2217] dark:text-white">{t("footer.quickLinks")}</h5>
-            <ul className="mt-4 flex min-w-0 flex-wrap items-center justify-center gap-x-7 gap-y-3 md:justify-start">
+            <ul className="mt-4 flex min-w-0 flex-wrap items-center justify-center gap-x-7 gap-y-3 md:justify-start lg:flex-col lg:items-start lg:gap-x-0 lg:gap-y-1">
               {quickLinks.map((item) => (
                 <li key={item.label} className="min-w-0">
                   {item.type === "button" ? (
@@ -115,9 +116,9 @@ export default function Footer() {
             </ul>
           </section>
 
-          <section className="min-w-0 lg:col-span-12">
+          <section className="min-w-0 order-2 lg:order-3 lg:col-span-3 lg:ps-2 lg:text-start">
             <h5 className="text-base font-semibold text-[#2c2217] dark:text-white">Follow Us</h5>
-            <ul className="mt-4 flex min-w-0 flex-wrap items-center justify-center gap-3.5 md:justify-start">
+            <ul className="mt-2.5 flex min-w-0 flex-wrap items-center justify-center gap-3.5 md:justify-start lg:flex-nowrap lg:justify-start lg:gap-1.5">
               {socialLinks.map(({ label, href, icon: Icon }) => (
                 <li key={label}>
                   <a
@@ -136,7 +137,7 @@ export default function Footer() {
           </section>
         </div>
 
-        <div className="mt-9">
+        <div className="mt-8">
           <div className="mx-auto h-px w-full max-w-[94%] bg-black/20 dark:bg-gradient-to-r dark:from-transparent dark:via-white/20 dark:to-transparent" />
           <p className="mt-4 text-center text-sm text-black/60 dark:text-[#9d9dad]">
             © 2026 WeCast. All rights reserved.
