@@ -3,6 +3,7 @@
 # ==========================
 
 venv/
+.venv/
 __pycache__/
 *.pyc
 
@@ -45,6 +46,8 @@ static/frontend/.*.env
 static/frontend/.vite/
 static/frontend/.cache/
 static/frontend/.parcel-cache/
+static/temp/
+.codex-run/
 *.tmp
 
 # ==========================
@@ -65,6 +68,12 @@ Thumbs.db
 static/output_*.mp3
 static/voice_output.mp3
 static/generated_audio/
+audio_audit.json
+saved_script.txt
+last_saved_script.txt
+
+# Local FFmpeg source extraction
+ffmpeg-8.0.1/
 
 # Node junk
 static/frontend/node_modules/
