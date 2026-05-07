@@ -853,20 +853,21 @@ export default function Preview() {
             <div className={previewTitleCardClass}>
               {resolvedCoverSrc ? (
                 <div className="flex min-w-0 flex-row items-stretch bg-white dark:bg-neutral-950 sm:items-start md:items-stretch">
-                  <div className="flex w-24 shrink-0 items-stretch justify-start overflow-hidden border-r border-black/10 bg-white p-1.5 dark:border-white/10 dark:bg-neutral-950 max-[360px]:w-20 sm:h-auto sm:w-[7.5rem] sm:p-2 md:h-auto md:w-24 md:p-0">
+                  <div className="relative flex w-24 shrink-0 items-stretch justify-start self-stretch overflow-hidden border-r border-black/10 bg-neutral-100/30 p-0 dark:border-white/10 dark:bg-neutral-900/40 max-sm:rounded-s-[28px] max-[360px]:w-20 sm:h-auto sm:rounded-none sm:w-[7.5rem] sm:bg-white sm:p-2 md:h-auto md:w-24 md:rounded-none md:bg-white md:p-0 dark:sm:bg-neutral-950 dark:md:bg-neutral-950">
                     <img
                       src={resolvedCoverSrc}
                       alt={`${displayTitle} cover`}
                       className={[
-                        "w-full h-full",
+                        "block h-full w-full min-h-0 min-w-0",
                         "object-cover object-center",
-                        "sm:object-contain sm:object-left md:object-cover md:object-center",
+                        "sm:object-contain sm:object-left",
+                        "md:object-cover md:object-center",
                       ].join(" ")}
                       onError={() => setCoverImageFailed(true)}
                     />
                   </div>
 
-                  <div className="flex min-w-0 flex-1 items-center bg-[linear-gradient(115deg,rgba(255,255,255,0.97)_0%,rgba(255,255,255,0.95)_48%,rgba(250,246,253,0.92)_76%,rgba(241,234,247,0.74)_100%)] p-4 max-[360px]:p-3 sm:p-5 md:min-h-24 md:py-3 dark:bg-[linear-gradient(115deg,rgba(23,23,26,0.92)_0%,rgba(23,23,26,0.9)_46%,rgba(40,32,52,0.82)_76%,rgba(72,57,95,0.58)_100%)]">
+                  <div className="flex min-w-0 flex-1 items-start sm:items-center bg-[linear-gradient(115deg,rgba(255,255,255,0.97)_0%,rgba(255,255,255,0.95)_48%,rgba(250,246,253,0.92)_76%,rgba(241,234,247,0.74)_100%)] p-4 max-sm:px-3 max-sm:py-3 sm:p-5 md:min-h-24 md:py-3 dark:bg-[linear-gradient(115deg,rgba(23,23,26,0.92)_0%,rgba(23,23,26,0.9)_46%,rgba(40,32,52,0.82)_76%,rgba(72,57,95,0.58)_100%)]">
                     <div className="flex w-full min-w-0 flex-col gap-3 sm:gap-4 sm:flex-row sm:items-center sm:justify-between md:gap-3">
                       <div className="min-w-0 flex-1">
                         <p className="text-xs uppercase tracking-wider text-black/55 dark:text-white/55">
