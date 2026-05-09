@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft } from "lucide-react";
 import WeCastAudioPlayer from "./WeCastAudioPlayer";
