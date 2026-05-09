@@ -3,6 +3,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
 import requests
+import socket
 import smtplib
 import traceback
 
@@ -85,9 +86,12 @@ def _text_body(*lines, button_url=""):
 
 def _smtp_port():
     try:
-        return int(env_value("SMTP_PORT"))
+        port = int(env_value("SMTP_PORT"))
     except ValueError as exc:
         raise ValueError("SMTP_PORT must be a number.") from exc
+    if port < 1 or port > 65535:
+        raise ValueError("SMTP_PORT must be between 1 and 65535.")
+    return port
 
 
 def _safe_exception_payload(step, exc):
@@ -106,61 +110,109 @@ def _smtp_fallback_disabled():
     return env_value("WECAST_DISABLE_SMTP_FALLBACK").lower() in {"1", "true", "yes"}
 
 
+def _smtp_failure_payload(step, exc, error):
+    payload = _safe_exception_payload(step, exc)
+    payload["error"] = error
+    return payload
+
+
+def _log_smtp_attempt(host, port, username, from_email):
+    print(
+        "SMTP email delivery:",
+        "provider=smtp",
+        f"SMTP_HOST={host or '<missing>'}",
+        f"SMTP_PORT={port or '<missing>'}",
+        f"SMTP_USER={bool(username)}",
+        f"FROM_EMAIL={bool(from_email)}",
+        flush=True,
+    )
+
+
 def _send_prepared_message_via_smtp(message, to_email, content):
     try:
         host = env_value("SMTP_HOST")
         port = _smtp_port()
         username = env_value("SMTP_USER")
         password = env_value("SMTP_PASS")
+        from_email = env_value("FROM_EMAIL")
+        _log_smtp_attempt(host, port, username, from_email)
 
         if port == 465:
             try:
                 smtp = smtplib.SMTP_SSL(host, port, timeout=30)
+            except (socket.timeout, TimeoutError) as exc:
+                return _smtp_failure_payload("smtp_connection", exc, "SMTP connection timed out.")
+            except (OSError, smtplib.SMTPException, SystemExit) as exc:
+                return _smtp_failure_payload("smtp_connection", exc, "SMTP connection failed.")
             except Exception as exc:
-                payload = _safe_exception_payload("smtp_connection", exc)
-                payload["error"] = "SMTP connection failed."
-                return payload
+                return _smtp_failure_payload("smtp_connection", exc, "SMTP connection failed.")
             with smtp:
                 try:
                     smtp.login(username, password)
+                except (socket.timeout, TimeoutError) as exc:
+                    return _smtp_failure_payload("smtp_auth", exc, "SMTP authentication timed out.")
+                except (OSError, smtplib.SMTPException, SystemExit) as exc:
+                    return _smtp_failure_payload("smtp_auth", exc, "SMTP authentication failed.")
                 except Exception as exc:
-                    payload = _safe_exception_payload("smtp_auth", exc)
-                    payload["error"] = "SMTP authentication failed."
-                    return payload
+                    return _smtp_failure_payload("smtp_auth", exc, "SMTP authentication failed.")
                 try:
                     smtp.send_message(message)
+                except (socket.timeout, TimeoutError) as exc:
+                    return _smtp_failure_payload("smtp_send", exc, "SMTP send timed out.")
+                except (OSError, smtplib.SMTPException, SystemExit) as exc:
+                    return _smtp_failure_payload("smtp_send", exc, "SMTP send failed.")
                 except Exception as exc:
-                    payload = _safe_exception_payload("smtp_send", exc)
-                    payload["error"] = "SMTP send failed."
-                    return payload
+                    return _smtp_failure_payload("smtp_send", exc, "SMTP send failed.")
         else:
             try:
                 smtp = smtplib.SMTP(host, port, timeout=30)
+            except (socket.timeout, TimeoutError) as exc:
+                return _smtp_failure_payload("smtp_connection", exc, "SMTP connection timed out.")
+            except (OSError, smtplib.SMTPException, SystemExit) as exc:
+                return _smtp_failure_payload("smtp_connection", exc, "SMTP connection failed.")
             except Exception as exc:
-                payload = _safe_exception_payload("smtp_connection", exc)
-                payload["error"] = "SMTP connection failed."
-                return payload
+                return _smtp_failure_payload("smtp_connection", exc, "SMTP connection failed.")
             with smtp:
-                smtp.ehlo()
+                try:
+                    smtp.ehlo()
+                except (socket.timeout, TimeoutError) as exc:
+                    return _smtp_failure_payload("smtp_ehlo", exc, "SMTP handshake timed out.")
+                except (OSError, smtplib.SMTPException, SystemExit) as exc:
+                    return _smtp_failure_payload("smtp_ehlo", exc, "SMTP handshake failed.")
+                except Exception as exc:
+                    return _smtp_failure_payload("smtp_ehlo", exc, "SMTP handshake failed.")
                 try:
                     smtp.starttls()
+                except (socket.timeout, TimeoutError) as exc:
+                    return _smtp_failure_payload("smtp_tls", exc, "SMTP TLS negotiation timed out.")
+                except (OSError, smtplib.SMTPException, SystemExit) as exc:
+                    return _smtp_failure_payload("smtp_tls", exc, "SMTP TLS negotiation failed.")
                 except Exception as exc:
-                    payload = _safe_exception_payload("smtp_tls", exc)
-                    payload["error"] = "SMTP TLS negotiation failed."
-                    return payload
-                smtp.ehlo()
+                    return _smtp_failure_payload("smtp_tls", exc, "SMTP TLS negotiation failed.")
+                try:
+                    smtp.ehlo()
+                except (socket.timeout, TimeoutError) as exc:
+                    return _smtp_failure_payload("smtp_ehlo", exc, "SMTP handshake timed out.")
+                except (OSError, smtplib.SMTPException, SystemExit) as exc:
+                    return _smtp_failure_payload("smtp_ehlo", exc, "SMTP handshake failed.")
+                except Exception as exc:
+                    return _smtp_failure_payload("smtp_ehlo", exc, "SMTP handshake failed.")
                 try:
                     smtp.login(username, password)
+                except (socket.timeout, TimeoutError) as exc:
+                    return _smtp_failure_payload("smtp_auth", exc, "SMTP authentication timed out.")
+                except (OSError, smtplib.SMTPException, SystemExit) as exc:
+                    return _smtp_failure_payload("smtp_auth", exc, "SMTP authentication failed.")
                 except Exception as exc:
-                    payload = _safe_exception_payload("smtp_auth", exc)
-                    payload["error"] = "SMTP authentication failed."
-                    return payload
+                    return _smtp_failure_payload("smtp_auth", exc, "SMTP authentication failed.")
                 try:
                     smtp.send_message(message)
+                except (socket.timeout, TimeoutError) as exc:
+                    return _smtp_failure_payload("smtp_send", exc, "SMTP send timed out.")
+                except (OSError, smtplib.SMTPException, SystemExit) as exc:
+                    return _smtp_failure_payload("smtp_send", exc, "SMTP send failed.")
                 except Exception as exc:
-                    payload = _safe_exception_payload("smtp_send", exc)
-                    payload["error"] = "SMTP send failed."
-                    return payload
+                    return _smtp_failure_payload("smtp_send", exc, "SMTP send failed.")
     except ValueError as exc:
         return {
             "ok": False,
@@ -169,6 +221,8 @@ def _send_prepared_message_via_smtp(message, to_email, content):
             "error": "SMTP environment is invalid.",
             "missing": ["SMTP_PORT"],
         }
+    except SystemExit as exc:
+        return _smtp_failure_payload("smtp", exc, "SMTP send failed.")
     except Exception as exc:
         return {
             "ok": False,
@@ -207,6 +261,7 @@ def _send_email(to_email, content, *, dry_run=False):
             "errorType": "MissingEnvironment",
             "error": "Email environment is not configured.",
             "missing": config["missing"],
+            "invalid": config.get("invalid") or [],
         }
 
     try:

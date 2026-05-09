@@ -1381,11 +1381,11 @@ def _build_email_action_url(mode, token):
 
 
 def _selected_email_provider():
-    if _resend_is_configured():
-        return "resend"
-    smtp_keys = ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "FROM_EMAIL")
+    smtp_keys = ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "FROM_EMAIL", "FROM_NAME")
     if all((os.getenv(key) or "").strip() for key in smtp_keys):
         return "smtp"
+    if _resend_is_configured():
+        return "resend"
     return ""
 
 
@@ -1401,9 +1401,11 @@ def _log_email_runtime_diagnostics(flow):
         f"FRONTEND_URL={bool((os.getenv('FRONTEND_URL') or '').strip())}",
         f"RESEND_API_KEY={bool((os.getenv('RESEND_API_KEY') or '').strip())}",
         f"RESEND_FROM_EMAIL={bool((os.getenv('RESEND_FROM_EMAIL') or '').strip())}",
-        f"SMTP_HOST={bool((os.getenv('SMTP_HOST') or '').strip())}",
+        f"SMTP_HOST={(os.getenv('SMTP_HOST') or '').strip() or '<missing>'}",
+        f"SMTP_PORT={(os.getenv('SMTP_PORT') or '').strip() or '<missing>'}",
         f"SMTP_USER={bool((os.getenv('SMTP_USER') or '').strip())}",
         f"FROM_EMAIL={bool(sender)}",
+        f"FROM_NAME={bool((os.getenv('FROM_NAME') or '').strip())}",
         f"FROM_EMAIL_DOMAIN={sender_domain or '<missing>'}",
         f"frontend={_wecast_frontend_url()}",
     )
@@ -5073,6 +5075,7 @@ def _email_result_http_status(result):
         "smtp_auth",
         "smtp_send",
         "smtp_tls",
+        "smtp_ehlo",
         "smtp",
     }:
         return 502
@@ -5081,8 +5084,11 @@ def _email_result_http_status(result):
 
 def _email_service_failure_response(result, default_message):
     missing = result.get("missing") or []
+    invalid = result.get("invalid") or []
     if missing:
-        return jsonify(error="Email delivery is not configured.", missing=missing), 503
+        return jsonify(error="Email delivery is not configured.", missing=missing, invalid=invalid), 503
+    if invalid:
+        return jsonify(error="Email delivery configuration is invalid.", invalid=invalid), 503
     status = _email_result_http_status(result)
     payload = {
         "error": default_message,
@@ -5118,6 +5124,7 @@ def api_send_verification_email():
         return jsonify(
             error="Email delivery is not configured.",
             missing=config.get("missing") or [],
+            invalid=config.get("invalid") or [],
         ), 503
 
     try:
@@ -5250,6 +5257,7 @@ def api_send_password_reset_email():
             errorType="MissingEnvironment",
             message="Email delivery is not configured.",
             missing=config.get("missing") or [],
+            invalid=config.get("invalid") or [],
         ), 503
 
     try:
@@ -5336,6 +5344,7 @@ def api_send_password_reset_email():
         function=result.get("function") or "",
         line=result.get("line"),
         missing=result.get("missing") or [],
+        invalid=result.get("invalid") or [],
         deliveryPath=result.get("deliveryPath"),
     ), response_status
 
@@ -5401,6 +5410,7 @@ def api_change_email_request():
         return jsonify(
             error="Email delivery is not configured.",
             missing=env_status.get("missing") or [],
+            invalid=env_status.get("invalid") or [],
         ), 503
 
     try:

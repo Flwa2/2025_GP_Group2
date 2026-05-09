@@ -142,13 +142,41 @@ def logo_url():
     return env_value("WECAST_LOGO_URL") or f"{frontend_public_url()}/logo.png"
 
 
+def _smtp_port_error():
+    raw_port = env_value("SMTP_PORT")
+    if not raw_port:
+        return ""
+    try:
+        port = int(raw_port)
+    except ValueError:
+        return "SMTP_PORT must be a number."
+    if port < 1 or port > 65535:
+        return "SMTP_PORT must be between 1 and 65535."
+    return ""
+
+
 def validate_email_configuration():
     smtp_missing = [key for key in SMTP_ENV_KEYS if not env_value(key)]
     resend_missing = [key for key in RESEND_ENV_KEYS if not env_value(key)]
-    smtp_ready = not smtp_missing
+    smtp_port_error = _smtp_port_error()
+    smtp_ready = not smtp_missing and not smtp_port_error
+    smtp_present = any(env_value(key) for key in SMTP_ENV_KEYS)
     resend_ready = not resend_missing
-    provider = "resend" if resend_ready else "smtp" if smtp_ready else ""
-    missing = [] if provider else sorted(set(resend_missing + smtp_missing))
+    if smtp_ready:
+        provider = "smtp"
+    elif smtp_present:
+        provider = ""
+    elif resend_ready:
+        provider = "resend"
+    else:
+        provider = ""
+
+    missing = []
+    invalid = []
+    if not provider:
+        missing = sorted(set(smtp_missing if smtp_present else resend_missing + smtp_missing))
+    if smtp_present and smtp_port_error:
+        invalid.append({"key": "SMTP_PORT", "error": smtp_port_error})
 
     url_ready = True
     try:
@@ -166,6 +194,7 @@ def validate_email_configuration():
     return {
         "ready": bool(provider) and url_ready,
         "missing": missing,
+        "invalid": invalid,
         "present": present,
         "optionalMissing": optional_missing,
         "smtpPresent": smtp_ready,
