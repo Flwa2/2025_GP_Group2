@@ -50,6 +50,12 @@ def is_production():
     )
 
 
+def _is_local_frontend_url(value):
+    parsed = urlparse(value)
+    host = (parsed.hostname or "").lower()
+    return host in {"localhost", "127.0.0.1"}
+
+
 def _validate_absolute_url(name, value):
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -63,8 +69,21 @@ def _validate_absolute_url(name, value):
     return value.rstrip("/")
 
 
+def _frontend_url_keys_in_priority_order():
+    keys = list(FRONTEND_URL_KEYS)
+    if is_production():
+        return keys
+
+    local_keys = [
+        key
+        for key in keys
+        if env_value(key) and _is_local_frontend_url(env_value(key))
+    ]
+    return local_keys + [key for key in keys if key not in local_keys]
+
+
 def frontend_public_url():
-    for key in FRONTEND_URL_KEYS:
+    for key in _frontend_url_keys_in_priority_order():
         value = env_value(key)
         if value:
             return _validate_absolute_url(key, value)
@@ -74,7 +93,7 @@ def frontend_public_url():
 def frontend_public_url_candidates():
     candidates = []
     seen = set()
-    for key in FRONTEND_URL_KEYS:
+    for key in _frontend_url_keys_in_priority_order():
         value = env_value(key)
         if not value:
             continue

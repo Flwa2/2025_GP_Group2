@@ -118,13 +118,15 @@ export default function EmailAction() {
   const isFirebaseVerifyMode =
     hashPath === "#/verify-email" ||
     pathName === "/verify-email" ||
-    mode === "verifyEmail";
+    mode === "verifyemail";
   const isFirebaseResetMode =
     hashPath === "#/reset-password" ||
     pathName === "/reset-password" ||
-    mode === "resetPassword";
+    mode === "resetpassword";
+  const isTokenVerifyMode = mode === "verify-email";
   const isTokenResetMode = mode === "reset-password";
   const isResetMode = isTokenResetMode || isFirebaseResetMode;
+  const isVerifyMode = isTokenVerifyMode || isFirebaseVerifyMode;
   const isChangeEmailMode = mode === "change-email";
   const isCancelEmailChangeMode = mode === "cancel-email-change";
   const onEmailChangeConfirmPath =
@@ -254,7 +256,10 @@ export default function EmailAction() {
       }
 
       const hasRecognizedTokenMode =
-        isTokenResetMode || isChangeEmailMode || isCancelEmailChangeMode;
+        isTokenVerifyMode ||
+        isTokenResetMode ||
+        isChangeEmailMode ||
+        isCancelEmailChangeMode;
       if (!token) {
         setError(
           t(
@@ -290,6 +295,38 @@ export default function EmailAction() {
       setSuccess("");
 
       try {
+        if (isTokenVerifyMode) {
+          const res = await fetch(`${API_BASE}/api/email-verification/confirm`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ token }),
+          });
+          const data = await res.json().catch(() => ({}));
+
+          if (!res.ok) {
+            throw new Error(
+              data?.error ||
+                t(
+                  "emailAction.verify.invalid",
+                  "This verification link is invalid or has expired."
+                )
+            );
+          }
+
+          if (!cancelled) {
+            setDetails(data);
+            sessionStorage.removeItem("wecast:pendingVerificationEmail");
+            setSuccess(
+              t(
+                "emailAction.verify.success",
+                "Your email has been verified. You can sign in now."
+              )
+            );
+          }
+          return;
+        }
+
         if (isCancelEmailChangeMode) {
           const res = await fetch(`${API_BASE}/api/account/email-change/cancel`, {
             method: "POST",
@@ -373,6 +410,7 @@ export default function EmailAction() {
     isCancelEmailChangeMode,
     isFirebaseResetMode,
     isFirebaseVerifyMode,
+    isTokenVerifyMode,
     isTokenResetMode,
     onEmailChangeConfirmPath,
     oobCode,
@@ -529,7 +567,7 @@ export default function EmailAction() {
 
   const title = isResetMode
     ? t("reset.title", "Reset your password")
-    : isFirebaseVerifyMode
+    : isVerifyMode
       ? t("emailAction.verify.title", "Verify your email")
       : isCancelEmailChangeMode
       ? t("emailAction.emailChange.cancelTitle", "Cancel email change")
@@ -542,7 +580,7 @@ export default function EmailAction() {
         "emailAction.reset.subtitle",
         "Choose a new password for your WeCast account."
       )
-    : isFirebaseVerifyMode
+    : isVerifyMode
       ? t(
           "emailAction.verify.subtitle",
           "Confirm this address for your WeCast account."

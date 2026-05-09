@@ -31,7 +31,7 @@ from firebase_init import db
 from PIL import Image, UnidentifiedImageError
 import json
 import html
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -208,7 +208,7 @@ def _configured_frontend_origins():
             if candidate and candidate not in configured:
                 configured.append(candidate)
 
-    for key in ("WECAST_APP_URL", "FRONTEND_URL"):
+    for key in ("WECAST_APP_URL", "FRONTEND_URL", "FRONTEND_PUBLIC_URL"):
         candidate = (os.getenv(key) or "").strip().rstrip("/")
         if candidate and candidate not in configured:
             configured.append(candidate)
@@ -228,22 +228,21 @@ FRONTEND_ORIGINS = _configured_frontend_origins()
 def _cors_origin_specs():
     """
     Origins allowed for credentialed cross-origin requests (JWT + cookies).
-    Includes explicit FRONTEND_ORIGINS plus common Vite dev URLs (LAN IP, any port)
-    so OPTIONS preflight succeeds and the browser sends GET /api/episodes.
+    Keep this explicit because credentials are enabled; never pair credentials
+    with a wildcard origin.
     """
-    specs = list(FRONTEND_ORIGINS)
-    # localhost / 127.0.0.1 with any port (Vite, alternate dev ports)
-    specs.append(re.compile(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$", re.I))
-    # RFC1918 LAN — access dev machine from phone / another PC on the network
-    specs.append(re.compile(r"^https?://192\.168\.\d{1,3}\.\d{1,3}:\d+$", re.I))
-    specs.append(re.compile(r"^https?://10\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+$", re.I))
-    specs.append(
-        re.compile(
-            r"^https?://172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}:\d+$",
-            re.I,
-        )
-    )
-    return specs
+    return list(FRONTEND_ORIGINS)
+
+
+def _is_allowed_cors_origin(origin):
+    candidate = (origin or "").strip().rstrip("/")
+    if not candidate:
+        return False
+
+    for spec in _cors_origin_specs():
+        if candidate == spec.rstrip("/"):
+            return True
+    return False
 
 
 CORS(
@@ -253,6 +252,20 @@ CORS(
     allow_headers=["Content-Type", "Authorization"],
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 )
+
+
+@app.after_request
+def add_cors_headers(response):
+    origin = (request.headers.get("Origin") or "").strip().rstrip("/")
+    if _is_allowed_cors_origin(origin):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = (
+            "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+        )
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
 
 
 # Server-side sessions 
@@ -1246,19 +1259,34 @@ def _prepare_user_storage(existing_doc, firebase_uid="", fallback_email=""):
 
 
 def _wecast_frontend_url():
-    base = (
-        os.getenv("FRONTEND_PUBLIC_URL")
-        or os.getenv("WECAST_APP_URL")
-        or os.getenv("FRONTEND_URL")
-        or ""
-    ).strip()
-    if base:
-        return base.rstrip("/")
-
     if has_request_context():
         origin = (request.headers.get("Origin") or "").strip()
         if origin in FRONTEND_ORIGINS:
             return origin.rstrip("/")
+
+    candidates = [
+        (key, (os.getenv(key) or "").strip())
+        for key in ("FRONTEND_PUBLIC_URL", "WECAST_APP_URL", "FRONTEND_URL")
+    ]
+    is_prod = (os.getenv("FLASK_ENV") or "").strip().lower() in {"prod", "production"} or bool(
+        (os.getenv("RENDER") or "").strip()
+    )
+    if not is_prod:
+        local_candidates = [
+            item
+            for item in candidates
+            if (urlparse(item[1]).hostname or "").lower() in {"localhost", "127.0.0.1"}
+        ]
+        candidates = local_candidates + [item for item in candidates if item not in local_candidates]
+
+    for _, base in candidates:
+        if not base:
+            continue
+        parsed = urlparse(base)
+        host = (parsed.hostname or "").lower()
+        if is_prod and (parsed.scheme != "https" or host in {"localhost", "127.0.0.1"}):
+            continue
+        return base.rstrip("/")
 
     return "https://wecast-frontend.onrender.com"
 
@@ -1328,6 +1356,9 @@ PASSWORD_RESET_ACTION_TTL_SECONDS = int(
 EMAIL_CHANGE_ACTION_TTL_SECONDS = int(
     os.getenv("WECAST_EMAIL_CHANGE_TOKEN_TTL_SECONDS", "3600")
 )
+EMAIL_VERIFICATION_ACTION_TTL_SECONDS = int(
+    os.getenv("WECAST_EMAIL_VERIFICATION_TOKEN_TTL_SECONDS", "3600")
+)
 RECENT_AUTH_MAX_AGE_SECONDS = int(
     os.getenv("WECAST_RECENT_AUTH_MAX_AGE_SECONDS", "900")
 )
@@ -1368,6 +1399,8 @@ def _selected_email_provider():
 
 
 def _log_email_runtime_diagnostics(flow):
+    sender = (os.getenv("FROM_EMAIL") or os.getenv("RESEND_FROM_EMAIL") or "").strip()
+    sender_domain = sender.rsplit("@", 1)[1] if "@" in sender else ""
     print(
         "Email runtime diagnostics:",
         f"flow={flow}",
@@ -1379,23 +1412,41 @@ def _log_email_runtime_diagnostics(flow):
         f"RESEND_FROM_EMAIL={bool((os.getenv('RESEND_FROM_EMAIL') or '').strip())}",
         f"SMTP_HOST={bool((os.getenv('SMTP_HOST') or '').strip())}",
         f"SMTP_USER={bool((os.getenv('SMTP_USER') or '').strip())}",
-        f"FROM_EMAIL={(os.getenv('FROM_EMAIL') or os.getenv('RESEND_FROM_EMAIL') or '').strip()}",
+        f"FROM_EMAIL={bool(sender)}",
+        f"FROM_EMAIL_DOMAIN={sender_domain or '<missing>'}",
         f"frontend={_wecast_frontend_url()}",
     )
+
+
+def _log_password_reset_step(step, **details):
+    safe_parts = [f"step={step}"]
+    for key, value in details.items():
+        if value is None:
+            continue
+        safe_parts.append(f"{key}={value}")
+    print("Password reset trace:", *safe_parts, flush=True)
 
 
 def _issue_internal_password_reset_link(email, delivery_label):
     from firebase_admin import auth as fb_auth
 
     normalized_email = _normalize_email(email)
+    _log_password_reset_step("fallback_start", email_present=bool(normalized_email))
     doc = get_user_doc_by_candidates(normalized_email, email=normalized_email)
+    _log_password_reset_step(
+        "fallback_firestore_lookup",
+        found=bool(doc and doc.exists),
+    )
     try:
         user_record = fb_auth.get_user_by_email(normalized_email)
+        _log_password_reset_step("fallback_firebase_user_lookup", found=True)
     except fb_auth.UserNotFoundError:
+        _log_password_reset_step("fallback_firebase_user_lookup", found=False)
         return "", None
 
     firebase_uid = (getattr(user_record, "uid", "") or "").strip()
     if not doc or not doc.exists:
+        _log_password_reset_step("fallback_no_user_doc")
         return "", None
 
     nonce = secrets.token_urlsafe(24)
@@ -1407,6 +1458,11 @@ def _issue_internal_password_reset_link(email, delivery_label):
         expires_in_seconds=PASSWORD_RESET_ACTION_TTL_SECONDS,
     )
     action_url = _build_email_action_url("reset-password", reset_token)
+    _log_password_reset_step(
+        "fallback_link_generated",
+        localhost=("localhost" in action_url or "127.0.0.1" in action_url),
+        frontend=_wecast_frontend_url(),
+    )
     doc.reference.set(
         {
             "pendingPasswordReset": {
@@ -1421,6 +1477,68 @@ def _issue_internal_password_reset_link(email, delivery_label):
             "firebaseUid": firebase_uid,
             "last_password_reset_request": datetime.utcnow().isoformat(),
             "last_password_reset_delivery": delivery_label,
+        },
+        merge=True,
+    )
+    _log_password_reset_step("fallback_pending_saved")
+    return action_url, doc
+
+
+def _issue_internal_verification_link(email, delivery_label):
+    from firebase_admin import auth as fb_auth
+
+    normalized_email = _normalize_email(email)
+    try:
+        user_record = fb_auth.get_user_by_email(normalized_email)
+    except fb_auth.UserNotFoundError:
+        return "", None
+
+    firebase_uid = (getattr(user_record, "uid", "") or "").strip()
+    doc = get_user_doc_by_candidates(
+        normalized_email,
+        firebase_uid=firebase_uid,
+        email=normalized_email,
+    )
+    if not doc or not doc.exists:
+        _upsert_firebase_user_profile(
+            email=normalized_email,
+            display_name=getattr(user_record, "display_name", None) or "",
+            auth_provider="password",
+            email_verified=bool(getattr(user_record, "email_verified", False)),
+            firebase_uid=firebase_uid,
+            mark_login=False,
+        )
+        doc = get_user_doc_by_candidates(
+            normalized_email,
+            firebase_uid=firebase_uid,
+            email=normalized_email,
+        )
+    if not doc or not doc.exists:
+        return "", None
+
+    nonce = secrets.token_urlsafe(24)
+    verify_token = _issue_email_action_token(
+        "email_verification",
+        email=normalized_email,
+        firebase_uid=firebase_uid,
+        nonce=nonce,
+        expires_in_seconds=EMAIL_VERIFICATION_ACTION_TTL_SECONDS,
+    )
+    action_url = _build_email_action_url("verify-email", verify_token)
+    doc.reference.set(
+        {
+            "pendingEmailVerification": {
+                "nonce": nonce,
+                "email": normalized_email,
+                "requestedAt": datetime.utcnow().isoformat(),
+                "expiresAt": (
+                    datetime.utcnow()
+                    + timedelta(seconds=EMAIL_VERIFICATION_ACTION_TTL_SECONDS)
+                ).isoformat(),
+            },
+            "firebaseUid": firebase_uid,
+            "last_email_verification_request": datetime.utcnow().isoformat(),
+            "last_email_verification_delivery": delivery_label,
         },
         merge=True,
     )
@@ -2562,6 +2680,23 @@ def _validate_pending_email_change(token):
         raise ValueError("This email change link has expired. Request a new one.")
     if target_email and _normalize_email(pending.get("newEmail")) != target_email:
         raise ValueError("This email change request no longer matches your latest update.")
+
+    return doc, data, payload
+
+
+def _validate_pending_email_verification(token):
+    payload = _decode_email_action_token(token, "email_verification")
+    firebase_uid = (payload.get("firebase_uid") or "").strip()
+    email = _normalize_email(payload.get("email"))
+    nonce = (payload.get("nonce") or "").strip()
+    doc = get_user_doc_by_candidates(email, firebase_uid=firebase_uid, email=email)
+    if not doc or not doc.exists:
+        raise ValueError("This verification link is no longer valid.")
+
+    data = doc.to_dict() or {}
+    pending = data.get("pendingEmailVerification") or {}
+    if not nonce or (pending.get("nonce") or "").strip() != nonce:
+        raise ValueError("This verification link has expired. Request a new one.")
 
     return doc, data, payload
 
@@ -4934,17 +5069,51 @@ def api_password_reset_confirm():
         return jsonify(error="This reset link is invalid, expired, or already used."), 400
 
 
+def _email_result_http_status(result):
+    """Map email_service result to HTTP status (avoid 500 for upstream provider failures)."""
+    step = (result.get("step") or "").strip()
+    missing = result.get("missing") or []
+    if step in {"env", "smtp_config", "email_config"} or missing:
+        return 503
+    if step in {
+        "resend_send",
+        "resend_request",
+        "smtp_connection",
+        "smtp_auth",
+        "smtp_send",
+        "smtp_tls",
+        "smtp",
+    }:
+        return 502
+    return 500
+
+
 def _email_service_failure_response(result, default_message):
     missing = result.get("missing") or []
     if missing:
         return jsonify(error="Email delivery is not configured.", missing=missing), 503
-    return jsonify(error=default_message), 502
+    status = _email_result_http_status(result)
+    payload = {
+        "error": default_message,
+        "step": result.get("step"),
+        "errorType": result.get("errorType"),
+    }
+    detail = result.get("message") or result.get("error")
+    if detail:
+        payload["detail"] = detail
+    if result.get("status") is not None:
+        payload["providerStatus"] = result.get("status")
+    return jsonify(payload), status
 
 
 @app.post("/api/send-verification-email")
 def api_send_verification_email():
     from firebase_admin import auth as fb_auth
-    from services.email_service import send_verification_email
+    from services.email_service import (
+        send_verification_email,
+        validate_email_environment,
+    )
+    from services.firebase_action_links import generate_email_verification_link
 
     data = request.get_json(silent=True) or {}
     email = _normalize_email(data.get("email"))
@@ -4952,8 +5121,33 @@ def api_send_verification_email():
     if not is_reasonably_valid_email(email):
         return jsonify(error="Please enter a valid email address."), 400
 
+    config = validate_email_environment()
+    _log_email_runtime_diagnostics("email_verification")
+    if not config.get("ready"):
+        return jsonify(
+            error="Email delivery is not configured.",
+            missing=config.get("missing") or [],
+        ), 503
+
     try:
-        result = send_verification_email(email)
+        try:
+            action_url = generate_email_verification_link(email)
+        except fb_auth.UserNotFoundError:
+            return jsonify(ok=True)
+        except Exception as link_error:
+            action_url, _ = _issue_internal_verification_link(
+                email,
+                "custom_internal_fallback",
+            )
+            if not action_url:
+                return jsonify(ok=True)
+            print(
+                "Email verification debug: using internal fallback after Firebase action link failure",
+                f"errorType={type(link_error).__name__}",
+                f"firebaseCode={getattr(link_error, 'code', '')}",
+            )
+
+        result = send_verification_email(email, action_url=action_url)
         if result.get("ok"):
             return jsonify(ok=True)
         return _email_service_failure_response(
@@ -4965,6 +5159,38 @@ def api_send_verification_email():
     except Exception as e:
         print(f"Custom verification email failed: {type(e).__name__}")
         return jsonify(error="We couldn't send the verification email right now."), 500
+
+
+@app.post("/api/email-verification/confirm")
+def api_email_verification_confirm():
+    from firebase_admin import auth as fb_auth
+
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or request.args.get("token") or "").strip()
+    if not token:
+        return jsonify(error="Missing verification token."), 400
+
+    try:
+        doc, user_data, payload = _validate_pending_email_verification(token)
+        firebase_uid = (user_data.get("firebaseUid") or payload.get("firebase_uid") or "").strip()
+        email = _normalize_email(user_data.get("email") or payload.get("email"))
+
+        if firebase_uid:
+            fb_auth.update_user(firebase_uid, email_verified=True)
+
+        doc.reference.set(
+            {
+                "emailVerified": True,
+                "pendingEmailVerification": firestore.DELETE_FIELD,
+                "last_email_verification_completed": datetime.utcnow().isoformat(),
+            },
+            merge=True,
+        )
+
+        return jsonify(ok=True, email=email)
+    except Exception as e:
+        print(f"Email verification confirmation failed: {type(e).__name__}")
+        return jsonify(error="This verification link is invalid, expired, or already used."), 400
 
 
 @app.post("/api/send-password-reset-email")
@@ -5002,8 +5228,14 @@ def api_send_password_reset_email():
         return debug_error("request_body", e, 400)
 
     email = _normalize_email(data.get("email"))
+    _log_password_reset_step(
+        "route_entered",
+        email_present=bool(email),
+        origin=(request.headers.get("Origin") or "").strip() or "<none>",
+    )
 
     if not is_reasonably_valid_email(email):
+        _log_password_reset_step("email_validation_failed")
         return jsonify(
             ok=False,
             step="email_validation",
@@ -5013,7 +5245,14 @@ def api_send_password_reset_email():
 
     config = validate_email_environment()
     _log_email_runtime_diagnostics("password_reset")
+    _log_password_reset_step(
+        "provider_selected",
+        provider=config.get("provider") or "none",
+        ready=bool(config.get("ready")),
+        missing_count=len(config.get("missing") or []),
+    )
     if not config.get("ready"):
+        _log_password_reset_step("final_response", status=503, reason="email_config")
         return jsonify(
             ok=False,
             step="email_config",
@@ -5023,16 +5262,30 @@ def api_send_password_reset_email():
         ), 503
 
     try:
+        _log_password_reset_step("firebase_link_attempt_start")
         action_url = generate_password_reset_link(email)
+        _log_password_reset_step(
+            "firebase_link_attempt_success",
+            localhost=("localhost" in action_url or "127.0.0.1" in action_url),
+        )
     except fb_auth.UserNotFoundError:
+        _log_password_reset_step("user_lookup", found=False)
+        _log_password_reset_step("final_response", status=200, reason="hidden_unknown_user")
         return jsonify(ok=True)
     except Exception as e:
+        _log_password_reset_step(
+            "firebase_link_attempt_fail",
+            errorType=type(e).__name__,
+            firebaseCode=getattr(e, "code", "") or "<none>",
+        )
         try:
             action_url, _ = _issue_internal_password_reset_link(
                 email,
                 "custom_internal_fallback",
             )
             if not action_url:
+                _log_password_reset_step("fallback_no_action_url")
+                _log_password_reset_step("final_response", status=200, reason="hidden_no_fallback")
                 return jsonify(ok=True)
             print(
                 "Password reset debug: using internal fallback after Firebase action link failure",
@@ -5040,27 +5293,60 @@ def api_send_password_reset_email():
                 f"firebaseCode={getattr(e, 'code', '')}",
             )
         except fb_auth.UserNotFoundError:
+            _log_password_reset_step("fallback_user_lookup", found=False)
+            _log_password_reset_step("final_response", status=200, reason="hidden_unknown_user")
             return jsonify(ok=True)
         except Exception as fallback_error:
+            _log_password_reset_step(
+                "fallback_fail",
+                errorType=type(fallback_error).__name__,
+            )
             return debug_error("firebase_reset_limit_fallback", fallback_error, 500)
 
     try:
+        _log_password_reset_step(
+            "email_send_attempt_start",
+            provider=config.get("provider") or "none",
+        )
         result = send_password_reset_email(email, action_url=action_url)
     except Exception as e:
+        _log_password_reset_step("email_send_exception", errorType=type(e).__name__)
         return debug_error("email_send_call", e, 500)
 
     if result.get("ok"):
+        _log_password_reset_step(
+            "email_send_success",
+            provider=result.get("provider") or config.get("provider") or "unknown",
+        )
+        _log_password_reset_step("final_response", status=200, reason="sent")
         return jsonify(ok=True)
 
+    _log_password_reset_step(
+        "email_send_fail",
+        resultStep=result.get("step") or "email_send_call",
+        errorType=result.get("errorType") or "UnknownError",
+        status=result.get("status"),
+        provider=config.get("provider") or "none",
+    )
+    response_status = _email_result_http_status(result)
+    _log_password_reset_step(
+        "final_response",
+        status=response_status,
+        reason=result.get("step") or "email_send_call",
+    )
     return jsonify(
         ok=False,
         step=result.get("step") or "email_send_call",
         errorType=result.get("errorType") or "UnknownError",
-        message=result.get("error") or "Email send failed.",
+        error=result.get("message") or result.get("error") or "Email send failed.",
+        message=result.get("message") or result.get("error") or "Email send failed.",
+        provider=config.get("provider") or "",
+        status=result.get("status"),
         function=result.get("function") or "",
         line=result.get("line"),
         missing=result.get("missing") or [],
-    ), 503 if result.get("step") in {"env", "smtp_config", "email_config"} else 500
+        deliveryPath=result.get("deliveryPath"),
+    ), response_status
 
 
 @app.post("/api/change-email-request")

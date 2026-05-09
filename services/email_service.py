@@ -102,48 +102,11 @@ def _safe_exception_payload(step, exc):
     }
 
 
-def _send_email(to_email, content, *, dry_run=False):
-    to_email = (to_email or "").strip().lower()
-    config = validate_email_environment()
+def _smtp_fallback_disabled():
+    return env_value("WECAST_DISABLE_SMTP_FALLBACK").lower() in {"1", "true", "yes"}
 
-    if dry_run:
-        return {
-            "ok": True,
-            "dryRun": True,
-            "to": to_email,
-            "subject": content.subject,
-            "htmlLength": len(content.html_body),
-            "textLength": len(content.text_body),
-            "env": config,
-        }
 
-    if not config["ready"]:
-        return {
-            "ok": False,
-            "step": "env",
-            "errorType": "MissingEnvironment",
-            "error": "Email environment is not configured.",
-            "missing": config["missing"],
-        }
-
-    try:
-        from_name = sender_name()
-        from_email = sender_email()
-        message = MIMEMultipart("alternative")
-        message["Subject"] = content.subject
-        message["From"] = formataddr((from_name, from_email))
-        message["To"] = to_email
-        message["Reply-To"] = support_email() or from_email
-        message.attach(MIMEText(content.text_body, "plain", "utf-8"))
-        message.attach(MIMEText(content.html_body, "html", "utf-8"))
-    except Exception as exc:
-        payload = _safe_exception_payload("html_assembly", exc)
-        payload["error"] = "Email assembly failed."
-        return payload
-
-    if config.get("provider") == "resend":
-        return _send_email_via_resend(to_email, content)
-
+def _send_prepared_message_via_smtp(message, to_email, content):
     try:
         host = env_value("SMTP_HOST")
         port = _smtp_port()
@@ -222,11 +185,91 @@ def _send_email(to_email, content, *, dry_run=False):
     }
 
 
+def _send_email(to_email, content, *, dry_run=False):
+    to_email = (to_email or "").strip().lower()
+    config = validate_email_environment()
+
+    if dry_run:
+        return {
+            "ok": True,
+            "dryRun": True,
+            "to": to_email,
+            "subject": content.subject,
+            "htmlLength": len(content.html_body),
+            "textLength": len(content.text_body),
+            "env": config,
+        }
+
+    if not config["ready"]:
+        return {
+            "ok": False,
+            "step": "env",
+            "errorType": "MissingEnvironment",
+            "error": "Email environment is not configured.",
+            "missing": config["missing"],
+        }
+
+    try:
+        from_name = sender_name()
+        from_email = sender_email()
+        message = MIMEMultipart("alternative")
+        message["Subject"] = content.subject
+        message["From"] = formataddr((from_name, from_email))
+        message["To"] = to_email
+        message["Reply-To"] = support_email() or from_email
+        message.attach(MIMEText(content.text_body, "plain", "utf-8"))
+        message.attach(MIMEText(content.html_body, "html", "utf-8"))
+    except Exception as exc:
+        payload = _safe_exception_payload("html_assembly", exc)
+        payload["error"] = "Email assembly failed."
+        return payload
+
+    if config.get("provider") == "resend":
+        resend_result = _send_email_via_resend(to_email, content)
+        if resend_result.get("ok"):
+            return resend_result
+        if (
+            config.get("smtpPresent")
+            and not _smtp_fallback_disabled()
+        ):
+            print(
+                "Email delivery: Resend failed; attempting SMTP fallback.",
+                f"resendStep={resend_result.get('step')}",
+                f"httpStatus={resend_result.get('status')}",
+                f"message={(resend_result.get('message') or resend_result.get('error') or '')[:200]}",
+                flush=True,
+            )
+            smtp_result = _send_prepared_message_via_smtp(message, to_email, content)
+            if smtp_result.get("ok"):
+                smtp_result = dict(smtp_result)
+                smtp_result["deliveryPath"] = "smtp_fallback_after_resend"
+                return smtp_result
+            smtp_result = dict(smtp_result)
+            smtp_result["resendStatus"] = resend_result.get("status")
+            smtp_result["resendMessage"] = (
+                resend_result.get("message") or resend_result.get("error") or ""
+            )[:300]
+            return smtp_result
+        return resend_result
+
+    return _send_prepared_message_via_smtp(message, to_email, content)
+
+
 def _send_email_via_resend(to_email, content):
     api_key = env_value("RESEND_API_KEY")
     from_email = env_value("RESEND_FROM_EMAIL") or env_value("FROM_EMAIL")
     from_name = env_value("RESEND_FROM_NAME") or sender_name()
-    reply_to = support_email() or from_email
+    reply_to = (support_email() or from_email or "").strip()
+
+    body_json = {
+        "from": f"{from_name} <{from_email}>",
+        "to": [to_email],
+        "subject": content.subject,
+        "html": content.html_body,
+        "text": content.text_body,
+    }
+    if reply_to:
+        body_json["reply_to"] = reply_to
 
     try:
         response = requests.post(
@@ -235,14 +278,7 @@ def _send_email_via_resend(to_email, content):
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "from": f"{from_name} <{from_email}>",
-                "to": [to_email],
-                "subject": content.subject,
-                "html": content.html_body,
-                "text": content.text_body,
-                "reply_to": reply_to,
-            },
+            json=body_json,
             timeout=30,
         )
     except Exception as exc:
@@ -260,11 +296,26 @@ def _send_email_via_resend(to_email, content):
         }
         try:
             body = response.json()
-            message = ((body.get("message") or body.get("error") or "")[:180]).strip()
+            api_name = (body.get("name") or "").strip()
+            if api_name:
+                payload["errorType"] = api_name
+            raw_msg = body.get("message")
+            if isinstance(raw_msg, list) and raw_msg:
+                message = " ".join(str(x) for x in raw_msg if x)[:500]
+            else:
+                message = (str(raw_msg or body.get("error") or "")[:500]).strip()
             if message:
                 payload["message"] = message
         except Exception:
-            pass
+            snippet = (response.text or "")[:500].strip()
+            if snippet:
+                payload["message"] = snippet
+        print(
+            "Resend API error:",
+            f"status={response.status_code}",
+            f"body={(response.text or '')[:400]}",
+            flush=True,
+        )
         return payload
 
     return {
