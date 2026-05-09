@@ -1358,6 +1358,75 @@ def _build_email_action_url(mode, token):
     )
 
 
+def _selected_email_provider():
+    if _resend_is_configured():
+        return "resend"
+    smtp_keys = ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "FROM_EMAIL")
+    if all((os.getenv(key) or "").strip() for key in smtp_keys):
+        return "smtp"
+    return ""
+
+
+def _log_email_runtime_diagnostics(flow):
+    print(
+        "Email runtime diagnostics:",
+        f"flow={flow}",
+        f"provider={_selected_email_provider() or 'none'}",
+        f"FRONTEND_PUBLIC_URL={(os.getenv('FRONTEND_PUBLIC_URL') or '').strip() or '<missing>'}",
+        f"WECAST_APP_URL={(os.getenv('WECAST_APP_URL') or '').strip() or '<missing>'}",
+        f"FRONTEND_URL={bool((os.getenv('FRONTEND_URL') or '').strip())}",
+        f"RESEND_API_KEY={bool((os.getenv('RESEND_API_KEY') or '').strip())}",
+        f"RESEND_FROM_EMAIL={bool((os.getenv('RESEND_FROM_EMAIL') or '').strip())}",
+        f"SMTP_HOST={bool((os.getenv('SMTP_HOST') or '').strip())}",
+        f"SMTP_USER={bool((os.getenv('SMTP_USER') or '').strip())}",
+        f"FROM_EMAIL={(os.getenv('FROM_EMAIL') or os.getenv('RESEND_FROM_EMAIL') or '').strip()}",
+        f"frontend={_wecast_frontend_url()}",
+    )
+
+
+def _issue_internal_password_reset_link(email, delivery_label):
+    from firebase_admin import auth as fb_auth
+
+    normalized_email = _normalize_email(email)
+    doc = get_user_doc_by_candidates(normalized_email, email=normalized_email)
+    try:
+        user_record = fb_auth.get_user_by_email(normalized_email)
+    except fb_auth.UserNotFoundError:
+        return "", None
+
+    firebase_uid = (getattr(user_record, "uid", "") or "").strip()
+    if not doc or not doc.exists:
+        return "", None
+
+    nonce = secrets.token_urlsafe(24)
+    reset_token = _issue_email_action_token(
+        "password_reset",
+        email=normalized_email,
+        firebase_uid=firebase_uid,
+        nonce=nonce,
+        expires_in_seconds=PASSWORD_RESET_ACTION_TTL_SECONDS,
+    )
+    action_url = _build_email_action_url("reset-password", reset_token)
+    doc.reference.set(
+        {
+            "pendingPasswordReset": {
+                "nonce": nonce,
+                "email": normalized_email,
+                "requestedAt": datetime.utcnow().isoformat(),
+                "expiresAt": (
+                    datetime.utcnow()
+                    + timedelta(seconds=PASSWORD_RESET_ACTION_TTL_SECONDS)
+                ).isoformat(),
+            },
+            "firebaseUid": firebase_uid,
+            "last_password_reset_request": datetime.utcnow().isoformat(),
+            "last_password_reset_delivery": delivery_label,
+        },
+        merge=True,
+    )
+    return action_url, doc
+
+
 def _issue_email_action_token(
     action,
     *,
@@ -4943,10 +5012,11 @@ def api_send_password_reset_email():
         ), 400
 
     config = validate_email_environment()
+    _log_email_runtime_diagnostics("password_reset")
     if not config.get("ready"):
         return jsonify(
             ok=False,
-            step="smtp_config",
+            step="email_config",
             errorType="MissingEnvironment",
             message="Email delivery is not configured.",
             missing=config.get("missing") or [],
@@ -4957,43 +5027,18 @@ def api_send_password_reset_email():
     except fb_auth.UserNotFoundError:
         return jsonify(ok=True)
     except Exception as e:
-        if "RESET_PASSWORD_EXCEED_LIMIT" not in str(e).upper():
-            return debug_error("firebase_reset_link", e, 500)
-
         try:
-            doc = get_user_doc_by_candidates(email, email=email)
-            user_record = fb_auth.get_user_by_email(email)
-            firebase_uid = (getattr(user_record, "uid", "") or "").strip()
-            if not doc or not doc.exists:
+            action_url, _ = _issue_internal_password_reset_link(
+                email,
+                "custom_internal_fallback",
+            )
+            if not action_url:
                 return jsonify(ok=True)
-
-            nonce = secrets.token_urlsafe(24)
-            reset_token = _issue_email_action_token(
-                "password_reset",
-                email=email,
-                firebase_uid=firebase_uid,
-                nonce=nonce,
-                expires_in_seconds=PASSWORD_RESET_ACTION_TTL_SECONDS,
+            print(
+                "Password reset debug: using internal fallback after Firebase action link failure",
+                f"errorType={type(e).__name__}",
+                f"firebaseCode={getattr(e, 'code', '')}",
             )
-            action_url = _build_email_action_url("reset-password", reset_token)
-            doc.reference.set(
-                {
-                    "pendingPasswordReset": {
-                        "nonce": nonce,
-                        "email": email,
-                        "requestedAt": datetime.utcnow().isoformat(),
-                        "expiresAt": (
-                            datetime.utcnow()
-                            + timedelta(seconds=PASSWORD_RESET_ACTION_TTL_SECONDS)
-                        ).isoformat(),
-                    },
-                    "firebaseUid": firebase_uid,
-                    "last_password_reset_request": datetime.utcnow().isoformat(),
-                    "last_password_reset_delivery": "smtp_internal_fallback",
-                },
-                merge=True,
-            )
-            print("Password reset debug: using internal fallback after Firebase reset limit")
         except fb_auth.UserNotFoundError:
             return jsonify(ok=True)
         except Exception as fallback_error:
@@ -5015,7 +5060,7 @@ def api_send_password_reset_email():
         function=result.get("function") or "",
         line=result.get("line"),
         missing=result.get("missing") or [],
-    ), 503 if result.get("step") in {"env", "smtp_config"} else 500
+    ), 503 if result.get("step") in {"env", "smtp_config", "email_config"} else 500
 
 
 @app.post("/api/change-email-request")
@@ -5074,6 +5119,7 @@ def api_change_email_request():
         return jsonify(error="Your current password could not be verified."), 401
 
     env_status = validate_email_environment()
+    _log_email_runtime_diagnostics("change_email_request")
     if not env_status.get("ready"):
         return jsonify(
             error="Email delivery is not configured.",
@@ -5168,6 +5214,7 @@ def api_confirm_email_change():
     from firebase_admin import auth as fb_auth
     from services.email_service import send_email_changed_success
 
+    _log_email_runtime_diagnostics("confirm_email_change")
     data = request.get_json(silent=True) or {}
     token = (data.get("token") or request.args.get("token") or "").strip()
     if not token:

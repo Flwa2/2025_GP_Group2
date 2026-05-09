@@ -698,23 +698,26 @@ export default function Episodes() {
       <main className="min-h-0 min-w-0 w-full flex-1 pt-0 pb-0">
         <div className="mx-auto h-full min-h-0 w-full min-w-0 max-w-full overflow-x-clip border-b border-black/10 bg-white/70 backdrop-blur-sm dark:border-white/10 dark:bg-neutral-900/45">
           <div className="flex h-full min-h-0 w-full min-w-0 max-w-full flex-col md:flex-row md:items-stretch">
-            <div className="min-w-0 max-w-full shrink-0 border-b border-black/10 bg-white/55 px-4 py-2.5 backdrop-blur-sm dark:border-white/10 dark:bg-neutral-950/40 md:hidden">
+            <div className="min-w-0 max-w-full shrink-0 bg-white/35 px-4 py-1.5 shadow-[inset_0_-1px_0_0_rgba(0,0,0,0.04)] dark:bg-neutral-900/20 dark:shadow-[inset_0_-1px_0_0_rgba(255,255,255,0.05)] md:hidden">
               <button
                 type="button"
                 id="episodes-library-toggle"
                 aria-expanded={mobileLibraryOpen}
                 aria-controls="episodes-library-aside"
                 onClick={() => setMobileLibraryOpen((open) => !open)}
-                className="flex w-full items-center justify-between gap-3 rounded-xl border border-black/10 bg-white/90 px-4 py-3.5 text-start text-sm font-semibold text-black shadow-sm transition hover:bg-white dark:border-white/15 dark:bg-neutral-900/90 dark:text-white dark:hover:bg-neutral-900"
+                className="group flex w-full items-center justify-between gap-2 rounded-md px-1 py-1 text-start text-[13px] font-normal leading-snug text-black/78 transition [-webkit-tap-highlight-color:transparent] hover:bg-black/[0.03] active:bg-black/[0.045] focus-visible:outline-none focus-visible:bg-black/[0.04] dark:text-white/78 dark:hover:bg-white/[0.05] dark:active:bg-white/[0.07] dark:focus-visible:bg-white/[0.06]"
               >
-                <span className="inline-flex min-w-0 items-center gap-2">
-                  <SlidersHorizontal className="h-4 w-4 shrink-0" aria-hidden />
+                <span className="inline-flex min-w-0 items-center gap-1.5">
+                  <SlidersHorizontal
+                    className="h-3.5 w-3.5 shrink-0 text-black/35 transition-colors group-hover:text-purple-600/50 dark:text-white/38 dark:group-hover:text-purple-300/50"
+                    aria-hidden
+                  />
                   <span className="min-w-0 truncate">
                     {t("episodes.mobile.libraryPanel", "Filters & library")}
                   </span>
                 </span>
                 <ChevronDown
-                  className={`h-5 w-5 shrink-0 transition-transform ${mobileLibraryOpen ? "rotate-180" : ""}`}
+                  className={`h-3.5 w-3.5 shrink-0 text-black/28 transition-transform duration-200 dark:text-white/32 ${mobileLibraryOpen ? "rotate-180" : ""}`}
                   aria-hidden
                 />
               </button>

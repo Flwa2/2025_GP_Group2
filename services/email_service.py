@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
+import requests
 import smtplib
 import traceback
 
@@ -140,6 +141,9 @@ def _send_email(to_email, content, *, dry_run=False):
         payload["error"] = "Email assembly failed."
         return payload
 
+    if config.get("provider") == "resend":
+        return _send_email_via_resend(to_email, content)
+
     try:
         host = env_value("SMTP_HOST")
         port = _smtp_port()
@@ -213,6 +217,59 @@ def _send_email(to_email, content, *, dry_run=False):
     return {
         "ok": True,
         "provider": "smtp",
+        "to": to_email,
+        "subject": content.subject,
+    }
+
+
+def _send_email_via_resend(to_email, content):
+    api_key = env_value("RESEND_API_KEY")
+    from_email = env_value("RESEND_FROM_EMAIL") or env_value("FROM_EMAIL")
+    from_name = env_value("RESEND_FROM_NAME") or sender_name()
+    reply_to = support_email() or from_email
+
+    try:
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": f"{from_name} <{from_email}>",
+                "to": [to_email],
+                "subject": content.subject,
+                "html": content.html_body,
+                "text": content.text_body,
+                "reply_to": reply_to,
+            },
+            timeout=30,
+        )
+    except Exception as exc:
+        payload = _safe_exception_payload("resend_request", exc)
+        payload["error"] = "Resend email request failed."
+        return payload
+
+    if not response.ok:
+        payload = {
+            "ok": False,
+            "step": "resend_send",
+            "errorType": "ResendSendError",
+            "error": f"Resend email failed with status {response.status_code}.",
+            "status": response.status_code,
+        }
+        try:
+            body = response.json()
+            message = ((body.get("message") or body.get("error") or "")[:180]).strip()
+            if message:
+                payload["message"] = message
+        except Exception:
+            pass
+        return payload
+
+    return {
+        "ok": True,
+        "provider": "resend",
         "to": to_email,
         "subject": content.subject,
     }

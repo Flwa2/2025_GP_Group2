@@ -19,15 +19,20 @@ SMTP_ENV_KEYS = (
     "FROM_EMAIL",
     "FROM_NAME",
 )
+RESEND_ENV_KEYS = (
+    "RESEND_API_KEY",
+    "RESEND_FROM_EMAIL",
+)
 SUPPORTED_ENV_KEYS = (
     *SMTP_ENV_KEYS,
+    *RESEND_ENV_KEYS,
+    "RESEND_FROM_NAME",
     "BACKEND_PUBLIC_URL",
     "FRONTEND_PUBLIC_URL",
     "WECAST_APP_URL",
     "WECAST_SUPPORT_EMAIL",
     "WECAST_LOGO_URL",
 )
-REQUIRED_SMTP_KEYS = SMTP_ENV_KEYS
 FRONTEND_URL_KEYS = ("FRONTEND_PUBLIC_URL", "WECAST_APP_URL", "FRONTEND_URL")
 
 
@@ -84,11 +89,11 @@ def frontend_public_url_candidates():
 
 
 def sender_email():
-    return env_value("FROM_EMAIL")
+    return env_value("FROM_EMAIL") or env_value("RESEND_FROM_EMAIL")
 
 
 def sender_name():
-    return env_value("FROM_NAME") or "WeCast"
+    return env_value("FROM_NAME") or env_value("RESEND_FROM_NAME") or "WeCast"
 
 
 def support_email():
@@ -100,7 +105,12 @@ def logo_url():
 
 
 def validate_email_configuration():
-    missing = [key for key in REQUIRED_SMTP_KEYS if not env_value(key)]
+    smtp_missing = [key for key in SMTP_ENV_KEYS if not env_value(key)]
+    resend_missing = [key for key in RESEND_ENV_KEYS if not env_value(key)]
+    smtp_ready = not smtp_missing
+    resend_ready = not resend_missing
+    provider = "resend" if resend_ready else "smtp" if smtp_ready else ""
+    missing = [] if provider else sorted(set(resend_missing + smtp_missing))
 
     url_ready = True
     try:
@@ -116,10 +126,11 @@ def validate_email_configuration():
         if key not in present and key not in {"WECAST_LOGO_URL"}
     ]
     return {
-        "ready": not missing and url_ready,
+        "ready": bool(provider) and url_ready,
         "missing": missing,
         "present": present,
         "optionalMissing": optional_missing,
-        "smtpPresent": all(env_value(key) for key in SMTP_ENV_KEYS),
-        "provider": "smtp",
+        "smtpPresent": smtp_ready,
+        "resendPresent": resend_ready,
+        "provider": provider,
     }
