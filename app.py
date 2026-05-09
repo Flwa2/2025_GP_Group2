@@ -5071,8 +5071,10 @@ def _email_result_http_status(result):
     if step in {
         "resend_send",
         "resend_request",
+        "smtp_connect",
         "smtp_connection",
         "smtp_auth",
+        "smtp_login",
         "smtp_send",
         "smtp_tls",
         "smtp_ehlo",

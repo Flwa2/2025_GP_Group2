@@ -5,6 +5,7 @@ from email.utils import formataddr
 import requests
 import socket
 import smtplib
+import time
 import traceback
 
 from email_templates import generate_wecast_email_template
@@ -94,6 +95,22 @@ def _smtp_port():
     return port
 
 
+def _smtp_timeout_seconds():
+    try:
+        timeout = float(env_value("WECAST_SMTP_TIMEOUT_SECONDS") or "5")
+    except ValueError:
+        timeout = 5.0
+    return min(max(timeout, 2.0), 10.0)
+
+
+def _smtp_total_timeout_seconds():
+    try:
+        timeout = float(env_value("WECAST_SMTP_TOTAL_TIMEOUT_SECONDS") or "20")
+    except ValueError:
+        timeout = 20.0
+    return min(max(timeout, 8.0), 25.0)
+
+
 def _safe_exception_payload(step, exc):
     frame = traceback.extract_tb(exc.__traceback__)[-1] if exc.__traceback__ else None
     return {
@@ -128,6 +145,53 @@ def _log_smtp_attempt(host, port, username, from_email):
     )
 
 
+def _log_smtp_timing(step, started_at, ok, error_type=""):
+    elapsed_ms = int((time.monotonic() - started_at) * 1000)
+    print(
+        "SMTP timing:",
+        f"step={step}",
+        f"elapsed_ms={elapsed_ms}",
+        f"ok={bool(ok)}",
+        f"errorType={error_type or '<none>'}",
+        flush=True,
+    )
+
+
+def _smtp_operation_timeout(deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("SMTP total timeout exceeded.")
+    return min(_smtp_timeout_seconds(), remaining)
+
+
+def _set_smtp_socket_timeout(smtp, timeout):
+    sock = getattr(smtp, "sock", None)
+    if sock is not None:
+        sock.settimeout(timeout)
+
+
+def _run_smtp_step(step, func, *, smtp=None, deadline):
+    started_at = time.monotonic()
+    try:
+        timeout = _smtp_operation_timeout(deadline)
+        if smtp is not None:
+            _set_smtp_socket_timeout(smtp, timeout)
+        value = func(timeout)
+        if smtp is not None:
+            _set_smtp_socket_timeout(smtp, _smtp_operation_timeout(deadline))
+        _log_smtp_timing(step, started_at, True)
+        return value, None
+    except (socket.timeout, TimeoutError) as exc:
+        _log_smtp_timing(step, started_at, False, type(exc).__name__)
+        return None, _smtp_failure_payload(step, exc, f"SMTP {step.replace('smtp_', '')} timed out.")
+    except (OSError, smtplib.SMTPException, SystemExit) as exc:
+        _log_smtp_timing(step, started_at, False, type(exc).__name__)
+        return None, _smtp_failure_payload(step, exc, f"SMTP {step.replace('smtp_', '')} failed.")
+    except Exception as exc:
+        _log_smtp_timing(step, started_at, False, type(exc).__name__)
+        return None, _smtp_failure_payload(step, exc, f"SMTP {step.replace('smtp_', '')} failed.")
+
+
 def _send_prepared_message_via_smtp(message, to_email, content):
     try:
         host = env_value("SMTP_HOST")
@@ -136,83 +200,82 @@ def _send_prepared_message_via_smtp(message, to_email, content):
         password = env_value("SMTP_PASS")
         from_email = env_value("FROM_EMAIL")
         _log_smtp_attempt(host, port, username, from_email)
+        deadline = time.monotonic() + _smtp_total_timeout_seconds()
 
         if port == 465:
-            try:
-                smtp = smtplib.SMTP_SSL(host, port, timeout=30)
-            except (socket.timeout, TimeoutError) as exc:
-                return _smtp_failure_payload("smtp_connection", exc, "SMTP connection timed out.")
-            except (OSError, smtplib.SMTPException, SystemExit) as exc:
-                return _smtp_failure_payload("smtp_connection", exc, "SMTP connection failed.")
-            except Exception as exc:
-                return _smtp_failure_payload("smtp_connection", exc, "SMTP connection failed.")
+            smtp, error = _run_smtp_step(
+                "smtp_connect",
+                lambda timeout: smtplib.SMTP_SSL(host, port, timeout=timeout),
+                deadline=deadline,
+            )
+            if error:
+                return error
             with smtp:
-                try:
-                    smtp.login(username, password)
-                except (socket.timeout, TimeoutError) as exc:
-                    return _smtp_failure_payload("smtp_auth", exc, "SMTP authentication timed out.")
-                except (OSError, smtplib.SMTPException, SystemExit) as exc:
-                    return _smtp_failure_payload("smtp_auth", exc, "SMTP authentication failed.")
-                except Exception as exc:
-                    return _smtp_failure_payload("smtp_auth", exc, "SMTP authentication failed.")
-                try:
-                    smtp.send_message(message)
-                except (socket.timeout, TimeoutError) as exc:
-                    return _smtp_failure_payload("smtp_send", exc, "SMTP send timed out.")
-                except (OSError, smtplib.SMTPException, SystemExit) as exc:
-                    return _smtp_failure_payload("smtp_send", exc, "SMTP send failed.")
-                except Exception as exc:
-                    return _smtp_failure_payload("smtp_send", exc, "SMTP send failed.")
+                _, error = _run_smtp_step(
+                    "smtp_login",
+                    lambda timeout: smtp.login(username, password),
+                    smtp=smtp,
+                    deadline=deadline,
+                )
+                if error:
+                    return error
+                _, error = _run_smtp_step(
+                    "smtp_send",
+                    lambda timeout: smtp.send_message(message),
+                    smtp=smtp,
+                    deadline=deadline,
+                )
+                if error:
+                    return error
         else:
-            try:
-                smtp = smtplib.SMTP(host, port, timeout=30)
-            except (socket.timeout, TimeoutError) as exc:
-                return _smtp_failure_payload("smtp_connection", exc, "SMTP connection timed out.")
-            except (OSError, smtplib.SMTPException, SystemExit) as exc:
-                return _smtp_failure_payload("smtp_connection", exc, "SMTP connection failed.")
-            except Exception as exc:
-                return _smtp_failure_payload("smtp_connection", exc, "SMTP connection failed.")
+            smtp, error = _run_smtp_step(
+                "smtp_connect",
+                lambda timeout: smtplib.SMTP(host, port, timeout=timeout),
+                deadline=deadline,
+            )
+            if error:
+                return error
             with smtp:
-                try:
-                    smtp.ehlo()
-                except (socket.timeout, TimeoutError) as exc:
-                    return _smtp_failure_payload("smtp_ehlo", exc, "SMTP handshake timed out.")
-                except (OSError, smtplib.SMTPException, SystemExit) as exc:
-                    return _smtp_failure_payload("smtp_ehlo", exc, "SMTP handshake failed.")
-                except Exception as exc:
-                    return _smtp_failure_payload("smtp_ehlo", exc, "SMTP handshake failed.")
-                try:
-                    smtp.starttls()
-                except (socket.timeout, TimeoutError) as exc:
-                    return _smtp_failure_payload("smtp_tls", exc, "SMTP TLS negotiation timed out.")
-                except (OSError, smtplib.SMTPException, SystemExit) as exc:
-                    return _smtp_failure_payload("smtp_tls", exc, "SMTP TLS negotiation failed.")
-                except Exception as exc:
-                    return _smtp_failure_payload("smtp_tls", exc, "SMTP TLS negotiation failed.")
-                try:
-                    smtp.ehlo()
-                except (socket.timeout, TimeoutError) as exc:
-                    return _smtp_failure_payload("smtp_ehlo", exc, "SMTP handshake timed out.")
-                except (OSError, smtplib.SMTPException, SystemExit) as exc:
-                    return _smtp_failure_payload("smtp_ehlo", exc, "SMTP handshake failed.")
-                except Exception as exc:
-                    return _smtp_failure_payload("smtp_ehlo", exc, "SMTP handshake failed.")
-                try:
-                    smtp.login(username, password)
-                except (socket.timeout, TimeoutError) as exc:
-                    return _smtp_failure_payload("smtp_auth", exc, "SMTP authentication timed out.")
-                except (OSError, smtplib.SMTPException, SystemExit) as exc:
-                    return _smtp_failure_payload("smtp_auth", exc, "SMTP authentication failed.")
-                except Exception as exc:
-                    return _smtp_failure_payload("smtp_auth", exc, "SMTP authentication failed.")
-                try:
-                    smtp.send_message(message)
-                except (socket.timeout, TimeoutError) as exc:
-                    return _smtp_failure_payload("smtp_send", exc, "SMTP send timed out.")
-                except (OSError, smtplib.SMTPException, SystemExit) as exc:
-                    return _smtp_failure_payload("smtp_send", exc, "SMTP send failed.")
-                except Exception as exc:
-                    return _smtp_failure_payload("smtp_send", exc, "SMTP send failed.")
+                _, error = _run_smtp_step(
+                    "smtp_ehlo",
+                    lambda timeout: smtp.ehlo(),
+                    smtp=smtp,
+                    deadline=deadline,
+                )
+                if error:
+                    return error
+                _, error = _run_smtp_step(
+                    "smtp_tls",
+                    lambda timeout: smtp.starttls(),
+                    smtp=smtp,
+                    deadline=deadline,
+                )
+                if error:
+                    return error
+                _, error = _run_smtp_step(
+                    "smtp_ehlo",
+                    lambda timeout: smtp.ehlo(),
+                    smtp=smtp,
+                    deadline=deadline,
+                )
+                if error:
+                    return error
+                _, error = _run_smtp_step(
+                    "smtp_login",
+                    lambda timeout: smtp.login(username, password),
+                    smtp=smtp,
+                    deadline=deadline,
+                )
+                if error:
+                    return error
+                _, error = _run_smtp_step(
+                    "smtp_send",
+                    lambda timeout: smtp.send_message(message),
+                    smtp=smtp,
+                    deadline=deadline,
+                )
+                if error:
+                    return error
     except ValueError as exc:
         return {
             "ok": False,

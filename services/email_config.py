@@ -33,6 +33,8 @@ SUPPORTED_ENV_KEYS = (
     "WECAST_ENV",
     "WECAST_SUPPORT_EMAIL",
     "WECAST_LOGO_URL",
+    "WECAST_SMTP_TIMEOUT_SECONDS",
+    "WECAST_SMTP_TOTAL_TIMEOUT_SECONDS",
 )
 FRONTEND_URL_KEYS = ("FRONTEND_PUBLIC_URL", "WECAST_APP_URL", "FRONTEND_URL")
 
@@ -155,6 +157,34 @@ def _smtp_port_error():
     return ""
 
 
+def _gmail_smtp_config_errors():
+    host = env_value("SMTP_HOST").lower()
+    if host not in {"smtp.gmail.com", "gmail-smtp-in.l.google.com"}:
+        return []
+
+    errors = []
+    smtp_user = env_value("SMTP_USER").lower()
+    from_email = env_value("FROM_EMAIL").lower()
+    if smtp_user and from_email and smtp_user != from_email:
+        errors.append(
+            {
+                "key": "FROM_EMAIL",
+                "error": "For Gmail SMTP, FROM_EMAIL must match SMTP_USER.",
+            }
+        )
+
+    app_password = env_value("SMTP_PASS").replace(" ", "")
+    if app_password and len(app_password) != 16:
+        errors.append(
+            {
+                "key": "SMTP_PASS",
+                "error": "For Gmail SMTP, use a 16-character Gmail App Password, not the normal Gmail password.",
+            }
+        )
+
+    return errors
+
+
 def validate_email_configuration():
     smtp_missing = [key for key in SMTP_ENV_KEYS if not env_value(key)]
     resend_missing = [key for key in RESEND_ENV_KEYS if not env_value(key)]
@@ -177,6 +207,11 @@ def validate_email_configuration():
         missing = sorted(set(smtp_missing if smtp_present else resend_missing + smtp_missing))
     if smtp_present and smtp_port_error:
         invalid.append({"key": "SMTP_PORT", "error": smtp_port_error})
+    if smtp_present:
+        invalid.extend(_gmail_smtp_config_errors())
+        if invalid:
+            provider = ""
+            smtp_ready = False
 
     url_ready = True
     try:
