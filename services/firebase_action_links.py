@@ -37,7 +37,7 @@ def _generate_link_with_domain_fallback(email, path, generator):
     last_error = None
     for index, base_url in enumerate(candidates):
         try:
-            return generator(email, _action_code_settings(path, base_url))
+            return generator(email, _action_code_settings(path, base_url)), base_url
         except Exception as exc:
             last_error = exc
             if index < len(candidates) - 1 and _is_unauthorized_domain_error(exc):
@@ -55,12 +55,12 @@ def _firebase_auth():
     return fb_auth
 
 
-def _build_custom_reset_link(firebase_link):
+def _build_custom_action_link(firebase_link, frontend_path, base_url=None):
     parsed = urlparse(firebase_link or "")
     params = dict(parse_qsl(parsed.query, keep_blank_values=True))
     required = ("mode", "oobCode", "apiKey")
     if not all(params.get(key) for key in required):
-        raise FirebaseActionLinkError("Firebase reset link is missing required parameters.")
+        raise FirebaseActionLinkError("Firebase action link is missing required parameters.")
 
     keep_params = {
         key: value
@@ -69,7 +69,8 @@ def _build_custom_reset_link(firebase_link):
         and value not in (None, "")
     }
     query = urlencode(keep_params)
-    return f"{public_app_url().rstrip('/')}/#/reset-password?{query}"
+    route = frontend_path if frontend_path.startswith("/") else f"/{frontend_path}"
+    return f"{(base_url or public_app_url()).rstrip('/')}{route}?{query}"
 
 
 def generate_email_verification_link(email):
@@ -78,11 +79,12 @@ def generate_email_verification_link(email):
         raise FirebaseActionLinkError("Email is required.")
 
     fb_auth = _firebase_auth()
-    return _generate_link_with_domain_fallback(
+    firebase_link, base_url = _generate_link_with_domain_fallback(
         normalized_email,
         "/#/verify-email",
         fb_auth.generate_email_verification_link,
     )
+    return _build_custom_action_link(firebase_link, "/#/verify-email", base_url)
 
 
 def generate_password_reset_link(email):
@@ -91,9 +93,9 @@ def generate_password_reset_link(email):
         raise FirebaseActionLinkError("Email is required.")
 
     fb_auth = _firebase_auth()
-    firebase_link = _generate_link_with_domain_fallback(
+    firebase_link, base_url = _generate_link_with_domain_fallback(
         normalized_email,
         "/reset-password",
         fb_auth.generate_password_reset_link,
     )
-    return _build_custom_reset_link(firebase_link)
+    return _build_custom_action_link(firebase_link, "/#/reset-password", base_url)
