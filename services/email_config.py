@@ -191,8 +191,12 @@ def validate_email_configuration():
     smtp_port_error = _smtp_port_error()
     smtp_ready = not smtp_missing and not smtp_port_error
     smtp_present = any(env_value(key) for key in SMTP_ENV_KEYS)
+    resend_present = any(env_value(key) for key in RESEND_ENV_KEYS)
     resend_ready = not resend_missing
-    if smtp_ready:
+    if is_production() and env_value("RESEND_API_KEY"):
+        provider = "resend" if resend_ready else ""
+        smtp_ready = False
+    elif smtp_ready:
         provider = "smtp"
     elif smtp_present:
         provider = ""
@@ -204,10 +208,13 @@ def validate_email_configuration():
     missing = []
     invalid = []
     if not provider:
-        missing = sorted(set(smtp_missing if smtp_present else resend_missing + smtp_missing))
-    if smtp_present and smtp_port_error:
+        if is_production() and resend_present:
+            missing = sorted(set(resend_missing))
+        else:
+            missing = sorted(set(smtp_missing if smtp_present else resend_missing + smtp_missing))
+    if smtp_present and smtp_port_error and not (is_production() and env_value("RESEND_API_KEY")):
         invalid.append({"key": "SMTP_PORT", "error": smtp_port_error})
-    if smtp_present:
+    if smtp_present and not (is_production() and env_value("RESEND_API_KEY")):
         invalid.extend(_gmail_smtp_config_errors())
         if invalid:
             provider = ""

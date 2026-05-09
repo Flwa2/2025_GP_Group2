@@ -1134,7 +1134,7 @@ export default function Preview() {
               <button
                 type="button"
                 onClick={() => {
-                  const link = `https://wecast-frontend.onrender.com/#/share/${episodeId}`;
+                  const link = `${window.location.origin}/#/share/${encodeURIComponent(episodeId)}`;
                   navigator.clipboard.writeText(link);
                   alert("Share link copied!");
                 }}

@@ -16,6 +16,7 @@ from services.email_config import (
     sender_email,
     sender_name,
     support_email,
+    is_production,
     validate_email_configuration,
 )
 
@@ -354,6 +355,8 @@ def _send_email(to_email, content, *, dry_run=False):
         resend_result = _send_email_via_resend(to_email, content)
         if resend_result.get("ok"):
             return resend_result
+        if is_production():
+            return resend_result
         if (
             config.get("smtpPresent")
             and not _smtp_fallback_disabled()
@@ -513,7 +516,7 @@ def _send_email_via_resend(to_email, content):
         print(
             "Resend API error:",
             f"status={response.status_code}",
-            f"body={(response.text or '')[:400]}",
+            f"errorType={payload.get('errorType') or 'ResendSendError'}",
             flush=True,
         )
         return payload

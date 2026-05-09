@@ -1381,6 +1381,10 @@ def _build_email_action_url(mode, token):
 
 
 def _selected_email_provider():
+    from services.email_config import is_production
+
+    if is_production() and (os.getenv("RESEND_API_KEY") or "").strip():
+        return "resend"
     smtp_keys = ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "FROM_EMAIL", "FROM_NAME")
     if all((os.getenv(key) or "").strip() for key in smtp_keys):
         return "smtp"
@@ -7555,6 +7559,8 @@ def _podcast_share_url(podcast_id):
 
 
 def send_podcast_ready_email(user_email, podcast_title, podcast_id):
+    from services.email_config import is_production
+
     user_email = _normalize_email(user_email)
     if not user_email or not is_reasonably_valid_email(user_email):
         return False
@@ -7595,6 +7601,10 @@ def send_podcast_ready_email(user_email, podcast_title, podcast_id):
             return True
     except Exception as e:
         print("Podcast ready Resend email failed:", str(e))
+
+    if is_production():
+        print("Podcast ready email failed: Resend is required for production email delivery")
+        return False
 
     smtp_host = (os.getenv("SMTP_HOST") or "").strip()
     from_email = (
