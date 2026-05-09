@@ -5126,6 +5126,22 @@ def api_email_smtp_diagnostics():
         ), 500
 
 
+@app.get("/api/email/provider-diagnostics")
+def api_email_provider_diagnostics():
+    from services.email_service import validate_email_environment
+
+    config = validate_email_environment()
+    return jsonify(
+        ok=bool(config.get("ready")),
+        provider=config.get("provider") or "",
+        missing=config.get("missing") or [],
+        invalid=config.get("invalid") or [],
+        resendPresent=bool(config.get("resendPresent")),
+        smtpPresent=bool(config.get("smtpPresent")),
+        frontend=_wecast_frontend_url(),
+    ), 200 if config.get("ready") else 503
+
+
 @app.post("/api/send-verification-email")
 def api_send_verification_email():
     from firebase_admin import auth as fb_auth
