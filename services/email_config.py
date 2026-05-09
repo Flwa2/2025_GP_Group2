@@ -8,7 +8,7 @@ except ImportError:
 
 
 if load_dotenv:
-    load_dotenv()
+    load_dotenv(override=False)
 
 
 SMTP_ENV_KEYS = (
@@ -30,6 +30,7 @@ SUPPORTED_ENV_KEYS = (
     "BACKEND_PUBLIC_URL",
     "FRONTEND_PUBLIC_URL",
     "WECAST_APP_URL",
+    "WECAST_ENV",
     "WECAST_SUPPORT_EMAIL",
     "WECAST_LOGO_URL",
 )
@@ -44,10 +45,18 @@ def env_value(name):
     return (os.getenv(name) or "").strip()
 
 
+def _truthy_env(name):
+    return env_value(name).lower() in {"1", "true", "yes", "on"}
+
+
 def is_production():
-    return env_value("FLASK_ENV").lower() in {"prod", "production"} or bool(
-        env_value("RENDER")
-    )
+    if env_value("FLASK_ENV").lower() in {"prod", "production"}:
+        return True
+    if _truthy_env("RENDER"):
+        return True
+    if env_value("WECAST_ENV").lower() in {"prod", "production"}:
+        return True
+    return False
 
 
 def _is_local_frontend_url(value):
@@ -82,11 +91,19 @@ def _frontend_url_keys_in_priority_order():
     return local_keys + [key for key in keys if key not in local_keys]
 
 
+def _must_skip_localhost_urls():
+    """On Render / production, never use localhost from .env for public links."""
+    return is_production() or _truthy_env("RENDER")
+
+
 def frontend_public_url():
     for key in _frontend_url_keys_in_priority_order():
         value = env_value(key)
-        if value:
-            return _validate_absolute_url(key, value)
+        if not value:
+            continue
+        if _must_skip_localhost_urls() and _is_local_frontend_url(value):
+            continue
+        return _validate_absolute_url(key, value)
     raise EmailConfigError("Missing required environment variable: FRONTEND_PUBLIC_URL")
 
 
@@ -96,6 +113,8 @@ def frontend_public_url_candidates():
     for key in _frontend_url_keys_in_priority_order():
         value = env_value(key)
         if not value:
+            continue
+        if _must_skip_localhost_urls() and _is_local_frontend_url(value):
             continue
         normalized = _validate_absolute_url(key, value)
         if normalized in seen:

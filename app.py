@@ -1259,36 +1259,27 @@ def _prepare_user_storage(existing_doc, firebase_uid="", fallback_email=""):
 
 
 def _wecast_frontend_url():
-    if has_request_context():
-        origin = (request.headers.get("Origin") or "").strip()
+    """
+    Base URL for the SPA (email links, redirects, logo defaults).
+
+    On a production deployment, always use env-based FRONTEND_PUBLIC_URL /
+    WECAST_APP_URL so emails never pick up http://localhost:5173 from the
+    browser Origin when the API is called from a local dev UI.
+
+    In local development, prefer the request Origin when it matches
+    FRONTEND_ORIGINS so links match the site you are actually using.
+    """
+    from services.email_config import EmailConfigError, frontend_public_url, is_production
+
+    if not is_production() and has_request_context():
+        origin = (request.headers.get("Origin") or "").strip().rstrip("/")
         if origin in FRONTEND_ORIGINS:
-            return origin.rstrip("/")
+            return origin
 
-    candidates = [
-        (key, (os.getenv(key) or "").strip())
-        for key in ("FRONTEND_PUBLIC_URL", "WECAST_APP_URL", "FRONTEND_URL")
-    ]
-    is_prod = (os.getenv("FLASK_ENV") or "").strip().lower() in {"prod", "production"} or bool(
-        (os.getenv("RENDER") or "").strip()
-    )
-    if not is_prod:
-        local_candidates = [
-            item
-            for item in candidates
-            if (urlparse(item[1]).hostname or "").lower() in {"localhost", "127.0.0.1"}
-        ]
-        candidates = local_candidates + [item for item in candidates if item not in local_candidates]
-
-    for _, base in candidates:
-        if not base:
-            continue
-        parsed = urlparse(base)
-        host = (parsed.hostname or "").lower()
-        if is_prod and (parsed.scheme != "https" or host in {"localhost", "127.0.0.1"}):
-            continue
-        return base.rstrip("/")
-
-    return "https://wecast-frontend.onrender.com"
+    try:
+        return frontend_public_url()
+    except EmailConfigError:
+        return "https://wecast-frontend.onrender.com"
 
 
 def _wecast_logo_url():
