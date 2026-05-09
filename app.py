@@ -5105,6 +5105,23 @@ def _email_service_failure_response(result, default_message):
     return jsonify(payload), status
 
 
+@app.get("/api/email/smtp-diagnostics")
+def api_email_smtp_diagnostics():
+    from services.email_service import check_smtp_connectivity
+
+    try:
+        result = check_smtp_connectivity()
+        return jsonify(result), 200 if result.get("ok") else 502
+    except Exception as exc:
+        return jsonify(
+            ok=False,
+            provider="smtp",
+            error="SMTP diagnostics failed.",
+            errorType=type(exc).__name__,
+            message=str(exc)[:180],
+        ), 500
+
+
 @app.post("/api/send-verification-email")
 def api_send_verification_email():
     from firebase_admin import auth as fb_auth

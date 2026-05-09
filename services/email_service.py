@@ -133,6 +133,14 @@ def _smtp_failure_payload(step, exc, error):
     return payload
 
 
+def _smtp_safe_error(exc):
+    return {
+        "errorType": type(exc).__name__,
+        "message": str(exc)[:180],
+        "errno": getattr(exc, "errno", None),
+    }
+
+
 def _log_smtp_attempt(host, port, username, from_email):
     print(
         "SMTP email delivery:",
@@ -371,6 +379,80 @@ def _send_email(to_email, content, *, dry_run=False):
         return resend_result
 
     return _send_prepared_message_via_smtp(message, to_email, content)
+
+
+def check_smtp_connectivity(*, timeout_seconds=None):
+    """Probe SMTP reachability without authenticating or sending email."""
+    host = env_value("SMTP_HOST")
+    configured_port = env_value("SMTP_PORT")
+    username = env_value("SMTP_USER")
+    from_email = env_value("FROM_EMAIL")
+    timeout = timeout_seconds or _smtp_timeout_seconds()
+    ports = []
+
+    for value in (configured_port, "587", "465"):
+        try:
+            port = int(value)
+        except (TypeError, ValueError):
+            continue
+        if port not in ports:
+            ports.append(port)
+
+    checks = []
+    for port in ports:
+        started_at = time.monotonic()
+        step = "smtp_ssl_connect" if port == 465 else "smtp_starttls_connect"
+        payload = {
+            "port": port,
+            "mode": "SMTP_SSL" if port == 465 else "SMTP_STARTTLS",
+            "ok": False,
+        }
+        try:
+            if port == 465:
+                with smtplib.SMTP_SSL(host, port, timeout=timeout) as smtp:
+                    _set_smtp_socket_timeout(smtp, timeout)
+                    smtp.ehlo()
+            else:
+                with smtplib.SMTP(host, port, timeout=timeout) as smtp:
+                    _set_smtp_socket_timeout(smtp, timeout)
+                    smtp.ehlo()
+                    smtp.starttls()
+                    _set_smtp_socket_timeout(smtp, timeout)
+                    smtp.ehlo()
+            payload["ok"] = True
+        except (socket.timeout, TimeoutError, OSError, smtplib.SMTPException, SystemExit) as exc:
+            payload.update(_smtp_safe_error(exc))
+            if getattr(exc, "errno", None) == 101:
+                payload["diagnosis"] = "Network is unreachable from this runtime to the SMTP server."
+        except Exception as exc:
+            payload.update(_smtp_safe_error(exc))
+        payload["elapsed_ms"] = int((time.monotonic() - started_at) * 1000)
+        payload["step"] = step
+        checks.append(payload)
+
+    any_ok = any(item.get("ok") for item in checks)
+    all_network_unreachable = checks and all(item.get("errno") == 101 for item in checks)
+    diagnosis = ""
+    if all_network_unreachable:
+        diagnosis = (
+            "Outbound SMTP ports are unreachable from this runtime. On Render Free web "
+            "services, outbound traffic to SMTP ports 25, 465, and 587 is blocked."
+        )
+    elif not any_ok:
+        diagnosis = "SMTP is not reachable with the current production network/configuration."
+
+    return {
+        "ok": any_ok,
+        "provider": "smtp",
+        "host": host or "<missing>",
+        "configuredPort": configured_port or "<missing>",
+        "timeoutSeconds": timeout,
+        "smtpUserPresent": bool(username),
+        "fromEmailPresent": bool(from_email),
+        "fromEmailMatchesSmtpUser": bool(username and from_email and username.lower() == from_email.lower()),
+        "checks": checks,
+        "diagnosis": diagnosis,
+    }
 
 
 def _send_email_via_resend(to_email, content):
