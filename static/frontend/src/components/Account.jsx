@@ -596,7 +596,7 @@ export default function Account() {
       setNewEmail("");
       setCurrentPassword("");
       showToast(
-        `Confirmation sent to ${data?.maskedNewEmail || normalizedNewEmail}.`,
+        `Approval email sent to ${data?.maskedCurrentEmail || normalizedCurrentEmail}.`,
         "success"
       );
     } catch (error) {

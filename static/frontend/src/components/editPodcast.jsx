@@ -77,6 +77,114 @@ const splitList = (value) => {
   return [];
 };
 
+const DEFAULT_VOICE_LANGUAGE = "en";
+const LANGUAGE_LABELS = {
+  en: { flagCode: "gb", name: "English" },
+  "en-us": { flagCode: "gb", name: "English" },
+  "en-gb": { flagCode: "gb", name: "English" },
+  zh: { flagCode: "cn", name: "Chinese" },
+  "zh-cn": { flagCode: "cn", name: "Chinese" },
+  cmn: { flagCode: "cn", name: "Chinese" },
+  yue: { flagCode: "cn", name: "Chinese" },
+  ar: { flagCode: "sa", name: "Arabic" },
+  "ar-sa": { flagCode: "sa", name: "Arabic" },
+  fr: { flagCode: "fr", name: "French" },
+  es: { flagCode: "es", name: "Spanish" },
+  de: { flagCode: "de", name: "German" },
+  it: { flagCode: "it", name: "Italian" },
+  ja: { flagCode: "jp", name: "Japanese" },
+  ko: { flagCode: "kr", name: "Korean" },
+  pt: { flagCode: "pt", name: "Portuguese" },
+  "pt-br": { flagCode: "pt", name: "Portuguese" },
+  hi: { flagCode: "in", name: "Hindi" },
+  ms: { flagCode: "my", name: "Malay" },
+  nl: { flagCode: "nl", name: "Dutch" },
+  pl: { flagCode: "pl", name: "Polish" },
+  ru: { flagCode: "ru", name: "Russian" },
+  tr: { flagCode: "tr", name: "Turkish" },
+  sv: { flagCode: "se", name: "Swedish" },
+  no: { flagCode: "no", name: "Norwegian" },
+  da: { flagCode: "dk", name: "Danish" },
+  fi: { flagCode: "fi", name: "Finnish" },
+  id: { flagCode: "id", name: "Indonesian" },
+  vi: { flagCode: "vn", name: "Vietnamese" },
+  th: { flagCode: "th", name: "Thai" },
+  fil: { flagCode: "ph", name: "Filipino" },
+  tl: { flagCode: "ph", name: "Filipino" },
+  uk: { flagCode: "ua", name: "Ukrainian" },
+  cs: { flagCode: "cz", name: "Czech" },
+  el: { flagCode: "gr", name: "Greek" },
+  hu: { flagCode: "hu", name: "Hungarian" },
+  ro: { flagCode: "ro", name: "Romanian" },
+  bg: { flagCode: "bg", name: "Bulgarian" },
+  hr: { flagCode: "hr", name: "Croatian" },
+  sk: { flagCode: "sk", name: "Slovak" },
+  ta: { flagCode: "in", name: "Tamil" },
+  bn: { flagCode: "bd", name: "Bengali" },
+  ur: { flagCode: "pk", name: "Urdu" },
+  fa: { flagCode: "ir", name: "Persian" },
+  he: { flagCode: "il", name: "Hebrew" },
+};
+const LANGUAGE_NAME_TO_CODE = Object.entries(LANGUAGE_LABELS).reduce((acc, [code, info]) => {
+  acc[info.name.toLowerCase()] = code.split("-")[0];
+  return acc;
+}, {});
+
+const normalizeLanguageFilterValue = (value) => {
+  const raw = String(value || "").trim().toLowerCase().replace("_", "-");
+  if (!raw) return "";
+  if (LANGUAGE_NAME_TO_CODE[raw]) return LANGUAGE_NAME_TO_CODE[raw];
+  if (LANGUAGE_LABELS[raw]) return raw.split("-")[0];
+  const base = raw.split("-")[0];
+  return LANGUAGE_LABELS[base] ? base : raw;
+};
+
+const formatLanguageLabel = (value) => {
+  const normalized = normalizeLanguageFilterValue(value);
+  const info = LANGUAGE_LABELS[normalized] || LANGUAGE_LABELS[String(value || "").trim().toLowerCase()];
+  if (info) return info.name;
+  const fallback = String(value || "").trim();
+  if (!fallback) return "";
+  return fallback
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+};
+
+const getLanguageDisplay = (value) => {
+  const normalized = normalizeLanguageFilterValue(value);
+  const info = LANGUAGE_LABELS[normalized] || LANGUAGE_LABELS[String(value || "").trim().toLowerCase()];
+  return {
+    flagCode: info?.flagCode || "",
+    name: info?.name || formatLanguageLabel(value),
+  };
+};
+
+const LanguageLabel = ({ value }) => {
+  const info = getLanguageDisplay(value);
+  return (
+    <span className="inline-flex min-w-0 items-center gap-2">
+      {info.flagCode ? (
+        <span className={`wecast-language-flag wecast-language-flag-${info.flagCode}`} aria-hidden="true" />
+      ) : null}
+      <span className="truncate">{info.name}</span>
+    </span>
+  );
+};
+
+const uniqueLanguageOptions = (values) => {
+  const seen = new Set();
+  const out = [];
+  [DEFAULT_VOICE_LANGUAGE, ...values].forEach((value) => {
+    const normalized = normalizeLanguageFilterValue(value);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    out.push(normalized);
+  });
+  return out.sort((a, b) => formatLanguageLabel(a).localeCompare(formatLanguageLabel(b)));
+};
+
 const TONE_RULES = [
   { tone: "professional", keys: ["professional", "broadcaster", "corporate", "formal", "authoritative", "احترافي", "رسمي"] },
   { tone: "funny", keys: ["funny", "humorous", "comedic", "comic", "quirky", "playful", "مضحك", "كوميدي", "مرح"] },
@@ -228,12 +336,11 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
       .filter((g) => Boolean(g) && !isNeutralGender(g))
   )].sort();
 
-  const languageOptions = [...new Set(
+  const languageOptions = uniqueLanguageOptions(
     voices
-      .flatMap(v => [...toList(v.languages), ...toList(v.labels?.languages)])
-      .map(normalize)
+      .flatMap(v => [...toList(v.languages), ...toList(v.labels?.languages), ...toList(v.labels?.language)])
       .filter(Boolean)
-  )].sort();
+  );
 
   const toneOptions = [...new Set(
     voices
@@ -247,7 +354,16 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
     (safeGenderFilter && safeGenderFilter !== "__all__")
       ? { key: "gender", label: `Gender: ${safeGenderFilter}` }
       : null,
-    filters.language ? { key: "language", label: `Language: ${filters.language}` } : null,
+    filters.language
+      ? {
+          key: "language",
+          label: (
+            <>
+              Language: <LanguageLabel value={filters.language} />
+            </>
+          ),
+        }
+      : null,
     filters.tone ? { key: "tone", label: `Tone: ${filters.tone}` } : null,
     filters.pitch ? { key: "pitch", label: `Pitch: ${filters.pitch}` } : null,
   ].filter(Boolean);
@@ -295,16 +411,38 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
             <div>
               <label className="block text-sm font-medium mb-1">Language</label>
               <div className="relative">
-                <select
-                  value={filters.language || ""}
-                  onChange={(e) => setFilters({ ...filters, language: e.target.value })}
-                  className="w-full appearance-none pr-10 px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900 text-black dark:text-white border-neutral-300 dark:border-white/15 [color-scheme:light] dark:[color-scheme:dark]"
+                <button
+                  type="button"
+                  onClick={() => setFilters({ ...filters, languageMenuOpen: !filters.languageMenuOpen })}
+                  className="flex min-h-10 w-full items-center rounded-lg border border-neutral-300 bg-white px-3 py-2 pr-10 text-start text-sm text-black dark:border-white/15 dark:bg-neutral-900 dark:text-white"
                 >
-                  <option value="">All Languages</option>
-                  {languageOptions.map(lang => (
-                    <option key={lang} value={lang}>{lang}</option>
-                  ))}
-                </select>
+                  {filters.language ? (
+                    <LanguageLabel value={filters.language} />
+                  ) : (
+                    <span className="text-black/55 dark:text-white/55">All Languages</span>
+                  )}
+                </button>
+                {filters.languageMenuOpen ? (
+                  <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-[10030] max-h-56 overflow-y-auto rounded-xl border border-neutral-200 bg-white p-1.5 shadow-xl dark:border-white/10 dark:bg-neutral-950">
+                    <button
+                      type="button"
+                      onClick={() => setFilters({ ...filters, language: "", languageMenuOpen: false })}
+                      className="flex w-full items-center rounded-lg px-3 py-2 text-start text-sm hover:bg-black/5 dark:hover:bg-white/10"
+                    >
+                      All Languages
+                    </button>
+                    {languageOptions.map(lang => (
+                      <button
+                        key={lang}
+                        type="button"
+                        onClick={() => setFilters({ ...filters, language: lang, languageMenuOpen: false })}
+                        className="flex w-full items-center rounded-lg px-3 py-2 text-start text-sm hover:bg-black/5 dark:hover:bg-white/10"
+                      >
+                        <LanguageLabel value={lang} />
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
                 <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
               </div>
             </div>
@@ -355,7 +493,7 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
                   <button
                     key={chip.key}
                     type="button"
-                    onClick={() => setFilters({ ...filters, [chip.key]: chip.key === "gender" ? "__all__" : "" })}
+                    onClick={() => setFilters({ ...filters, [chip.key]: chip.key === "gender" ? "__all__" : chip.key === "language" ? DEFAULT_VOICE_LANGUAGE : "" })}
                     className="inline-flex items-center gap-1 rounded-full border border-purple-300/70 dark:border-purple-400/45 bg-purple-50 dark:bg-purple-900/25 px-2.5 py-1 text-xs text-purple-700 dark:text-purple-200"
                     title="Remove filter"
                   >
@@ -369,7 +507,7 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
 
   {activeChips.length > 0 && (
   <button
-    onClick={() => setFilters({ q: "", gender: "__all__", language: "", tone: "", pitch: "" })}
+    onClick={() => setFilters({ q: "", gender: "__all__", language: DEFAULT_VOICE_LANGUAGE, tone: "", pitch: "" })}
     className="px-3 py-1.5 rounded-md border border-purple-500 bg-transparent text-purple-600 font-medium text-sm transition hover:bg-purple-50 dark:text-purple-400 dark:border-purple-400 dark:hover:bg-purple-900/20"
   >
     Clear Filters
@@ -708,7 +846,7 @@ useEffect(() => {
 
   // Filter voices for a specific speaker (matching CreatePro)
   const getFilteredVoicesForSpeaker = (speakerIndex) => {
-    const f = speakerVoiceFilters[speakerIndex] || { q: "", gender: "", language: "", tone: "", pitch: "" };
+    const f = speakerVoiceFilters[speakerIndex] || { q: "", gender: "", language: DEFAULT_VOICE_LANGUAGE, tone: "", pitch: "" };
     const isNeutralGender = (value) => {
       const g = String(value || "").trim().toLowerCase();
       return g.includes("neutral") || g.includes("netural");
@@ -734,6 +872,14 @@ useEffect(() => {
       if (!s) return true;
       return candidates.some((c) => c === s);
     };
+    const matchLanguageFacet = (selected, candidates) => {
+      const s = normalizeLanguageFilterValue(selected);
+      if (!s) return true;
+      return candidates.some((c) => {
+        const normalized = normalizeLanguageFilterValue(c);
+        return normalized === s || normalized.startsWith(`${s}-`) || s.startsWith(`${normalized}-`);
+      });
+    };
 
     return voices.filter((v) => {
       const name = String(v.name || "").toLowerCase();
@@ -743,13 +889,13 @@ useEffect(() => {
       const vGender = String(v.gender || v.labels?.gender || "").toLowerCase();
       const vPitch = getVoicePitchTag(v);
       const vTones = getVoiceToneTags(v);
-      const vLangs = [...toListLower(v.languages), ...toListLower(v.labels?.languages)];
+      const vLangs = [...toListLower(v.languages), ...toListLower(v.labels?.languages), normalizeLanguageFilterValue(v.labels?.language)];
 
       if (q && !(name.includes(q) || desc.includes(q))) return false;
       if (effectiveGender && vGender !== effectiveGender) return false;
       if (f.pitch && vPitch !== String(f.pitch).toLowerCase()) return false;
       if (!matchFacet(f.tone, vTones)) return false;
-      if (!matchFacet(f.language, vLangs)) return false;
+      if (!matchLanguageFacet(f.language, vLangs)) return false;
 
       return true;
     });
@@ -788,7 +934,7 @@ useEffect(() => {
         body: JSON.stringify({
           voiceId,
           voiceName,
-          text: "This is a WeCast preview.",
+          text: "Hi, this is a WeCast sample.",
         }),
       });
 
@@ -1851,7 +1997,13 @@ const exportScript = async (format = "pdf") => {
                         <div className="w-full">
                           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                             <button
-                              onClick={() => setActiveFilterSpeaker(index)}
+                              onClick={() => {
+                                setSpeakerVoiceFilters((prev) => ({
+                                  ...prev,
+                                  [index]: prev[index] || { q: "", gender: "__all__", language: DEFAULT_VOICE_LANGUAGE, tone: "", pitch: "" },
+                                }));
+                                setActiveFilterSpeaker(index);
+                              }}
                               className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-neutral-300/80 bg-white/82 hover:bg-white dark:border-white/15 dark:bg-neutral-900/72 dark:hover:bg-white/10 sm:h-[44px] sm:w-[44px]"
                             >
                               <SlidersHorizontal className="w-5 h-5" />
@@ -2098,7 +2250,7 @@ const exportScript = async (format = "pdf") => {
         <VoiceFilterModal
           isOpen={true}
           onClose={() => setActiveFilterSpeaker(null)}
-          filters={speakerVoiceFilters[activeFilterSpeaker] || {}}
+          filters={speakerVoiceFilters[activeFilterSpeaker] || { q: "", gender: "__all__", language: DEFAULT_VOICE_LANGUAGE, tone: "", pitch: "" }}
           setFilters={(newFilters) => {
             setSpeakerVoiceFilters({
               ...speakerVoiceFilters,

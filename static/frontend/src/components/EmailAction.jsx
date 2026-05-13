@@ -9,7 +9,6 @@ import {
 } from "lucide-react";
 import {
   applyActionCode,
-  confirmPasswordReset,
   signOut,
   verifyPasswordResetCode,
 } from "firebase/auth";
@@ -349,10 +348,11 @@ export default function EmailAction() {
           if (!cancelled) {
             setDetails(data);
             setSuccess(
-              t(
-                "emailAction.emailChange.cancelSuccess",
-                "Email change request canceled. Your current email was not changed."
-              )
+              data?.securityMessage ||
+                t(
+                  "emailAction.emailChange.cancelSuccess",
+                  "We blocked this email change request. If this was not you, we strongly recommend changing your password immediately and reviewing your account activity."
+                )
             );
           }
           return;
@@ -463,7 +463,29 @@ export default function EmailAction() {
     try {
       let resolvedEmail = details?.email || "";
       if (isFirebaseResetMode) {
-        await confirmPasswordReset(auth, oobCode, newPassword);
+        const res = await fetch(`${API_BASE}/api/password-reset/firebase-confirm`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            oobCode,
+            newPassword,
+            confirmPassword,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw new Error(
+            data?.error ||
+              t(
+                "emailAction.reset.updateFailed",
+                "We couldn't update your password from this link."
+              )
+          );
+        }
+
+        resolvedEmail = data?.email || resolvedEmail;
       } else {
         const res = await fetch(`${API_BASE}/api/password-reset/confirm`, {
           method: "POST",
@@ -572,7 +594,7 @@ export default function EmailAction() {
       : isCancelEmailChangeMode
       ? t("emailAction.emailChange.cancelTitle", "Cancel email change")
       : isChangeEmailMode
-      ? t("emailAction.emailChange.title", "Confirm your new email")
+      ? t("emailAction.emailChange.title", "Approve email change")
       : t("emailAction.general.title", "Email action");
 
   const subtitle = isResetMode
@@ -593,7 +615,7 @@ export default function EmailAction() {
       : isChangeEmailMode
       ? t(
           "emailAction.emailChange.confirmSubtitle",
-          "Confirm the new address to finish updating your WeCast profile."
+          "Approve this email change from your current WeCast email before it can continue."
         )
       : t(
           "emailAction.emailChange.subtitle",
@@ -663,20 +685,20 @@ export default function EmailAction() {
               </div>
             </div>
 
-            <div className="flex flex-col gap-3 sm:flex-row">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-start">
               <button
                 type="button"
                 onClick={() => {
                   window.location.hash = "#/login";
                 }}
-                className="inline-flex items-center justify-center rounded-xl bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90"
+                className="inline-flex w-full items-center justify-center rounded-xl bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-black/90 sm:w-auto dark:bg-white dark:text-black dark:hover:bg-white/90"
               >
                 {t("reset.back", "Go to login")}
               </button>
-              {supportsContinueUrl ? (
+              {supportsContinueUrl && !isResetMode ? (
                 <a
                   href={continueUrl}
-                  className="inline-flex items-center justify-center rounded-xl border border-black/15 px-5 py-3 text-sm font-semibold text-black transition hover:bg-black/5 dark:border-white/20 dark:text-white dark:hover:bg-white/10"
+                  className="inline-flex w-full items-center justify-center rounded-xl border border-black/15 px-5 py-3 text-sm font-semibold text-black transition hover:bg-black/5 sm:w-auto dark:border-white/20 dark:text-white dark:hover:bg-white/10"
                 >
                   {t("emailAction.general.continue", "Continue")}
                 </a>
@@ -844,10 +866,10 @@ export default function EmailAction() {
               {submitting ? (
                 <>
                   <span className="h-4 w-4 rounded-full border-2 border-current border-t-transparent animate-spin"></span>
-                  {t("emailAction.emailChange.confirming", "Confirming email...")}
+                  {t("emailAction.emailChange.confirming", "Approving email change...")}
                 </>
               ) : (
-                t("emailAction.emailChange.confirmButton", "Confirm email change")
+                t("emailAction.emailChange.confirmButton", "Approve email change")
               )}
             </button>
           </div>

@@ -47,6 +47,266 @@ body:has(.wecast-overlay) {
   overscroll-behavior: contain;
 }
 
+.wecast-language-flag {
+  position: relative;
+  display: inline-block;
+  width: 1.35em;
+  height: 0.95em;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 0.16em;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.14);
+  vertical-align: -0.12em;
+}
+
+.wecast-language-flag-cn {
+  background: #de2910;
+}
+
+.wecast-language-flag-cn::before {
+  content: "★";
+  position: absolute;
+  left: 0.16em;
+  top: 0.02em;
+  color: #ffde00;
+  font-size: 0.48em;
+  line-height: 1;
+}
+
+.wecast-language-flag-de {
+  background: linear-gradient(to bottom, #000 0 33.333%, #dd0000 33.333% 66.666%, #ffce00 66.666% 100%);
+}
+
+.wecast-language-flag-es {
+  background: linear-gradient(to bottom, #aa151b 0 25%, #f1bf00 25% 75%, #aa151b 75% 100%);
+}
+
+.wecast-language-flag-fr {
+  background: linear-gradient(to right, #0055a4 0 33.333%, #fff 33.333% 66.666%, #ef4135 66.666% 100%);
+}
+
+.wecast-language-flag-gb {
+  background:
+    linear-gradient(32deg, transparent 0 42%, #fff 42% 47%, #c8102e 47% 53%, #fff 53% 58%, transparent 58%),
+    linear-gradient(148deg, transparent 0 42%, #fff 42% 47%, #c8102e 47% 53%, #fff 53% 58%, transparent 58%),
+    linear-gradient(to right, transparent 0 42%, #fff 42% 58%, transparent 58%),
+    linear-gradient(to bottom, transparent 0 36%, #fff 36% 64%, transparent 64%),
+    linear-gradient(to right, transparent 0 46%, #c8102e 46% 54%, transparent 54%),
+    linear-gradient(to bottom, transparent 0 42%, #c8102e 42% 58%, transparent 58%),
+    #012169;
+}
+
+.wecast-language-flag-in {
+  background: linear-gradient(to bottom, #ff9933 0 33.333%, #fff 33.333% 66.666%, #138808 66.666% 100%);
+}
+
+.wecast-language-flag-in::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0.28em;
+  height: 0.28em;
+  border: 1px solid #000080;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+}
+
+.wecast-language-flag-it {
+  background: linear-gradient(to right, #009246 0 33.333%, #fff 33.333% 66.666%, #ce2b37 66.666% 100%);
+}
+
+.wecast-language-flag-my {
+  background: linear-gradient(to bottom, #cc0001 0 14.285%, #fff 14.285% 28.57%, #cc0001 28.57% 42.855%, #fff 42.855% 57.14%, #cc0001 57.14% 71.425%, #fff 71.425% 85.71%, #cc0001 85.71% 100%);
+}
+
+.wecast-language-flag-my::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 52%;
+  height: 57%;
+  background: #010066;
+}
+
+.wecast-language-flag-my::after {
+  content: "★";
+  position: absolute;
+  left: 0.18em;
+  top: 0.04em;
+  color: #ffcc00;
+  font-size: 0.34em;
+  line-height: 1;
+}
+
+.wecast-language-flag-nl {
+  background: linear-gradient(to bottom, #ae1c28 0 33.333%, #fff 33.333% 66.666%, #21468b 66.666% 100%);
+}
+
+.wecast-language-flag-pl {
+  background: linear-gradient(to bottom, #fff 0 50%, #dc143c 50% 100%);
+}
+
+.wecast-language-flag-ru {
+  background: linear-gradient(to bottom, #fff 0 33.333%, #0039a6 33.333% 66.666%, #d52b1e 66.666% 100%);
+}
+
+.wecast-language-flag-jp {
+  background: radial-gradient(circle at 50% 50%, #bc002d 0 27%, transparent 28%), #fff;
+}
+
+.wecast-language-flag-kr {
+  background: radial-gradient(circle at 50% 50%, #c60c30 0 23%, #003478 24% 34%, transparent 35%), #fff;
+}
+
+.wecast-language-flag-pt {
+  background: linear-gradient(to right, #006600 0 40%, #ff0000 40% 100%);
+}
+
+.wecast-language-flag-pt::before {
+  content: "";
+  position: absolute;
+  left: 34%;
+  top: 50%;
+  width: 0.28em;
+  height: 0.28em;
+  border-radius: 999px;
+  background: #ffcc00;
+  transform: translate(-50%, -50%);
+}
+
+.wecast-language-flag-sa {
+  background: #006c35;
+}
+
+.wecast-language-flag-sa::before {
+  content: "";
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  bottom: 0.24em;
+  height: 0.08em;
+  border-radius: 999px;
+  background: #fff;
+}
+
+.wecast-language-flag-tr {
+  background: radial-gradient(circle at 42% 50%, transparent 0 18%, #e30a17 19% 26%, transparent 27%), #e30a17;
+}
+
+.wecast-language-flag-tr::before {
+  content: "★";
+  position: absolute;
+  left: 54%;
+  top: 50%;
+  color: #fff;
+  font-size: 0.32em;
+  line-height: 1;
+  transform: translate(-50%, -50%);
+}
+
+.wecast-language-flag-se {
+  background: linear-gradient(to right, transparent 0 30%, #fecc00 30% 42%, transparent 42%), linear-gradient(to bottom, transparent 0 38%, #fecc00 38% 54%, transparent 54%), #006aa7;
+}
+
+.wecast-language-flag-no {
+  background: linear-gradient(to right, transparent 0 28%, #fff 28% 44%, transparent 44%), linear-gradient(to bottom, transparent 0 34%, #fff 34% 58%, transparent 58%), linear-gradient(to right, transparent 0 33%, #00205b 33% 39%, transparent 39%), linear-gradient(to bottom, transparent 0 42%, #00205b 42% 50%, transparent 50%), #ba0c2f;
+}
+
+.wecast-language-flag-dk {
+  background: linear-gradient(to right, transparent 0 30%, #fff 30% 42%, transparent 42%), linear-gradient(to bottom, transparent 0 42%, #fff 42% 56%, transparent 56%), #c8102e;
+}
+
+.wecast-language-flag-fi {
+  background: linear-gradient(to right, transparent 0 32%, #002f6c 32% 44%, transparent 44%), linear-gradient(to bottom, transparent 0 38%, #002f6c 38% 56%, transparent 56%), #fff;
+}
+
+.wecast-language-flag-id {
+  background: linear-gradient(to bottom, #ce1126 0 50%, #fff 50% 100%);
+}
+
+.wecast-language-flag-vn {
+  background: #da251d;
+}
+
+.wecast-language-flag-vn::before {
+  content: "★";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  color: #ff0;
+  font-size: 0.44em;
+  line-height: 1;
+  transform: translate(-50%, -50%);
+}
+
+.wecast-language-flag-th {
+  background: linear-gradient(to bottom, #a51931 0 16%, #f4f5f8 16% 32%, #2d2a4a 32% 68%, #f4f5f8 68% 84%, #a51931 84% 100%);
+}
+
+.wecast-language-flag-ph {
+  background: linear-gradient(to bottom, #0038a8 0 50%, #ce1126 50% 100%);
+}
+
+.wecast-language-flag-ua {
+  background: linear-gradient(to bottom, #0057b7 0 50%, #ffd700 50% 100%);
+}
+
+.wecast-language-flag-cz {
+  background: linear-gradient(to bottom, #fff 0 50%, #d7141a 50% 100%);
+}
+
+.wecast-language-flag-cz::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-top: 0.475em solid transparent;
+  border-bottom: 0.475em solid transparent;
+  border-left: 0.58em solid #11457e;
+}
+
+.wecast-language-flag-gr {
+  background: linear-gradient(to bottom, #0d5eaf 0 11.111%, #fff 11.111% 22.222%, #0d5eaf 22.222% 33.333%, #fff 33.333% 44.444%, #0d5eaf 44.444% 55.555%, #fff 55.555% 66.666%, #0d5eaf 66.666% 77.777%, #fff 77.777% 88.888%, #0d5eaf 88.888% 100%);
+}
+
+.wecast-language-flag-hu {
+  background: linear-gradient(to bottom, #ce2939 0 33.333%, #fff 33.333% 66.666%, #477050 66.666% 100%);
+}
+
+.wecast-language-flag-ro {
+  background: linear-gradient(to right, #002b7f 0 33.333%, #fcd116 33.333% 66.666%, #ce1126 66.666% 100%);
+}
+
+.wecast-language-flag-bg {
+  background: linear-gradient(to bottom, #fff 0 33.333%, #00966e 33.333% 66.666%, #d62612 66.666% 100%);
+}
+
+.wecast-language-flag-hr {
+  background: linear-gradient(to bottom, #ff0000 0 33.333%, #fff 33.333% 66.666%, #171796 66.666% 100%);
+}
+
+.wecast-language-flag-sk {
+  background: linear-gradient(to bottom, #fff 0 33.333%, #0b4ea2 33.333% 66.666%, #ee1c25 66.666% 100%);
+}
+
+.wecast-language-flag-bd {
+  background: radial-gradient(circle at 52% 50%, #f42a41 0 27%, transparent 28%), #006a4e;
+}
+
+.wecast-language-flag-pk {
+  background: linear-gradient(to right, #fff 0 24%, #01411c 24% 100%);
+}
+
+.wecast-language-flag-ir {
+  background: linear-gradient(to bottom, #239f40 0 33.333%, #fff 33.333% 66.666%, #da0000 66.666% 100%);
+}
+
+.wecast-language-flag-il {
+  background: linear-gradient(to bottom, #fff 0 18%, #0038b8 18% 30%, #fff 30% 70%, #0038b8 70% 82%, #fff 82% 100%);
+}
+
 [dir="rtl"] body {
   font-family: "IBM Plex Sans Arabic", "Plus Jakarta Sans", "Segoe UI", Tahoma, Arial, sans-serif;
 }

@@ -36,6 +36,17 @@ def _default_url(path):
     return f"{base}{path}"
 
 
+def _public_login_url():
+    """Public app URL for sign-in only (no tokens)."""
+    try:
+        base = str(frontend_public_url() or "").strip().rstrip("/")
+    except Exception:
+        base = ""
+    if not base:
+        base = "https://wecast-frontend.onrender.com"
+    return f"{base}/#/login"
+
+
 def validate_email_environment():
     """Return non-secret email configuration status for diagnostics."""
     return validate_email_configuration()
@@ -51,6 +62,8 @@ def _render_template(
     notice_text=None,
     detail_label="",
     detail_lines=None,
+    secondary_button_text="",
+    secondary_button_url="",
 ):
     try:
         resolved_logo_url = logo_url()
@@ -74,6 +87,8 @@ def _render_template(
         notice_text=resolved_notice_text,
         detail_label=detail_label,
         detail_lines=detail_lines,
+        secondary_button_text=secondary_button_text,
+        secondary_button_url=secondary_button_url,
     )
 
 
@@ -589,9 +604,9 @@ def send_password_reset_email(email, action_url=None, *, dry_run=False):
 def _password_changed_content(action_url):
     url = action_url or _default_url("/#/")
     lines = [
-        "This confirms that your WeCast password was successfully changed.",
+        "Your password was successfully changed.",
         "If you made this change, no further action is required.",
-        "If you did not change your password, please contact support immediately.",
+        "If this was not you, secure your account immediately.",
     ]
     return EmailContent(
         subject="Your password has been updated",
@@ -611,60 +626,73 @@ def send_password_changed_email(email, action_url=None, *, dry_run=False):
     return _send_email(email, _password_changed_content(action_url), dry_run=dry_run)
 
 
-def _confirm_new_email_content(action_url, current_email):
-    url = action_url or _default_url("/#/email-change-confirm?preview=1")
+def _confirm_new_email_content(previous_email):
+    """Variant 4 (post-approval): informational notice to the new address only. No approval links."""
+    url = _public_login_url()
+    prev = (previous_email or "").strip()
     lines = [
-        "A request was made to change the email address on your WeCast account.",
-        "Your current login email will remain active until this new email address is verified.",
-        "If you did not request this change, you can ignore this email.",
+        "Your WeCast sign-in email has been updated to this address.",
+        "The change was approved from your previous email address on file.",
+        "Sign in with this email address going forward.",
     ]
+    detail_lines = [f"Previous sign-in email: {prev}"] if prev else None
     return EmailContent(
-        subject="Confirm New Email",
+        subject="Your WeCast sign-in email was updated",
         html_body=_render_template(
-            title="Confirm your new email",
+            title="Your sign-in email is updated",
             message=lines,
-            button_text="Confirm New Email",
+            button_text="Sign in to WeCast",
             button_url=url,
             eyebrow="Email change",
-            detail_label="Current account email",
-            detail_lines=[current_email] if current_email else None,
-            notice_text="The account email will not change unless this new email address is confirmed.",
+            detail_label="Account details",
+            detail_lines=detail_lines,
+            notice_text="This message is for your records only. It cannot approve or change your email.",
         ),
         text_body=_text_body(*lines, button_url=url),
     )
 
 
 def send_confirm_new_email(new_email, current_email="", action_url=None, *, dry_run=False):
-    """Variant 4: send the confirm-new-email template to the *new* address only."""
-    content = _confirm_new_email_content(action_url, current_email)
+    """Variant 4: after the old email approves, notify the new address (informational only; action_url is ignored)."""
+    _ = action_url  # Never embed tokenized or takeover-capable links in this notice.
+    content = _confirm_new_email_content(current_email)
     return _send_email(new_email, content, dry_run=dry_run)
 
 
-def _email_change_requested_content(action_url, new_email):
-    url = action_url or _default_url("/#/account?section=security")
+def _email_change_requested_content(action_url, new_email, approve_url=""):
+    cancel_url = action_url or _default_url("/#/account?section=security")
+    approve_link = (approve_url or "").strip()
     lines = [
         "A request was made to change the email address on your WeCast account.",
-        "No change will happen unless the new email address is verified.",
-        "If this was not you, secure your account immediately.",
+        "Your current email must approve this request before any account email can change.",
+        "If this was not you, cancel the request immediately and change your password.",
     ]
     return EmailContent(
         subject="Email Change Requested",
         html_body=_render_template(
             title="A request was made to change your email",
             message=lines,
-            button_text="Cancel email change",
-            button_url=url,
+            button_text="Approve email change" if approve_link else "Cancel email change",
+            button_url=approve_link or cancel_url,
+            secondary_button_text="Cancel email change" if approve_link else "",
+            secondary_button_url=cancel_url if approve_link else "",
             eyebrow="Security notice",
             detail_label="Requested new email",
             detail_lines=[new_email] if new_email else None,
-            notice_text="Your current email remains active while this request is pending.",
+            notice_text="Your current email remains active unless you approve this request.",
         ),
-        text_body=_text_body(*lines, button_url=url),
+        text_body=_text_body(
+            *lines,
+            "Approve email change:",
+            approve_link,
+            "Cancel email change:",
+            cancel_url,
+        ),
     )
 
 
-def send_email_change_requested(old_email, new_email="", action_url=None, *, dry_run=False):
-    content = _email_change_requested_content(action_url, new_email)
+def send_email_change_requested(old_email, new_email="", action_url=None, approve_url=None, *, dry_run=False):
+    content = _email_change_requested_content(action_url, new_email, approve_url=approve_url)
     return _send_email(old_email, content, dry_run=dry_run)
 
 

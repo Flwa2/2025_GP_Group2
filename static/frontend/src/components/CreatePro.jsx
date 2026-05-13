@@ -29,6 +29,11 @@ import Modal from "../components/Modal";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
 import { shouldAutoplayVoicePreview, shouldShowEditingNotifications } from "../utils/accountPreferences";
+import {
+    markEditNavigationFromCreate,
+    markFinalizeNavigationFromCreate,
+    syncCreateDraftLease,
+} from "../utils/createDraftSession";
 
 const API_BASE = import.meta.env.PROD
     ? "https://wecast.onrender.com"
@@ -154,12 +159,120 @@ const collectLanguageDisplaysFromVoice = (v) => {
     return acc;
 };
 
+const DEFAULT_VOICE_LANGUAGE = "en";
+const LANGUAGE_LABELS = {
+    en: { flagCode: "gb", name: "English" },
+    "en-us": { flagCode: "gb", name: "English" },
+    "en-gb": { flagCode: "gb", name: "English" },
+    zh: { flagCode: "cn", name: "Chinese" },
+    "zh-cn": { flagCode: "cn", name: "Chinese" },
+    cmn: { flagCode: "cn", name: "Chinese" },
+    yue: { flagCode: "cn", name: "Chinese" },
+    ar: { flagCode: "sa", name: "Arabic" },
+    "ar-sa": { flagCode: "sa", name: "Arabic" },
+    fr: { flagCode: "fr", name: "French" },
+    es: { flagCode: "es", name: "Spanish" },
+    de: { flagCode: "de", name: "German" },
+    it: { flagCode: "it", name: "Italian" },
+    ja: { flagCode: "jp", name: "Japanese" },
+    ko: { flagCode: "kr", name: "Korean" },
+    pt: { flagCode: "pt", name: "Portuguese" },
+    "pt-br": { flagCode: "pt", name: "Portuguese" },
+    hi: { flagCode: "in", name: "Hindi" },
+    ms: { flagCode: "my", name: "Malay" },
+    nl: { flagCode: "nl", name: "Dutch" },
+    pl: { flagCode: "pl", name: "Polish" },
+    ru: { flagCode: "ru", name: "Russian" },
+    tr: { flagCode: "tr", name: "Turkish" },
+    sv: { flagCode: "se", name: "Swedish" },
+    no: { flagCode: "no", name: "Norwegian" },
+    da: { flagCode: "dk", name: "Danish" },
+    fi: { flagCode: "fi", name: "Finnish" },
+    id: { flagCode: "id", name: "Indonesian" },
+    vi: { flagCode: "vn", name: "Vietnamese" },
+    th: { flagCode: "th", name: "Thai" },
+    fil: { flagCode: "ph", name: "Filipino" },
+    tl: { flagCode: "ph", name: "Filipino" },
+    uk: { flagCode: "ua", name: "Ukrainian" },
+    cs: { flagCode: "cz", name: "Czech" },
+    el: { flagCode: "gr", name: "Greek" },
+    hu: { flagCode: "hu", name: "Hungarian" },
+    ro: { flagCode: "ro", name: "Romanian" },
+    bg: { flagCode: "bg", name: "Bulgarian" },
+    hr: { flagCode: "hr", name: "Croatian" },
+    sk: { flagCode: "sk", name: "Slovak" },
+    ta: { flagCode: "in", name: "Tamil" },
+    bn: { flagCode: "bd", name: "Bengali" },
+    ur: { flagCode: "pk", name: "Urdu" },
+    fa: { flagCode: "ir", name: "Persian" },
+    he: { flagCode: "il", name: "Hebrew" },
+};
+const LANGUAGE_NAME_TO_CODE = Object.entries(LANGUAGE_LABELS).reduce((acc, [code, info]) => {
+    acc[info.name.toLowerCase()] = code.split("-")[0];
+    return acc;
+}, {});
+
+const normalizeLanguageFilterValue = (value) => {
+    const raw = String(value || "").trim().toLowerCase().replace("_", "-");
+    if (!raw) return "";
+    if (LANGUAGE_NAME_TO_CODE[raw]) return LANGUAGE_NAME_TO_CODE[raw];
+    if (LANGUAGE_LABELS[raw]) return raw.split("-")[0];
+    const base = raw.split("-")[0];
+    return LANGUAGE_LABELS[base] ? base : raw;
+};
+
+const formatLanguageLabel = (value) => {
+    const normalized = normalizeLanguageFilterValue(value);
+    const info = LANGUAGE_LABELS[normalized] || LANGUAGE_LABELS[String(value || "").trim().toLowerCase()];
+    if (info) return info.name;
+    const fallback = String(value || "").trim();
+    if (!fallback) return "";
+    return fallback
+        .split(/[\s_-]+/)
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+        .join(" ");
+};
+
+const getLanguageDisplay = (value) => {
+    const normalized = normalizeLanguageFilterValue(value);
+    const info = LANGUAGE_LABELS[normalized] || LANGUAGE_LABELS[String(value || "").trim().toLowerCase()];
+    return {
+        flagCode: info?.flagCode || "",
+        name: info?.name || formatLanguageLabel(value),
+    };
+};
+
+const LanguageLabel = ({ value }) => {
+    const info = getLanguageDisplay(value);
+    return (
+        <span className="inline-flex min-w-0 items-center gap-2">
+            {info.flagCode ? (
+                <span className={`wecast-language-flag wecast-language-flag-${info.flagCode}`} aria-hidden="true" />
+            ) : null}
+            <span className="truncate">{info.name}</span>
+        </span>
+    );
+};
+
+const uniqueLanguageOptions = (values) => {
+    const seen = new Set();
+    const out = [];
+    [DEFAULT_VOICE_LANGUAGE, ...values].forEach((value) => {
+        const normalized = normalizeLanguageFilterValue(value);
+        if (!normalized || seen.has(normalized)) return;
+        seen.add(normalized);
+        out.push(normalized);
+    });
+    return out.sort((a, b) => formatLanguageLabel(a).localeCompare(formatLanguageLabel(b)));
+};
+
 /** Lowercased language tokens for matching (BCP-47 friendly). */
 const languageMatchTokensForVoice = (v) => {
     const seen = new Set();
     const out = [];
     for (const d of collectLanguageDisplaysFromVoice(v)) {
-        const low = String(d).trim().toLowerCase();
+        const low = normalizeLanguageFilterValue(d);
         if (!low || seen.has(low)) continue;
         seen.add(low);
         out.push(low);
@@ -244,12 +357,17 @@ const SHARED_LIBRARY_CATEGORY_API = new Set(["professional", "famous", "high_qua
 const emptyAppliedVoiceFilters = () => ({
     search: "",
     gender: "",
-    language: "",
+    language: DEFAULT_VOICE_LANGUAGE,
     accent: "",
     age: "",
     category: "",
     tone: "",
     pitch: "",
+});
+
+const voiceFiltersForSpeakerGender = (speaker) => ({
+    ...emptyAppliedVoiceFilters(),
+    gender: normalizeGenderToken(speaker?.gender),
 });
 
 const filtersModalToApplied = (f) => ({
@@ -311,7 +429,28 @@ const clientRefineVoicesByTonePitch = (items, tone, pitch) => {
 
 const clientRefineLibraryVoices = (items, applied) => {
     let out = clientRefineVoicesByTonePitch(items, applied.tone, applied.pitch);
+    const q = String(applied.search || "").trim().toLowerCase();
+    const g = normalizeGenderToken(applied.gender);
+    const lang = normalizeLanguageFilterValue(applied.language);
+    const accent = String(applied.accent || "").trim().toLowerCase();
+    const age = String(applied.age || "").trim().toLowerCase();
     const c = String(applied.category || "").trim().toLowerCase();
+
+    if (q) {
+        out = out.filter((v) => voiceSearchHaystack(v).includes(q));
+    }
+    if (g) {
+        out = out.filter((v) => normalizeGenderToken(v.gender || v.labels?.gender || v.labels?.Gender) === g);
+    }
+    if (lang) {
+        out = out.filter((v) => languageFilterMatches(lang, languageMatchTokensForVoice(v)));
+    }
+    if (accent) {
+        out = out.filter((v) => facetTokensLower(v, "accent", "Accent").includes(accent));
+    }
+    if (age) {
+        out = out.filter((v) => facetTokensLower(v, "age", "Age").includes(age));
+    }
     if (c && !SHARED_LIBRARY_CATEGORY_API.has(c)) {
         out = out.filter((v) => String(v.category || "").toLowerCase() === c);
     }
@@ -680,12 +819,12 @@ useEffect(() => {
 }, [speakers.length]);
 
 useEffect(() => {
-    speakers.forEach((_, i) => {
+    speakers.forEach((speaker, i) => {
         if (speakerLibInitRef.current.has(i)) return;
         speakerLibInitRef.current.add(i);
-        applyVoiceLibraryForSpeaker(i, emptyAppliedVoiceFilters());
+        applyVoiceLibraryForSpeaker(i, voiceFiltersForSpeakerGender(speaker));
     });
-}, [speakers.length, applyVoiceLibraryForSpeaker]);
+}, [speakers, applyVoiceLibraryForSpeaker]);
 
 const openFilterSpeakerIdx = useMemo(() => {
     for (let i = 0; i < speakers.length; i++) {
@@ -735,7 +874,7 @@ useEffect(() => {
                     open: false,
                     q: "",
                     gender: "__all__",
-                    language: "",
+                    language: DEFAULT_VOICE_LANGUAGE,
                     category: "",
                     tone: "",
                     pitch: "",
@@ -861,7 +1000,7 @@ const defaultVoiceForGender = useCallback(
                 },
                 body: JSON.stringify({
                     voiceId,
-                    text: "This is a WeCast preview.",
+                    text: "Hi, this is a WeCast sample.",
                 }),
             });
 
@@ -947,7 +1086,14 @@ const defaultVoiceForGender = useCallback(
 
     // restore title and template when page reloads or user comes back
     useEffect(() => {
+        syncCreateDraftLease(window.location.hash || "");
         let editData = readSessionJson("editData");
+        if (import.meta.env.DEV && editData && Object.keys(editData).length) {
+            console.log(
+                "[create-rehydrate] source=sessionStorage:editData keys=",
+                Object.keys(editData).join(",")
+            );
+        }
 
         if (editData.showTitle) {
             setShowTitle(editData.showTitle);
@@ -970,6 +1116,7 @@ const defaultVoiceForGender = useCallback(
     }, [t]);
 
     useEffect(() => {
+        syncCreateDraftLease(window.location.hash || "");
         const draft = JSON.parse(sessionStorage.getItem("studioCreateDraft") || "{}");
         if (!draft || !draft.fromStudioCreate) return;
 
@@ -1044,6 +1191,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
 
     useEffect(() => {
         const handleNavigation = () => {
+            syncCreateDraftLease(window.location.hash || "");
             const urlParams = new URLSearchParams(window.location.search);
             const stepParam = urlParams.get("step");
             const forceStep = sessionStorage.getItem("forceStep");
@@ -1732,6 +1880,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
 
         sessionStorage.setItem("editData", JSON.stringify(editData));
         sessionStorage.setItem("currentStep", "4");
+        markEditNavigationFromCreate();
         window.location.hash = "#/edit";
     };
 
@@ -1748,6 +1897,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
             return;
         }
 
+        markFinalizeNavigationFromCreate();
         window.location.hash = `#/finalize?podcastId=${encodeURIComponent(podcastId)}`;
     };
 
@@ -2264,7 +2414,7 @@ const exportScript = async (format = "pdf") => {
                                                                         open: false,
                                                                         q: "",
                                                                         gender: "__all__",
-                                                                        language: "",
+                                                                        language: DEFAULT_VOICE_LANGUAGE,
                                                                         category: "",
                                                                         tone: "",
                                                                         pitch: "",
@@ -2284,7 +2434,7 @@ const exportScript = async (format = "pdf") => {
                                                                         }));
                                                                     };
 
-                                                                    const languageOptions = uniqueSortedDisplay([
+                                                                    const languageOptions = uniqueLanguageOptions([
                                                                         ...libraryFilterOptions.languages,
                                                                         ...mergeDisplayOptionsFromVoices(
                                                                             librarySeedVoices,
@@ -2357,7 +2507,14 @@ const exportScript = async (format = "pdf") => {
                                                                               }
                                                                             : null,
                                                                         f.language
-                                                                            ? { key: "language", label: `${t("create.speakers.language", "Language")}: ${f.language}` }
+                                                                            ? {
+                                                                                  key: "language",
+                                                                                  label: (
+                                                                                      <>
+                                                                                          {t("create.speakers.language", "Language")}: <LanguageLabel value={f.language} />
+                                                                                      </>
+                                                                                  ),
+                                                                              }
                                                                             : null,
                                                                         f.category
                                                                             ? { key: "category", label: `${t("create.speakers.category", "Category")}: ${f.category}` }
@@ -2427,7 +2584,7 @@ const exportScript = async (format = "pdf") => {
                                                                                     const patch = {
                                                                                         q: "",
                                                                                         gender: speakerGenderTok || "__all__",
-                                                                                        language: "",
+                                                                                        language: DEFAULT_VOICE_LANGUAGE,
                                                                                         category: "",
                                                                                         tone: "",
                                                                                         pitch: "",
@@ -2517,18 +2674,38 @@ const exportScript = async (format = "pdf") => {
                                                                                 <div>
                                                                                 <label className="form-label mb-1 block">{t("create.speakers.language")}</label>
                                                                                 <div className="relative">
-                                                                                    <select
-                                                                                        value={f.language}
-                                                                                        onChange={(e) => setF({ language: e.target.value })}
-                                                                                        className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
+                                                                                    <button
+                                                                                        type="button"
+                                                                                        onClick={() => setF({ languageMenuOpen: !f.languageMenuOpen })}
+                                                                                        className="form-input !px-3 !py-2 min-h-10 w-full pr-10 text-start text-sm"
                                                                                     >
-                                                                                        <option value="">{t("create.speakers.allLanguages")}</option>
-                                                                                        {languageOptions.map((lang) => (
-                                                                                        <option key={lang} value={lang}>
-                                                                                            {lang}
-                                                                                        </option>
-                                                                                        ))}
-                                                                                    </select>
+                                                                                        {f.language ? (
+                                                                                            <LanguageLabel value={f.language} />
+                                                                                        ) : (
+                                                                                            <span className="text-black/55 dark:text-white/55">{t("create.speakers.allLanguages")}</span>
+                                                                                        )}
+                                                                                    </button>
+                                                                                    {f.languageMenuOpen ? (
+                                                                                        <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-[10030] max-h-56 overflow-y-auto rounded-xl border border-neutral-200 bg-white p-1.5 shadow-xl dark:border-white/10 dark:bg-neutral-950">
+                                                                                            <button
+                                                                                                type="button"
+                                                                                                onClick={() => setF({ language: "", languageMenuOpen: false })}
+                                                                                                className="flex w-full items-center rounded-lg px-3 py-2 text-start text-sm hover:bg-black/5 dark:hover:bg-white/10"
+                                                                                            >
+                                                                                                {t("create.speakers.allLanguages")}
+                                                                                            </button>
+                                                                                            {languageOptions.map((lang) => (
+                                                                                                <button
+                                                                                                    key={lang}
+                                                                                                    type="button"
+                                                                                                    onClick={() => setF({ language: lang, languageMenuOpen: false })}
+                                                                                                    className="flex w-full items-center rounded-lg px-3 py-2 text-start text-sm hover:bg-black/5 dark:hover:bg-white/10"
+                                                                                                >
+                                                                                                    <LanguageLabel value={lang} />
+                                                                                                </button>
+                                                                                            ))}
+                                                                                        </div>
+                                                                                    ) : null}
                                                                                     <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
                                                                                 </div>
                                                                                 </div>
@@ -2653,7 +2830,11 @@ const exportScript = async (format = "pdf") => {
                                                                                                 onClick={() =>
                                                                                                 setF({
                                                                                                     [chip.key]:
-                                                                                                        chip.key === "gender" ? "__all__" : "",
+                                                                                                        chip.key === "gender"
+                                                                                                            ? "__all__"
+                                                                                                            : chip.key === "language"
+                                                                                                                ? DEFAULT_VOICE_LANGUAGE
+                                                                                                                : "",
                                                                                                 })
                                                                                             }
                                                                                                 className="inline-flex items-center gap-1 rounded-full border border-purple-300/70 dark:border-purple-400/45 bg-purple-50 dark:bg-purple-900/25 px-2 py-0.5 text-xs text-purple-700 dark:text-purple-200"

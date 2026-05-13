@@ -1,5 +1,5 @@
 // src/App.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import Header from "./components/Header";
 import HeroSection from "./components/HeroSection";
@@ -19,6 +19,7 @@ import EditPodcast from "./components/editPodcast.jsx";
 import FinalizePublish from "./components/FinalizePublish";
 import EmailAction from "./components/EmailAction";
 import Share from "./components/Share";
+import { syncCreateDraftLease } from "./utils/createDraftSession";
 
 
 
@@ -66,6 +67,13 @@ function useHashRoute() {
 export default function App() {
   useTranslation();
   const hash = useHashRoute();
+  /** Run lease sync before any child (e.g. Create) reads sessionStorage during render. */
+  const createLeaseHashRef = useRef(null);
+  if (createLeaseHashRef.current !== hash) {
+    createLeaseHashRef.current = hash;
+    syncCreateDraftLease(hash);
+  }
+
   const isAccount = hash.startsWith('#/account');
   const isSignup = hash.startsWith('#/signup');
   const isLogin = hash.startsWith('#/login');
@@ -92,6 +100,7 @@ export default function App() {
       window.scrollTo(0, 0);
     }
   }, [hash]);
+
   return (
     <div className={`flex min-h-screen min-w-0 flex-col overflow-x-clip text-black dark:text-white transition-colors duration-500 ${
       isCreateFromStudio ? "bg-cream dark:bg-[#0a0a1a]" : "bg-cream dark:bg-[#0a0a1a]"

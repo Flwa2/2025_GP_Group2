@@ -71,19 +71,19 @@
           notice: ""
         },
         {
-          label: "Variant 4: Confirm New Email",
+          label: "Variant 4: New address confirmed (post-approval)",
           eyebrow: "Email change",
-          title: "Confirm your new email",
+          title: "Your sign-in email is updated",
           message: [
-            "A request was made to change the email address on your WeCast account.",
-            "Your current login email will remain active until this new email address is verified.",
-            "If you did not request this change, you can ignore this email."
+            "Your WeCast sign-in email has been updated to this address.",
+            "The change was approved from your previous email address on file.",
+            "Sign in with this email address going forward."
           ],
-          detailLabel: "Current account email",
-          detailLines: ["current@example.com"],
-          buttonText: "Confirm New Email",
-          buttonUrl: "https://example.com/wecast-confirm-new-email",
-          notice: "The account email will not change unless this new email address is confirmed."
+          detailLabel: "Account details",
+          detailLines: ["Previous sign-in email: current@example.com", "Current sign-in email: new@example.com"],
+          buttonText: "Sign in to WeCast",
+          buttonUrl: "https://wecast-frontend.onrender.com/#/login",
+          notice: "This message is for your records only. It cannot approve or change your email."
         },
         {
           label: "Variant 5: Email Change Requested",

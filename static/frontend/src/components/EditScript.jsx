@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, Mic2, Download, ChevronDown } from "lucide-react";
+import { CheckCircle2, ChevronRight, Mic2, Download, ChevronDown } from "lucide-react";
 import { createPortal } from "react-dom";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
@@ -25,6 +25,13 @@ function authHeaders() {
   const token = localStorage.getItem("token") || sessionStorage.getItem("token");
   if (!token) return {};
   return { Authorization: `Bearer ${token}` };
+}
+
+function formatDraftSavedTime(date = new Date()) {
+  return date.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 /** Persists script + title to Firestore edit draft when we have a podcast id (create / episodes flow). */
@@ -166,7 +173,7 @@ export default function EditScript() {
   const [script, setScript] = useState("");
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [saveMsg, setSaveMsg] = useState("Not saved yet");
+  const [saveMsg, setSaveMsg] = useState("No changes saved yet");
   const [loadingDraft, setLoadingDraft] = useState(true);
   const [scriptTemplate, setScriptTemplate] = useState("");
   const [showTitle, setShowTitle] = useState("");
@@ -198,6 +205,10 @@ export default function EditScript() {
   const hasUnsavedChanges = useMemo(() => {
     return script.trim() !== lastSavedScript.trim() || showTitle !== lastSavedTitle;
   }, [script, lastSavedScript, showTitle, lastSavedTitle]);
+
+  const markDraftSaved = () => {
+    setSaveMsg(`Saved at ${formatDraftSavedTime()}`);
+  };
 
   const exportScript = async (format = "pdf") => {
     try {
@@ -553,14 +564,14 @@ export default function EditScript() {
 
     if (!isAuthenticated()) {
       sessionStorage.setItem("guestEditDraft", content);
-      setSaveMsg("Saved locally for this episode flow.");
+      markDraftSaved();
       setToastMsg("Script saved in this draft.");
       setTimeout(() => setToastMsg(""), 3000);
       return;
     }
 
     setSaving(true);
-    setSaveMsg("Saving…");
+    setSaveMsg("Saving...");
     try {
       const result = await syncEditScriptDraftToServer(content, showTitle || "");
       if (!result.ok) {
@@ -568,12 +579,12 @@ export default function EditScript() {
         return;
       }
       if (result.localOnly) {
-        setSaveMsg("Saved locally for this episode flow.");
+        markDraftSaved();
         setToastMsg("Draft updated in this browser.");
         setTimeout(() => setToastMsg(""), 3000);
         return;
       }
-      setSaveMsg("Last saved: " + new Date().toLocaleTimeString());
+      markDraftSaved();
       setToastMsg("Script saved successfully!");
       setTimeout(() => setToastMsg(""), 3000);
     } catch {
@@ -610,6 +621,7 @@ export default function EditScript() {
         }
         setLastSavedScript(content);
         setLastSavedTitle(showTitle || "");
+        markDraftSaved();
       } catch (error) {
         console.error("Failed to save script:", error);
       } finally {
@@ -620,6 +632,14 @@ export default function EditScript() {
     persistEditorDraft(content);
     window.location.hash = "#/create";
   };
+
+  const isSaveError =
+    saveMsg.includes("Each speaker line must include text after the colon") ||
+    saveMsg.includes("Script is empty") ||
+    saveMsg.includes("can't clear") ||
+    saveMsg.includes("Failed") ||
+    saveMsg.includes("No saved draft");
+  const isSavedStatus = saveMsg.startsWith("Saved at");
 
   return (
     <div className="min-h-screen bg-cream dark:bg-[#0a0a0a]">
@@ -687,23 +707,23 @@ export default function EditScript() {
 
           <div
             className={
-              `mt-8 mb-6 max-w-full rounded-2xl border border-purple-400/25 px-4 py-4 ` +
-              `bg-gradient-to-br from-[#211333] via-[#15101f] to-[#1b1228] ` +
-              `shadow-[0_14px_34px_rgba(88,28,135,0.22)] flex flex-wrap items-start justify-between gap-3 overflow-hidden ` +
-              `sm:px-5 sm:shadow-[0_18px_42px_rgba(88,28,135,0.24)] ` +
+              `mt-8 mb-6 max-w-full rounded-2xl border border-neutral-200 px-4 py-4 ` +
+              `bg-white shadow-sm shadow-slate-900/[0.04] ` +
+              `dark:border-neutral-800 dark:bg-neutral-900 dark:shadow-[0_16px_40px_rgba(0,0,0,0.22)] flex flex-wrap items-start justify-between gap-3 overflow-hidden ` +
+              `sm:px-5 sm:shadow-[0_10px_28px_rgba(15,23,42,0.055)] dark:sm:shadow-[0_18px_44px_rgba(0,0,0,0.24)] ` +
               `sm:flex-row sm:items-center sm:gap-4 transition-all ` +
               `duration-300 ${titleJustUpdated
-                ? "ring-2 ring-purple-400/45 shadow-[0_16px_38px_rgba(124,58,237,0.28)] sm:shadow-[0_20px_46px_rgba(124,58,237,0.30)]"
-                : "ring-0"
+                ? "ring-2 ring-purple-400/30 shadow-[0_14px_34px_rgba(124,58,237,0.13)] dark:shadow-[0_16px_38px_rgba(124,58,237,0.22)] sm:shadow-[0_16px_38px_rgba(124,58,237,0.14)] dark:sm:shadow-[0_20px_46px_rgba(124,58,237,0.24)]"
+                : "ring-1 ring-purple-100/35 dark:ring-purple-400/10"
               }`
             }
           >
             <div className="flex min-w-0 flex-[1_1_18rem] items-start gap-3 sm:items-center">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-purple-300/25 bg-purple-500/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
-                <Mic2 className="w-4 h-4 text-purple-200" />
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-purple-200 bg-purple-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] dark:border-purple-400/25 dark:bg-purple-500/12 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+                <Mic2 className="w-4 h-4 text-purple-700 dark:text-purple-200" />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-[10px] uppercase tracking-[0.18em] text-purple-200/75 sm:text-[11px]">
+                <p className="text-[10px] uppercase tracking-[0.18em] text-purple-700/75 dark:text-purple-200/75 sm:text-[11px]">
                   Podcast Title
                 </p>
                 {isEditingTitle ? (
@@ -723,11 +743,11 @@ export default function EditScript() {
                       }
                       if (e.key === "Escape") cancelEditTitle();
                     }}
-                    className="mt-1 block w-full min-w-0 resize-none overflow-hidden border-0 border-b border-purple-300/45 bg-transparent px-0 pb-1 text-lg font-semibold leading-tight text-white caret-purple-200 outline-none transition focus:border-purple-200 focus:ring-0"
+                    className="mt-1 block w-full min-w-0 resize-none overflow-hidden border-0 border-b border-purple-500/45 bg-transparent px-0 pb-1 text-lg font-semibold leading-tight text-neutral-950 caret-purple-600 outline-none transition placeholder:text-neutral-500 focus:border-purple-600 focus:ring-0 dark:border-purple-300/45 dark:text-white dark:caret-purple-200 dark:focus:border-purple-200"
                     aria-label="Podcast title"
                   />
                 ) : (
-                  <p className="mt-1 max-w-full break-words text-lg font-semibold leading-tight text-white">
+                  <p className="mt-1 max-w-full break-words text-lg font-semibold leading-tight text-neutral-950 dark:text-white">
                     {loadingDraft ? "Loading script..." : showTitle || "Podcast Show"}
                   </p>
                 )}
@@ -738,7 +758,7 @@ export default function EditScript() {
               <button
                 type="button"
                 onClick={startEditTitle}
-                className="inline-flex shrink-0 items-center justify-center rounded-full border border-purple-300/35 bg-purple-500/10 px-3 py-1.5 text-xs font-semibold text-purple-100 transition-all duration-200 hover:border-purple-300/60 hover:bg-purple-500/18"
+                className="inline-flex shrink-0 items-center justify-center rounded-full border border-purple-200 bg-white px-3 py-1.5 text-xs font-semibold text-purple-700 shadow-sm transition-all duration-200 hover:border-purple-300 hover:bg-purple-50 hover:text-purple-800 dark:border-purple-300/30 dark:bg-purple-500/10 dark:text-purple-100 dark:shadow-none dark:hover:border-purple-300/55 dark:hover:bg-purple-500/18"
               >
                 Edit title
               </button>
@@ -754,7 +774,7 @@ export default function EditScript() {
                 <button
                   type="button"
                   onClick={cancelEditTitle}
-                  className="min-h-9 flex-1 rounded-full border border-purple-300/25 px-4 py-1.5 text-xs font-semibold text-purple-100 transition hover:bg-purple-500/12 sm:min-h-9 sm:flex-none sm:min-w-20"
+                  className="min-h-9 flex-1 rounded-full border border-purple-300/60 px-4 py-1.5 text-xs font-semibold text-purple-700 transition hover:bg-purple-50 dark:border-purple-300/25 dark:text-purple-100 dark:hover:bg-purple-500/12 sm:min-h-9 sm:flex-none sm:min-w-20"
                 >
                   Cancel
                 </button>
@@ -849,7 +869,7 @@ export default function EditScript() {
                           : 'border border-neutral-300 dark:border-neutral-700 hover:bg-black/5 dark:hover:bg-white/5'
                       }`}
                     >
-                      {saving ? "Saving…" : "Save Script"}
+                      {saving ? "Saving..." : "Save Script"}
                     </button>
 
                     <button
@@ -863,16 +883,16 @@ export default function EditScript() {
 
                 <div
                   className={
-                    "mt-2 text-sm " +
-                    (saveMsg.includes("Each speaker line must include text after the colon")
+                    "mt-2 flex items-center gap-1.5 text-sm " +
+                    (isSaveError
                       ? "text-red-500"
-                      : "text-black/70 dark:text-white/70")
+                      : isSavedStatus
+                        ? "text-emerald-700 dark:text-emerald-300"
+                        : "text-black/55 dark:text-white/55")
                   }
                 >
-                  {saveMsg}
-                  {hasUnsavedChanges && !saveMsg && (
-                    <span className="ml-2 text-yellow-600 dark:text-yellow-400">(You have unsaved changes)</span>
-                  )}
+                  {isSavedStatus ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : null}
+                  <span>{saveMsg}</span>
                 </div>
               </>
             )}

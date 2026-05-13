@@ -1283,7 +1283,9 @@ def _wecast_frontend_url():
 
 
 def _wecast_logo_url():
-    return (os.getenv("WECAST_LOGO_URL") or f"{_wecast_frontend_url()}/logo.png").strip()
+    from services.email_config import logo_url
+
+    return logo_url()
 
 
 def _firebase_web_api_key():
@@ -1353,6 +1355,12 @@ EMAIL_VERIFICATION_ACTION_TTL_SECONDS = int(
 RECENT_AUTH_MAX_AGE_SECONDS = int(
     os.getenv("WECAST_RECENT_AUTH_MAX_AGE_SECONDS", "900")
 )
+COVER_GENERATION_COOLDOWN_SECONDS = int(
+    os.getenv("WECAST_COVER_GENERATION_COOLDOWN_SECONDS", "60")
+)
+COVER_GENERATION_DAILY_LIMIT = int(
+    os.getenv("WECAST_COVER_GENERATION_DAILY_LIMIT", "10")
+)
 
 
 def _resend_is_configured():
@@ -1413,6 +1421,54 @@ def _log_email_runtime_diagnostics(flow):
         f"FROM_EMAIL_DOMAIN={sender_domain or '<missing>'}",
         f"frontend={_wecast_frontend_url()}",
     )
+
+
+def _utc_now():
+    return datetime.now(timezone.utc)
+
+
+def _coerce_utc_datetime(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+    return None
+
+
+def _cover_generation_limit_status(podcast_data):
+    now = _utc_now()
+    last_at = _coerce_utc_datetime((podcast_data or {}).get("coverGenerationLastAt"))
+    if COVER_GENERATION_COOLDOWN_SECONDS > 0 and last_at:
+        elapsed = (now - last_at).total_seconds()
+        if elapsed < COVER_GENERATION_COOLDOWN_SECONDS:
+            retry_after = max(1, int(math.ceil(COVER_GENERATION_COOLDOWN_SECONDS - elapsed)))
+            return False, {
+                "error": "Please wait before generating another cover.",
+                "retryAfterSeconds": retry_after,
+            }
+
+    today = now.date().isoformat()
+    window = str((podcast_data or {}).get("coverGenerationWindow") or "")
+    count = int((podcast_data or {}).get("coverGenerationCount") or 0)
+    if window != today:
+        count = 0
+
+    if COVER_GENERATION_DAILY_LIMIT > 0 and count >= COVER_GENERATION_DAILY_LIMIT:
+        return False, {
+            "error": "Daily cover generation limit reached for this episode.",
+            "limit": COVER_GENERATION_DAILY_LIMIT,
+        }
+
+    return True, {
+        "window": today,
+        "count": count,
+    }
 
 
 def _log_password_reset_step(step, **details):
@@ -1905,130 +1961,6 @@ def _build_password_reset_email(display_name, email, reset_link):
     return subject, text, html_body
 
 
-def _build_email_change_confirmation_email(display_name, current_email, new_email, confirm_link):
-    safe_name = html.escape((display_name or "").strip() or "there")
-    safe_current_email = html.escape((current_email or "").strip())
-    safe_new_email = html.escape((new_email or "").strip())
-    safe_link = html.escape((confirm_link or "").strip(), quote=True)
-    safe_app_url = html.escape(_wecast_frontend_url(), quote=True)
-    safe_logo_url = html.escape(_wecast_logo_url(), quote=True)
-
-    subject = "Confirm New Email"
-    text = (
-        f"Hi {display_name or 'there'},\n\n"
-        f"We received a request to change your WeCast email from {current_email} to {new_email}.\n"
-        f"Confirm the new address with this secure link:\n{confirm_link}\n\n"
-        "If you did not request this change, you can ignore this email.\n\n"
-        "WeCast"
-    )
-    html_body = f"""\
-<!doctype html>
-<html lang="en">
-  <body style="margin:0;padding:0;background:#f7efe2;font-family:Arial,'Helvetica Neue',Helvetica,sans-serif;color:#171717;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7efe2;padding:32px 16px;">
-      <tr>
-        <td align="center">
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;background:#fffaf0;border:1px solid #ead9b7;border-radius:24px;overflow:hidden;box-shadow:0 18px 40px rgba(23,23,23,0.08);">
-            <tr>
-              <td style="background:linear-gradient(180deg,#f6d35a 0%,#f7e6b3 100%);padding:28px 32px 18px;">
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                  <tr>
-                    <td style="vertical-align:middle;">
-                      <img src="{safe_logo_url}" alt="WeCast" width="42" height="42" style="display:block;border:0;outline:none;text-decoration:none;">
-                    </td>
-                    <td style="vertical-align:middle;padding-left:12px;">
-                      <div style="font-family:Georgia,'Times New Roman',serif;font-size:34px;line-height:1;color:#111111;font-weight:700;">WeCast</div>
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:34px 32px 16px;">
-                <div style="font-size:14px;line-height:1.5;color:#6b7280;">Email Change</div>
-                <h1 style="margin:10px 0 16px;font-size:34px;line-height:1.08;color:#111111;">Confirm your new email</h1>
-                <p style="margin:0 0 14px;font-size:16px;line-height:1.8;color:#374151;">Hi {safe_name},</p>
-                <p style="margin:0 0 14px;font-size:16px;line-height:1.8;color:#374151;">
-                  You asked to change your WeCast email from
-                  <span style="font-weight:600;color:#111111;">{safe_current_email}</span>
-                  to
-                  <span style="font-weight:600;color:#111111;">{safe_new_email}</span>.
-                </p>
-                <p style="margin:0 0 22px;font-size:16px;line-height:1.8;color:#374151;">
-                  Confirm this new address to finish the update.
-                </p>
-                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 22px;">
-                  <tr>
-                    <td align="center" bgcolor="#111111" style="border-radius:14px;">
-                      <a href="{safe_link}" style="display:inline-block;padding:15px 24px;font-size:16px;font-weight:700;line-height:1;color:#ffffff;text-decoration:none;">Confirm New Email</a>
-                    </td>
-                  </tr>
-                </table>
-                <p style="margin:0 0 14px;font-size:14px;line-height:1.8;color:#6b7280;">
-                  If the button doesnâ€™t work, copy and paste this link into your browser:
-                </p>
-                <p style="margin:0 0 20px;font-size:13px;line-height:1.7;word-break:break-word;color:#7c3aed;">
-                  <a href="{safe_link}" style="color:#7c3aed;text-decoration:none;">{safe_link}</a>
-                </p>
-                <div style="border-top:1px solid #ead9b7;margin-top:22px;padding-top:18px;">
-                  <p style="margin:0 0 10px;font-size:14px;line-height:1.7;color:#6b7280;">
-                    If you didnâ€™t request this change, ignore this email and keep using your current address.
-                  </p>
-                  <p style="margin:0;font-size:14px;line-height:1.7;color:#6b7280;">
-                    Need help? Visit
-                    <a href="{safe_app_url}" style="color:#111111;font-weight:600;text-decoration:none;"> WeCast</a>.
-                  </p>
-                </div>
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>
-"""
-    return subject, text, html_body
-
-
-def _build_email_change_notice_email(display_name, old_email, new_email):
-    safe_name = html.escape((display_name or "").strip() or "there")
-    safe_old_email = html.escape((old_email or "").strip())
-    safe_new_email = html.escape((new_email or "").strip())
-    safe_app_url = html.escape(_wecast_frontend_url(), quote=True)
-
-    subject = "Email Changed Successfully"
-    text = (
-        f"Hi {display_name or 'there'},\n\n"
-        f"Your WeCast sign-in email was changed from {old_email} to {new_email}.\n"
-        "If you did not make this change, contact support immediately.\n\n"
-        f"WeCast: {safe_app_url}"
-    )
-    html_body = f"""\
-<!doctype html>
-<html lang="en">
-  <body style="margin:0;padding:24px;background:#f7efe2;font-family:Arial,'Helvetica Neue',Helvetica,sans-serif;color:#171717;">
-    <div style="max-width:620px;margin:0 auto;background:#fffaf0;border:1px solid #ead9b7;border-radius:24px;padding:32px;">
-      <div style="font-size:14px;line-height:1.5;color:#6b7280;">Security Notice</div>
-      <h1 style="margin:10px 0 16px;font-size:32px;line-height:1.12;color:#111111;">Your email was updated</h1>
-      <p style="margin:0 0 14px;font-size:16px;line-height:1.8;color:#374151;">Hi {safe_name},</p>
-      <p style="margin:0 0 14px;font-size:16px;line-height:1.8;color:#374151;">
-        Your WeCast sign-in email changed from
-        <span style="font-weight:600;color:#111111;">{safe_old_email}</span>
-        to
-        <span style="font-weight:600;color:#111111;">{safe_new_email}</span>.
-      </p>
-      <p style="margin:0;font-size:15px;line-height:1.8;color:#6b7280;">
-        If you did not make this change, contact support immediately through
-        <a href="{safe_app_url}" style="color:#111111;font-weight:600;text-decoration:none;"> WeCast</a>.
-      </p>
-    </div>
-  </body>
-</html>
-"""
-    return subject, text, html_body
-
-
 def _wecast_brand_name():
     return (
         os.getenv("WECAST_BRAND_NAME")
@@ -2054,6 +1986,8 @@ def _render_wecast_email(
     intro_lines,
     action_label="",
     action_link="",
+    secondary_action_label="",
+    secondary_action_link="",
     detail_label="",
     detail_lines=None,
     support_lines=None,
@@ -2072,6 +2006,8 @@ def _render_wecast_email(
     safe_greeting_name = html.escape((greeting_name or "").strip() or "there")
     safe_action_label = html.escape((action_label or "").strip())
     safe_action_link = html.escape((action_link or "").strip(), quote=True)
+    safe_secondary_action_label = html.escape((secondary_action_label or "").strip())
+    safe_secondary_action_link = html.escape((secondary_action_link or "").strip(), quote=True)
     safe_logo_url = html.escape(logo_url, quote=True)
     safe_detail_label = html.escape((detail_label or "").strip())
     safe_accent_start = html.escape((accent_start or "#f3c95b").strip(), quote=True)
@@ -2136,16 +2072,58 @@ def _render_wecast_email(
 
     action_html = ""
     if safe_action_label and safe_action_link:
-        action_html = f"""\
-<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 18px;">
+        fallback_label = "primary button" if safe_secondary_action_label and safe_secondary_action_link else "button"
+        primary_btn = (
+            "display:block;padding:11px 22px;font-size:14px;line-height:1.35;font-weight:600;"
+            "color:#ffffff;text-decoration:none;text-align:center;min-width:148px;white-space:nowrap;"
+            "box-sizing:border-box;box-shadow:0 4px 14px rgba(17,17,17,0.18);"
+        )
+        secondary_btn = (
+            "display:block;padding:11px 22px;font-size:14px;line-height:1.35;font-weight:600;"
+            "color:#4c3d78;text-decoration:none;text-align:center;min-width:148px;white-space:nowrap;"
+            "box-sizing:border-box;background:#faf9ff;border:1px solid #d4c8ec;border-radius:12px;"
+        )
+        single_btn = (
+            "display:inline-block;padding:12px 26px;font-size:14px;line-height:1.35;font-weight:600;"
+            "color:#ffffff;text-decoration:none;text-align:center;border-radius:12px;"
+            "box-shadow:0 4px 16px rgba(17,17,17,0.16);"
+        )
+        if safe_secondary_action_label and safe_secondary_action_link:
+            action_html = f"""\
+<table role="presentation" align="center" cellpadding="0" cellspacing="0" border="0" class="wecast-resend-btn-stack" style="margin:0 auto 18px;">
   <tr>
-    <td align="center" bgcolor="#111111" style="border-radius:16px;">
-      <a href="{safe_action_link}" style="display:inline-block;padding:15px 26px;font-size:16px;font-weight:700;line-height:1;color:#ffffff;text-decoration:none;">{safe_action_label}</a>
+    <td align="center" valign="middle" style="padding:0 8px 10px 0;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-radius:12px;background:#111111;">
+        <tr>
+          <td align="center" style="border-radius:12px;background:#111111;">
+            <a class="wecast-resend-btn" href="{safe_action_link}" style="{primary_btn}border-radius:12px;background:#111111;">{safe_action_label}</a>
+          </td>
+        </tr>
+      </table>
+    </td>
+    <td align="center" valign="middle" style="padding:0 0 10px 8px;">
+      <a class="wecast-resend-btn" href="{safe_secondary_action_link}" style="{secondary_btn}">{safe_secondary_action_label}</a>
     </td>
   </tr>
 </table>
 <p style="margin:0 0 12px;font-size:13px;line-height:1.75;color:#697180;">
-  If the button does not work, copy and paste this link into your browser:
+  If the {fallback_label} does not work, copy and paste this link into your browser:
+</p>
+<p style="margin:0 0 8px;font-size:13px;line-height:1.75;word-break:break-word;">
+  <a href="{safe_action_link}" style="color:#815c17;text-decoration:none;">{safe_action_link}</a>
+</p>
+"""
+        else:
+            action_html = f"""\
+<table role="presentation" align="center" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 18px;">
+  <tr>
+    <td align="center" bgcolor="#111111" style="border-radius:12px;background:#111111;">
+      <a class="wecast-resend-btn" href="{safe_action_link}" style="{single_btn}">{safe_action_label}</a>
+    </td>
+  </tr>
+</table>
+<p style="margin:0 0 12px;font-size:13px;line-height:1.75;color:#697180;">
+  If the {fallback_label} does not work, copy and paste this link into your browser:
 </p>
 <p style="margin:0 0 8px;font-size:13px;line-height:1.75;word-break:break-word;">
   <a href="{safe_action_link}" style="color:#815c17;text-decoration:none;">{safe_action_link}</a>
@@ -2155,6 +2133,18 @@ def _render_wecast_email(
     return f"""\
 <!doctype html>
 <html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="x-apple-disable-message-reformatting">
+    <style type="text/css">
+      @media only screen and (max-width: 620px) {{
+        .wecast-resend-btn-stack tr {{ display: block !important; }}
+        .wecast-resend-btn-stack td {{ display: block !important; width: 100% !important; padding: 0 0 10px 0 !important; max-width: 100% !important; }}
+        .wecast-resend-btn {{ width: 100% !important; max-width: 100% !important; white-space: normal !important; box-sizing: border-box !important; }}
+      }}
+    </style>
+  </head>
   <body style="margin:0;padding:0;background:#f6efe2;font-family:Arial,'Helvetica Neue',Helvetica,sans-serif;color:#171717;">
     <div style="display:none;max-height:0;overflow:hidden;opacity:0;">{safe_preheader}</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:linear-gradient(180deg,#f6efe2 0%,#fbf7ef 100%);padding:34px 16px;">
@@ -2241,39 +2231,43 @@ def _build_password_reset_email(display_name, email, reset_link):
     return subject, text, html_body
 
 
-def _build_email_change_confirmation_email(display_name, current_email, new_email, confirm_link):
+def _build_email_change_new_address_confirmed_email(display_name, new_email, previous_email):
+    """Variant 4 (Resend): informational notice to the new address after approval. No tokenized links."""
     resolved_name = (display_name or "").strip() or "there"
-    resolved_current_email = (current_email or "").strip()
-    resolved_new_email = (new_email or "").strip()
-    resolved_link = (confirm_link or "").strip()
+    resolved_new = (new_email or "").strip()
+    resolved_prev = (previous_email or "").strip()
     brand_name = _wecast_brand_name()
+    login_url = f"{_wecast_frontend_url().strip().rstrip('/')}/#/login"
 
-    subject = "Confirm New Email"
+    subject = "Your WeCast sign-in email was updated"
     text = (
         f"Hi {resolved_name},\n\n"
-        f"We received a request to change your {brand_name} email from {resolved_current_email} to {resolved_new_email}.\n"
-        f"Confirm the new address with this secure link:\n{resolved_link}\n\n"
-        "If you did not request this change, you can ignore this email.\n\n"
+        f"Your {brand_name} sign-in email has been updated to {resolved_new}.\n"
+        "The change was approved from your previous email address on file.\n"
+        "This message is for your records only.\n\n"
+        f"Sign in to {brand_name}:\n{login_url}\n\n"
         f"{brand_name}"
     )
+    detail_lines = [f"Previous sign-in email: {resolved_prev}", f"Current sign-in email: {resolved_new}"]
+    if not resolved_prev:
+        detail_lines = [f"Current sign-in email: {resolved_new}"]
     html_body = _render_wecast_email(
-        preheader=f"Confirm your new email address for {brand_name}.",
+        preheader=f"Your {brand_name} sign-in email is now {resolved_new}.",
         eyebrow="Email Change",
-        title="Confirm your new email",
+        title="Your sign-in email is updated",
         greeting_name=resolved_name,
         intro_lines=[
-            f"You requested a sign-in email change from {resolved_current_email} to {resolved_new_email}.",
-            "Confirm the new address below to finish the update and keep your account secure.",
+            f"Your {brand_name} sign-in email is now {resolved_new}.",
+            "The change was approved from your previous email address on file.",
+            "Sign in with this email address going forward.",
         ],
-        action_label="Confirm New Email",
-        action_link=resolved_link,
-        detail_label="Before you continue",
-        detail_lines=[
-            "Only click this button if you started the change from your WeCast profile.",
-            "If you did not request this, ignore the email and keep using your current address.",
-        ],
+        action_label="Sign in to WeCast",
+        action_link=login_url,
+        detail_label="Account details",
+        detail_lines=detail_lines,
         support_lines=[
-            "If this change was not requested by you, contact support as soon as possible.",
+            "This message cannot approve or change your email.",
+            "If you did not request this change, contact support immediately.",
         ],
         accent_start="#9fd1ff",
         accent_end="#dff0ff",
@@ -2281,19 +2275,22 @@ def _build_email_change_confirmation_email(display_name, current_email, new_emai
     return subject, text, html_body
 
 
-def _build_email_change_requested_email(display_name, old_email, new_email, cancel_link):
+def _build_email_change_requested_email(display_name, old_email, new_email, approve_link, cancel_link):
     resolved_name = (display_name or "").strip() or "there"
     resolved_old_email = (old_email or "").strip()
     resolved_new_email = (new_email or "").strip()
-    resolved_link = (cancel_link or "").strip()
+    resolved_approve_link = (approve_link or "").strip()
+    resolved_cancel_link = (cancel_link or "").strip()
     brand_name = _wecast_brand_name()
 
     subject = "Email Change Requested"
     text = (
         f"Hi {resolved_name},\n\n"
         f"A request was made to change the email address on your {brand_name} account from {resolved_old_email} to {resolved_new_email}.\n"
-        "No change will happen unless the new email address is verified.\n"
-        f"If this was not you, cancel the pending email change here:\n{resolved_link}\n\n"
+        "Your current email address must approve this request before any account email can change.\n\n"
+        f"Approve email change:\n{resolved_approve_link}\n\n"
+        f"Cancel email change:\n{resolved_cancel_link}\n\n"
+        "If this was not you, cancel the request immediately and change your password.\n\n"
         f"{brand_name}"
     )
     html_body = _render_wecast_email(
@@ -2303,16 +2300,18 @@ def _build_email_change_requested_email(display_name, old_email, new_email, canc
         greeting_name=resolved_name,
         intro_lines=[
             f"A request was made to change your sign-in email from {resolved_old_email} to {resolved_new_email}.",
-            "No change will happen unless the new email address is verified.",
+            "Your current email address must approve this request before any account email can change.",
         ],
-        action_label="Cancel email change",
-        action_link=resolved_link,
+        action_label="Approve email change",
+        action_link=resolved_approve_link,
+        secondary_action_label="Cancel email change",
+        secondary_action_link=resolved_cancel_link,
         detail_label="Requested new email",
         detail_lines=[
             resolved_new_email,
         ],
         support_lines=[
-            "If this was not you, cancel the request immediately.",
+            "If this was not you, cancel the request immediately and change your password.",
         ],
         accent_start="#f0a49e",
         accent_end="#fde3df",
@@ -2405,12 +2404,11 @@ def _send_reset_email_via_resend(email, display_name, reset_link):
     )
 
 
-def _send_email_change_confirmation_via_resend(new_email, display_name, current_email, confirm_link):
-    subject, text_body, html_body = _build_email_change_confirmation_email(
+def _send_email_change_new_address_confirmed_via_resend(new_email, display_name, previous_email):
+    subject, text_body, html_body = _build_email_change_new_address_confirmed_email(
         display_name,
-        current_email,
         new_email,
-        confirm_link,
+        previous_email,
     )
     return _send_email_via_resend(
         to_email=new_email,
@@ -2420,11 +2418,12 @@ def _send_email_change_confirmation_via_resend(new_email, display_name, current_
     )
 
 
-def _send_email_change_requested_via_resend(old_email, display_name, new_email, cancel_link):
+def _send_email_change_requested_via_resend(old_email, display_name, new_email, approve_link, cancel_link):
     subject, text_body, html_body = _build_email_change_requested_email(
         display_name,
         old_email,
         new_email,
+        approve_link,
         cancel_link,
     )
     return _send_email_via_resend(
@@ -3977,7 +3976,7 @@ def api_voice_preview():
     data = request.get_json(force=True) or {}
     incoming = (data.get("voiceId") or "").strip()
     incoming_name = (data.get("voiceName") or "").strip()
-    text = (data.get("text") or "Hello, this is a WeCast preview.").strip()
+    text = (data.get("text") or "Hi, this is a WeCast sample.").strip()
     if len(text) > 120:
         text = text[:120].strip()
 
@@ -4313,6 +4312,13 @@ def api_cover_generate(podcast_id):
         return err
 
     payload = request.get_json(silent=True) or {}
+    limit_ok, limit_state = _cover_generation_limit_status(pdata)
+    if not limit_ok:
+        response = jsonify(limit_state)
+        retry_after = limit_state.get("retryAfterSeconds")
+        if retry_after:
+            response.headers["Retry-After"] = str(retry_after)
+        return response, 429
 
     # prefer the latest title (payload -> session draft -> firestore)
     draft = _get_draft_for(podcast_id)
@@ -4348,6 +4354,16 @@ def api_cover_generate(podcast_id):
     except Exception as e:
         print("Cover persist error:", e)
         return jsonify(error="Cover generated but failed to persist."), 500
+
+    cover_generation_count = int(limit_state.get("count") or 0) + 1
+    db.collection("podcasts").document(podcast_id).set(
+        {
+            "coverGenerationLastAt": firestore.SERVER_TIMESTAMP,
+            "coverGenerationWindow": limit_state.get("window") or _utc_now().date().isoformat(),
+            "coverGenerationCount": cover_generation_count,
+        },
+        merge=True,
+    )
 
     # Keep session draft for immediate preview/finalize UI state.
     _set_draft_for(podcast_id, {
@@ -5066,6 +5082,119 @@ def api_password_reset_confirm():
         return jsonify(error="This reset link is invalid, expired, or already used."), 400
 
 
+def _firebase_reset_password_error(response):
+    try:
+        body = response.json()
+        code = ((body.get("error") or {}).get("message") or "").strip()
+    except Exception:
+        code = ""
+
+    if code in {"EXPIRED_OOB_CODE", "INVALID_OOB_CODE"}:
+        return "This reset link is invalid or has expired.", 400
+    if code == "USER_DISABLED":
+        return "This account is disabled.", 403
+    if code == "WEAK_PASSWORD":
+        return "Choose a stronger password.", 400
+    return "We couldn't update your password from this link.", 502
+
+
+@app.post("/api/password-reset/firebase-confirm")
+def api_firebase_password_reset_confirm():
+    from firebase_admin import auth as fb_auth
+    from services.email_service import send_password_changed_email
+
+    data = request.get_json(silent=True) or {}
+    oob_code = (data.get("oobCode") or data.get("oob_code") or "").strip()
+    new_password = data.get("newPassword") or ""
+    confirm_password = data.get("confirmPassword") or ""
+
+    if not oob_code:
+        return jsonify(error="Missing reset code."), 400
+
+    password_error = _password_validation_error(new_password, confirm_password)
+    if password_error:
+        return jsonify(error=password_error), 400
+
+    api_key = _firebase_web_api_key()
+    if not api_key:
+        return jsonify(error="Password reset is not configured right now."), 503
+
+    try:
+        response = requests.post(
+            f"https://identitytoolkit.googleapis.com/v1/accounts:resetPassword?key={api_key}",
+            json={
+                "oobCode": oob_code,
+                "newPassword": new_password,
+            },
+            timeout=20,
+        )
+    except Exception as reset_error:
+        print(f"Firebase password reset confirm request failed: {type(reset_error).__name__}")
+        return jsonify(error="We couldn't update your password from this link."), 502
+
+    if not response.ok:
+        error_message, status_code = _firebase_reset_password_error(response)
+        print(
+            "Firebase password reset confirm failed:",
+            f"status={response.status_code}",
+            flush=True,
+        )
+        return jsonify(error=error_message), status_code
+
+    try:
+        reset_payload = response.json()
+    except Exception:
+        reset_payload = {}
+
+    resolved_email = _normalize_email(reset_payload.get("email"))
+    if not is_reasonably_valid_email(resolved_email):
+        return jsonify(error="Password updated, but the account email could not be confirmed."), 502
+
+    doc = get_user_doc_by_candidates(resolved_email, email=resolved_email)
+    if doc and doc.exists:
+        doc.reference.set(
+            {
+                "password_hash": generate_password_hash(new_password),
+                "authProvider": "password",
+                "failed_attempts": 0,
+                "lock_until": None,
+                "pendingPasswordReset": firestore.DELETE_FIELD,
+                "last_password_reset_completed": datetime.utcnow().isoformat(),
+            },
+            merge=True,
+        )
+
+    tokens_revoked = False
+    try:
+        firebase_user = fb_auth.get_user_by_email(resolved_email)
+        fb_auth.revoke_refresh_tokens(firebase_user.uid)
+        tokens_revoked = True
+    except Exception as revoke_error:
+        print(f"Password reset session revocation skipped: errorType={type(revoke_error).__name__}")
+
+    confirmation_sent = False
+    try:
+        result = send_password_changed_email(resolved_email)
+        confirmation_sent = bool(result.get("ok"))
+        if not confirmation_sent:
+            print(
+                "Password changed confirmation email failed:",
+                f"step={result.get('step') or 'send'}",
+                f"errorType={result.get('errorType') or 'UnknownError'}",
+                f"status={result.get('status')}",
+                flush=True,
+            )
+    except Exception as email_error:
+        print(f"Password changed confirmation email failed: {type(email_error).__name__}")
+
+    return jsonify(
+        ok=True,
+        email=resolved_email,
+        confirmationSent=confirmation_sent,
+        sessionsRevoked=tokens_revoked,
+    )
+
+
 def _email_result_http_status(result):
     """Map email_service result to HTTP status (avoid 500 for upstream provider failures)."""
     step = (result.get("step") or "").strip()
@@ -5167,22 +5296,30 @@ def api_send_verification_email():
         ), 503
 
     try:
-        try:
-            action_url = generate_email_verification_link(email)
-        except fb_auth.UserNotFoundError:
-            return jsonify(ok=True)
-        except Exception as link_error:
+        if config.get("provider") == "resend":
             action_url, _ = _issue_internal_verification_link(
                 email,
-                "custom_internal_fallback",
+                "custom_resend",
             )
             if not action_url:
                 return jsonify(ok=True)
-            print(
-                "Email verification debug: using internal fallback after Firebase action link failure",
-                f"errorType={type(link_error).__name__}",
-                f"firebaseCode={getattr(link_error, 'code', '')}",
-            )
+        else:
+            try:
+                action_url = generate_email_verification_link(email)
+            except fb_auth.UserNotFoundError:
+                return jsonify(ok=True)
+            except Exception as link_error:
+                action_url, _ = _issue_internal_verification_link(
+                    email,
+                    "custom_internal_fallback",
+                )
+                if not action_url:
+                    return jsonify(ok=True)
+                print(
+                    "Email verification debug: using internal fallback after Firebase action link failure",
+                    f"errorType={type(link_error).__name__}",
+                    f"firebaseCode={getattr(link_error, 'code', '')}",
+                )
 
         result = send_verification_email(email, action_url=action_url)
         if result.get("ok"):
@@ -5300,12 +5437,27 @@ def api_send_password_reset_email():
         ), 503
 
     try:
-        _log_password_reset_step("firebase_link_attempt_start")
-        action_url = generate_password_reset_link(email)
-        _log_password_reset_step(
-            "firebase_link_attempt_success",
-            localhost=("localhost" in action_url or "127.0.0.1" in action_url),
-        )
+        if config.get("provider") == "resend":
+            _log_password_reset_step("custom_link_attempt_start")
+            action_url, _ = _issue_internal_password_reset_link(
+                email,
+                "custom_resend",
+            )
+            if not action_url:
+                _log_password_reset_step("custom_link_no_action_url")
+                _log_password_reset_step("final_response", status=200, reason="hidden_no_custom_link")
+                return jsonify(ok=True)
+            _log_password_reset_step(
+                "custom_link_attempt_success",
+                localhost=("localhost" in action_url or "127.0.0.1" in action_url),
+            )
+        else:
+            _log_password_reset_step("firebase_link_attempt_start")
+            action_url = generate_password_reset_link(email)
+            _log_password_reset_step(
+                "firebase_link_attempt_success",
+                localhost=("localhost" in action_url or "127.0.0.1" in action_url),
+            )
     except fb_auth.UserNotFoundError:
         _log_password_reset_step("user_lookup", found=False)
         _log_password_reset_step("final_response", status=200, reason="hidden_unknown_user")
@@ -5392,7 +5544,6 @@ def api_send_password_reset_email():
 def api_change_email_request():
     from firebase_admin import auth as fb_auth
     from services.email_service import (
-        send_confirm_new_email,
         send_email_change_requested,
         validate_email_environment,
     )
@@ -5506,23 +5657,17 @@ def api_change_email_request():
             merge=True,
         )
 
-        # Variant 4 → new email only; Variant 5 → current (old) email only
-        confirm_result = send_confirm_new_email(
-            new_email,
-            current_email=current_email,
-            action_url=confirm_link,
-        )
-        alert_result = send_email_change_requested(
+        approval_result = send_email_change_requested(
             current_email,
             new_email=new_email,
             action_url=cancel_link,
+            approve_url=confirm_link,
         )
-        if not confirm_result.get("ok") or not alert_result.get("ok"):
+        if not approval_result.get("ok"):
             doc.reference.set({"pendingEmailChange": firestore.DELETE_FIELD}, merge=True)
-            failed_result = confirm_result if not confirm_result.get("ok") else alert_result
             return _email_service_failure_response(
-                failed_result,
-                "We couldn't send the email change confirmation right now.",
+                approval_result,
+                "We couldn't send the email change approval message right now.",
             )
 
         return jsonify(
@@ -5535,10 +5680,39 @@ def api_change_email_request():
         return jsonify(error="We couldn't start the email change right now."), 500
 
 
+def _revoke_email_change_sessions(fb_auth, firebase_uid, old_email, *, reason):
+    revoked = False
+    if firebase_uid:
+        try:
+            fb_auth.revoke_refresh_tokens(firebase_uid)
+            revoked = True
+        except Exception as revoke_error:
+            print(f"Email change session revocation failed: reason={reason} errorType={type(revoke_error).__name__}")
+
+    active_session_uid = (session.get("firebase_uid") or "").strip()
+    active_session_email = _normalize_email(session.get("user_id"))
+    session_cleared = False
+    if active_session_uid == firebase_uid or active_session_email == old_email:
+        session.pop("user_id", None)
+        session.pop("firebase_uid", None)
+        session.modified = True
+        session_cleared = True
+
+    print(
+        "Email change session security:",
+        f"reason={reason}",
+        f"firebaseUidPresent={bool(firebase_uid)}",
+        f"tokensRevoked={revoked}",
+        f"sessionCleared={session_cleared}",
+        flush=True,
+    )
+    return revoked, session_cleared
+
+
 @app.post("/api/confirm-email-change")
 def api_confirm_email_change():
     from firebase_admin import auth as fb_auth
-    from services.email_service import send_email_changed_success
+    from services.email_service import send_confirm_new_email, send_email_changed_success
 
     _log_email_runtime_diagnostics("confirm_email_change")
     data = request.get_json(silent=True) or {}
@@ -5582,18 +5756,30 @@ def api_confirm_email_change():
             notification_sent = False
             print(f"Email change success notice failed: {type(notice_error).__name__}")
 
-        active_session_uid = (session.get("firebase_uid") or "").strip()
-        active_session_email = _normalize_email(session.get("user_id"))
-        if active_session_uid == firebase_uid or active_session_email == old_email:
-            session["user_id"] = new_email
-            session["firebase_uid"] = firebase_uid
-            session.modified = True
+        try:
+            new_notice = send_confirm_new_email(new_email, current_email=old_email)
+            if not new_notice.get("ok"):
+                print(
+                    "Email change new-address notice failed:",
+                    new_notice.get("errorType") or new_notice.get("step") or "unknown",
+                )
+        except Exception as new_notice_error:
+            print(f"Email change new-address notice failed: {type(new_notice_error).__name__}")
+
+        tokens_revoked, session_cleared = _revoke_email_change_sessions(
+            fb_auth,
+            firebase_uid,
+            old_email,
+            reason="approved",
+        )
 
         return jsonify(
             ok=True,
             maskedOldEmail=_mask_email(old_email),
             maskedNewEmail=_mask_email(new_email),
             notificationSent=notification_sent,
+            sessionsRevoked=tokens_revoked,
+            sessionCleared=session_cleared,
         )
     except Exception as e:
         print(f"Custom email change confirmation failed: {type(e).__name__}")
@@ -5688,22 +5874,17 @@ def api_account_email_change_request():
     )
 
     try:
-        _send_email_change_confirmation_via_resend(
-            new_email,
-            display_name,
-            current_email,
-            confirm_link,
-        )
         _send_email_change_requested_via_resend(
             current_email,
             display_name,
             new_email,
+            confirm_link,
             cancel_link,
         )
     except Exception as send_error:
         doc.reference.set({"pendingEmailChange": firestore.DELETE_FIELD}, merge=True)
         print(f"Email change request email send failed for {current_email}: {send_error}")
-        return jsonify(error="We couldn't send the email change messages right now. Please try again."), 500
+        return jsonify(error="We couldn't send the email change approval email right now. Please try again."), 500
 
     return jsonify(
         ok=True,
@@ -5738,22 +5919,37 @@ def api_account_email_change_validate():
 
 @app.post("/api/account/email-change/cancel")
 def api_account_email_change_cancel():
+    from firebase_admin import auth as fb_auth
+
     data = request.get_json(silent=True) or {}
     token = (data.get("token") or "").strip()
     if not token:
         return jsonify(error="Missing email change token."), 400
 
     try:
-        doc, user_data, _ = _validate_pending_email_change(token)
+        doc, user_data, payload = _validate_pending_email_change(token)
         pending = user_data.get("pendingEmailChange") or {}
+        firebase_uid = (user_data.get("firebaseUid") or payload.get("firebase_uid") or "").strip()
         current_email = _normalize_email(pending.get("currentEmail") or user_data.get("email"))
         new_email = _normalize_email(pending.get("newEmail"))
         doc.reference.set({"pendingEmailChange": firestore.DELETE_FIELD}, merge=True)
+        tokens_revoked, session_cleared = _revoke_email_change_sessions(
+            fb_auth,
+            firebase_uid,
+            current_email,
+            reason="canceled",
+        )
         return jsonify(
             ok=True,
             currentEmail=current_email,
             newEmail=new_email,
             maskedNewEmail=_mask_email(new_email),
+            sessionsRevoked=tokens_revoked,
+            sessionCleared=session_cleared,
+            securityMessage=(
+                "We blocked this email change request. If this was not you, "
+                "we strongly recommend changing your password immediately and reviewing your account activity."
+            ),
         )
     except Exception as e:
         print(f"Email change cancellation error: {e}")
@@ -5807,21 +6003,30 @@ def api_account_email_change_confirm():
         except Exception as notice_error:
             print(f"Old email notification failed for {old_email}: {notice_error}")
 
-        active_session_uid = (session.get("firebase_uid") or "").strip()
-        active_session_email = _normalize_email(session.get("user_id"))
-        if active_session_uid == firebase_uid or active_session_email == old_email:
-            session["user_id"] = new_email
-            session["firebase_uid"] = firebase_uid
-            session.modified = True
+        try:
+            _send_email_change_new_address_confirmed_via_resend(new_email, display_name, old_email)
+        except Exception as new_notice_error:
+            print(f"New email change confirmation notice failed for {new_email}: {new_notice_error}")
+
+        tokens_revoked, session_cleared = _revoke_email_change_sessions(
+            fb_auth,
+            firebase_uid,
+            old_email,
+            reason="approved",
+        )
 
         return jsonify(
             ok=True,
             oldEmail=old_email,
             newEmail=new_email,
+            sessionsRevoked=tokens_revoked,
+            sessionCleared=session_cleared,
         )
     except Exception as e:
         print(f"Email change confirmation error: {e}")
         return jsonify(error="This email change link is invalid, expired, or already used."), 400
+
+
 @app.get("/api/podcast/<podcast_id>")
 def api_get_podcast(podcast_id):
     """Fetch full podcast data for editing"""

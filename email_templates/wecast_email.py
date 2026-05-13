@@ -1,5 +1,9 @@
 import html
 import os
+from urllib.parse import urlparse
+
+
+DEFAULT_EMAIL_LOGO_URL = "https://wecast-frontend.onrender.com/logo.png"
 
 
 def _escape(value, *, quote=False):
@@ -17,6 +21,19 @@ def _message_html(message):
         for line in lines
         if str(line or "").strip()
     )
+
+
+def _safe_public_logo_url(value=None):
+    candidate = str(
+        value
+        or os.getenv("WECAST_LOGO_URL")
+        or DEFAULT_EMAIL_LOGO_URL
+    ).strip()
+    parsed = urlparse(candidate)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme == "https" and parsed.netloc and host not in {"localhost", "127.0.0.1"}:
+        return candidate
+    return DEFAULT_EMAIL_LOGO_URL
 
 
 def _detail_html(detail_label, detail_lines):
@@ -65,20 +82,19 @@ def generate_wecast_email_template(
     footer_text="WeCast sends account emails for security and sign-in actions.",
     detail_label="",
     detail_lines=None,
+    secondary_button_text="",
+    secondary_button_url="",
 ):
     """Return a complete branded WeCast HTML email."""
     safe_title = _escape(title or "WeCast")
     safe_button_text = _escape(button_text)
     safe_button_url = _escape(button_url, quote=True)
+    safe_secondary_button_text = _escape(secondary_button_text)
+    safe_secondary_button_url = _escape(secondary_button_url, quote=True)
     safe_eyebrow = _escape(eyebrow or "WeCast Account")
     safe_notice_text = _escape(notice_text)
     safe_footer_text = _escape(footer_text)
-    safe_logo_url = _escape(
-        logo_url
-        or os.getenv("WECAST_LOGO_URL")
-        or "https://wecast-frontend.onrender.com/logo.png",
-        quote=True,
-    )
+    safe_logo_url = _escape(_safe_public_logo_url(logo_url), quote=True)
     safe_support_email = _escape(
         support_email
         or os.getenv("WECAST_SUPPORT_EMAIL")
@@ -88,10 +104,52 @@ def generate_wecast_email_template(
 
     button_block = ""
     if safe_button_text and safe_button_url:
-        button_block = f"""
+        # Table layout: reliable in Gmail; equal visual weight for paired CTAs.
+        primary_styles = (
+            "display:block;background:#17131f;color:#ffffff;text-decoration:none;"
+            "border-radius:12px;padding:11px 22px;font-size:14px;line-height:1.35;"
+            "font-weight:600;letter-spacing:0.01em;text-align:center;"
+            "box-shadow:0 4px 14px rgba(23,19,31,0.14);box-sizing:border-box;"
+            "min-width:148px;white-space:nowrap;"
+        )
+        secondary_styles = (
+            "display:block;background:#faf9ff;color:#4c3d78;text-decoration:none;"
+            "border-radius:12px;padding:11px 22px;font-size:14px;line-height:1.35;"
+            "font-weight:600;letter-spacing:0.01em;text-align:center;"
+            "border:1px solid #d4c8ec;box-sizing:border-box;"
+            "min-width:148px;white-space:nowrap;"
+        )
+        if safe_secondary_button_text and safe_secondary_button_url:
+            button_block = f"""
                         <tr>
-                          <td align="center" style="padding:30px 0 0;">
-                            <a class="wecast-button" href="{safe_button_url}" target="_blank" style="display:inline-block;background:#17131f;color:#ffffff;text-decoration:none;border-radius:16px;padding:15px 28px;font-size:16px;line-height:1;font-weight:800;box-shadow:0 12px 24px rgba(23,19,31,0.18);">
+                          <td align="center" style="padding:26px 0 0;">
+                            <table role="presentation" class="wecast-btn-stack" align="center" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto;">
+                              <tr>
+                                <td align="center" valign="middle" style="padding:0 8px 10px 0;">
+                                  <a class="wecast-button wecast-btn-primary" href="{safe_button_url}" target="_blank" style="{primary_styles}">
+                                    {safe_button_text}
+                                  </a>
+                                </td>
+                                <td align="center" valign="middle" style="padding:0 0 10px 8px;">
+                                  <a class="wecast-button wecast-btn-secondary" href="{safe_secondary_button_url}" target="_blank" style="{secondary_styles}">
+                                    {safe_secondary_button_text}
+                                  </a>
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>"""
+        else:
+            single_styles = (
+                "display:inline-block;background:#17131f;color:#ffffff;text-decoration:none;"
+                "border-radius:12px;padding:12px 26px;font-size:14px;line-height:1.35;"
+                "font-weight:600;letter-spacing:0.01em;text-align:center;"
+                "box-shadow:0 4px 16px rgba(23,19,31,0.15);"
+            )
+            button_block = f"""
+                        <tr>
+                          <td align="center" style="padding:26px 0 0;">
+                            <a class="wecast-button" href="{safe_button_url}" target="_blank" style="{single_styles}">
                               {safe_button_text}
                             </a>
                           </td>
@@ -127,7 +185,9 @@ def generate_wecast_email_template(
         .wecast-card {{ border-radius: 24px !important; }}
         .wecast-pad {{ padding: 30px 22px !important; }}
         .wecast-title {{ font-size: 30px !important; line-height: 1.16 !important; }}
-        .wecast-button {{ width: 100% !important; text-align: center !important; }}
+        .wecast-btn-stack tr {{ display: block !important; }}
+        .wecast-btn-stack td {{ display: block !important; width: 100% !important; padding: 0 0 10px 0 !important; max-width: 100% !important; }}
+        .wecast-button {{ width: 100% !important; max-width: 100% !important; text-align: center !important; white-space: normal !important; box-sizing: border-box !important; }}
       }}
     </style>
   </head>
@@ -230,9 +290,9 @@ def generate_password_changed_template(button_url="", **kwargs):
     return generate_wecast_email_template(
         "Your password has been updated",
         [
-            "This confirms that your WeCast password was successfully changed.",
+            "Your password was successfully changed.",
             "If you made this change, no further action is required.",
-            "If you did not change your password, please contact support immediately.",
+            "If this was not you, secure your account immediately.",
         ],
         "Go to WeCast" if button_url else "",
         button_url,
@@ -243,37 +303,40 @@ def generate_password_changed_template(button_url="", **kwargs):
 
 
 def generate_confirm_new_email_template(button_url, current_email="current@example.com", **kwargs):
+    """Variant 4 (after approval): informational notice to the new address only."""
     return generate_wecast_email_template(
-        "Confirm your new email",
+        "Your sign-in email is updated",
         [
-            "A request was made to change the email address on your WeCast account.",
-            "Your current login email will remain active until this new email address is verified.",
-            "If you did not request this change, you can ignore this email.",
+            "Your WeCast sign-in email has been updated to this address.",
+            "The change was approved from your previous email address on file.",
+            "Sign in with this email address going forward.",
         ],
-        "Confirm New Email",
+        "Sign in to WeCast",
         button_url,
         eyebrow="Email change",
-        detail_label="Current account email",
-        detail_lines=[current_email],
-        notice_text="The account email will not change unless this new email address is confirmed.",
+        detail_label="Account details",
+        detail_lines=[f"Previous sign-in email: {current_email}"] if current_email else None,
+        notice_text="This message is for your records only. It cannot approve or change your email.",
         **kwargs,
     )
 
 
-def generate_email_change_requested_template(button_url, new_email="new@example.com", **kwargs):
+def generate_email_change_requested_template(button_url, new_email="new@example.com", approve_url="", **kwargs):
     return generate_wecast_email_template(
         "A request was made to change your email",
         [
             "A request was made to change the email address on your WeCast account.",
-            "No change will happen unless the new email address is verified.",
-            "If this was not you, secure your account immediately.",
+            "Your current email address must approve this request before any account email can change.",
+            "If this was not you, cancel the request immediately and change your password.",
         ],
-        "Cancel email change",
-        button_url,
+        "Approve email change" if approve_url else "Cancel email change",
+        approve_url or button_url,
         eyebrow="Security notice",
         detail_label="Requested new email",
         detail_lines=[new_email],
-        notice_text="Your current email remains active while this request is pending.",
+        secondary_button_text="Cancel email change" if approve_url else "",
+        secondary_button_url=button_url if approve_url else "",
+        notice_text="Your current email remains active unless you approve this request.",
         **kwargs,
     )
 

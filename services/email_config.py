@@ -37,6 +37,7 @@ SUPPORTED_ENV_KEYS = (
     "WECAST_SMTP_TOTAL_TIMEOUT_SECONDS",
 )
 FRONTEND_URL_KEYS = ("FRONTEND_PUBLIC_URL", "WECAST_APP_URL", "FRONTEND_URL")
+DEFAULT_EMAIL_LOGO_URL = "https://wecast-frontend.onrender.com/logo.png"
 
 
 class EmailConfigError(RuntimeError):
@@ -141,7 +142,22 @@ def support_email():
 
 
 def logo_url():
-    return env_value("WECAST_LOGO_URL") or f"{frontend_public_url()}/logo.png"
+    explicit = env_value("WECAST_LOGO_URL")
+    if explicit:
+        try:
+            value = _validate_absolute_url("WECAST_LOGO_URL", explicit)
+            if not _is_local_frontend_url(value) and urlparse(value).scheme == "https":
+                return value
+        except EmailConfigError:
+            pass
+
+    try:
+        value = f"{frontend_public_url()}/logo.png"
+        if not _is_local_frontend_url(value) and urlparse(value).scheme == "https":
+            return value
+    except EmailConfigError:
+        pass
+    return DEFAULT_EMAIL_LOGO_URL
 
 
 def _smtp_port_error():
