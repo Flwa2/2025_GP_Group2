@@ -3538,6 +3538,64 @@ def _coerce_voice_language_list(labels: dict, legacy_langs=None) -> list:
     return out
 
 
+def _voice_language_accent_profiles(v: dict, labels: dict | None = None) -> list:
+    """Preserve ElevenLabs verified language/accent pairings for exact client-side filtering."""
+    labels = labels if isinstance(labels, dict) else {}
+    profiles: list = []
+
+    def _add(language=None, accent=None, locale=None):
+        language_s = str(language or "").strip()
+        accent_s = str(accent or "").strip()
+        locale_s = str(locale or "").strip()
+        if not (language_s or accent_s or locale_s):
+            return
+        profiles.append({
+            "language": language_s,
+            "accent": accent_s,
+            "locale": locale_s,
+        })
+
+    _add(
+        v.get("language") or labels.get("language") or labels.get("Language"),
+        v.get("accent") or labels.get("accent") or labels.get("Accent"),
+        v.get("locale") or labels.get("locale") or labels.get("Locale"),
+    )
+
+    for source in (
+        v.get("verified_languages"),
+        v.get("verifiedLanguages"),
+        v.get("languageAccents"),
+        v.get("language_accents"),
+        labels.get("verified_languages"),
+        labels.get("verifiedLanguages"),
+        labels.get("languageAccents"),
+        labels.get("language_accents"),
+    ):
+        if not isinstance(source, list):
+            continue
+        for item in source:
+            if isinstance(item, dict):
+                _add(
+                    item.get("language") or item.get("Language"),
+                    item.get("accent") or item.get("Accent"),
+                    item.get("locale") or item.get("Locale"),
+                )
+
+    seen: set = set()
+    deduped: list = []
+    for item in profiles:
+        key = (
+            item.get("language", "").lower(),
+            item.get("accent", "").lower(),
+            item.get("locale", "").lower(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
 def _normalize_elevenlabs_voice_item(v: dict) -> dict:
     """Map a raw ElevenLabs API (or compatible) voice dict to /api/voices item shape."""
     voice_id = str(v.get("voice_id") or v.get("voiceId") or v.get("id") or "").strip()
@@ -3562,6 +3620,7 @@ def _normalize_elevenlabs_voice_item(v: dict) -> dict:
         tone = []
 
     pitch = str(raw_labels.get("pitch") or v.get("pitch") or "").strip()
+    language_accents = _voice_language_accent_profiles(v, raw_labels)
 
     return {
         "docId": voice_id,
@@ -3573,6 +3632,8 @@ def _normalize_elevenlabs_voice_item(v: dict) -> dict:
         "description": str(v.get("description") or ""),
         "pitch": pitch,
         "languages": languages,
+        "languageAccents": language_accents,
+        "languageAccentPairs": language_accents,
         "tone": tone,
         "labels": labels_out,
         "category": str(v.get("category") or ""),
@@ -3615,6 +3676,7 @@ def _normalize_shared_library_voice(v: dict) -> dict:
         "locale": v.get("locale"),
     }
     labels_out = _json_safe_voice_labels(label_src)
+    language_accents = _voice_language_accent_profiles(v, labels_out)
 
     return {
         "docId": voice_id,
@@ -3626,6 +3688,9 @@ def _normalize_shared_library_voice(v: dict) -> dict:
         "description": str(v.get("description") or ""),
         "pitch": "",
         "languages": deduped,
+        "languageAccents": language_accents,
+        "languageAccentPairs": language_accents,
+        "verified_languages": v.get("verified_languages") or [],
         "tone": tone,
         "labels": labels_out,
         "category": str(v.get("category") or ""),
@@ -3915,6 +3980,7 @@ def api_voices():
                 tone_list = [tone.strip()]
             else:
                 tone_list = []
+            language_accents = _voice_language_accent_profiles(v, labels_out)
 
             out = {
                 "docId": d.id,
@@ -3926,6 +3992,8 @@ def api_voices():
                 "description": description,
                 "pitch": pitch,
                 "languages": lang_list,
+                "languageAccents": language_accents,
+                "languageAccentPairs": language_accents,
                 "tone": tone_list,
                 "labels": labels_out,
                 "category": str(v.get("category") or v.get("Category") or ""),

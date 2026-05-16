@@ -211,10 +211,13 @@ const LANGUAGE_NAME_TO_CODE = Object.entries(LANGUAGE_LABELS).reduce((acc, [code
     acc[info.name.toLowerCase()] = code.split("-")[0];
     return acc;
 }, {});
+const VOICE_LANGUAGE_OPTIONS = ["en", "ar"];
 
 const normalizeLanguageFilterValue = (value) => {
     const raw = String(value || "").trim().toLowerCase().replace("_", "-");
     if (!raw) return "";
+    if (raw === "arabic" || raw.startsWith("arabic ") || raw.startsWith("arabic(")) return "ar";
+    if (raw === "english" || raw.startsWith("english ") || raw.startsWith("english(")) return "en";
     if (LANGUAGE_NAME_TO_CODE[raw]) return LANGUAGE_NAME_TO_CODE[raw];
     if (LANGUAGE_LABELS[raw]) return raw.split("-")[0];
     const base = raw.split("-")[0];
@@ -255,17 +258,7 @@ const LanguageLabel = ({ value }) => {
     );
 };
 
-const uniqueLanguageOptions = (values) => {
-    const seen = new Set();
-    const out = [];
-    [DEFAULT_VOICE_LANGUAGE, ...values].forEach((value) => {
-        const normalized = normalizeLanguageFilterValue(value);
-        if (!normalized || seen.has(normalized)) return;
-        seen.add(normalized);
-        out.push(normalized);
-    });
-    return out.sort((a, b) => formatLanguageLabel(a).localeCompare(formatLanguageLabel(b)));
-};
+const uniqueLanguageOptions = () => VOICE_LANGUAGE_OPTIONS;
 
 /** Lowercased language tokens for matching (BCP-47 friendly). */
 const languageMatchTokensForVoice = (v) => {
@@ -282,7 +275,7 @@ const languageMatchTokensForVoice = (v) => {
 
 const languageFilterMatches = (selectedLower, voiceLangTokens) => {
     if (!selectedLower) return true;
-    if (!voiceLangTokens.length) return true;
+    if (!voiceLangTokens.length) return false;
     return voiceLangTokens.some(
         (t) =>
             t === selectedLower ||
@@ -291,9 +284,109 @@ const languageFilterMatches = (selectedLower, voiceLangTokens) => {
     );
 };
 
+const languageMatchesVoice = (language, voice) =>
+    languageFilterMatches(normalizeLanguageFilterValue(language), languageMatchTokensForVoice(voice));
+
+const collectFacetDisplaysFromVoice = (v, ...keys) => {
+    const bucket = [];
+    for (const key of keys) {
+        pushFacetTokens(v?.[key], bucket);
+        if (v?.labels && typeof v.labels === "object") pushFacetTokens(v.labels[key], bucket);
+    }
+    return bucket;
+};
+
+const collectLanguageAccentProfilesFromVoice = (v) => {
+    const profiles = [];
+    const addProfile = (raw) => {
+        if (!raw || typeof raw !== "object") return;
+        const language = String(raw.language || raw.Language || raw.locale || raw.Locale || "").trim();
+        const accent = String(raw.accent || raw.Accent || "").trim();
+        if (language || accent) profiles.push({ language, accent });
+    };
+
+    addProfile({
+        language: v?.language || v?.labels?.language || v?.labels?.Language,
+        locale: v?.locale || v?.labels?.locale || v?.labels?.Locale,
+        accent: v?.accent || v?.labels?.accent || v?.labels?.Accent,
+    });
+
+    [
+        v?.languageAccents,
+        v?.languageAccentPairs,
+        v?.language_accents,
+        v?.verified_languages,
+        v?.verifiedLanguages,
+        v?.labels?.languageAccents,
+        v?.labels?.languageAccentPairs,
+        v?.labels?.language_accents,
+        v?.labels?.verified_languages,
+        v?.labels?.verifiedLanguages,
+    ].forEach((list) => {
+        if (Array.isArray(list)) list.forEach(addProfile);
+    });
+
+    const seen = new Set();
+    return profiles.filter((profile) => {
+        const key = `${profile.language.toLowerCase()}|${profile.accent.toLowerCase()}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+};
+
+const languageMatchesAccentProfile = (language, profile) => {
+    const selected = normalizeLanguageFilterValue(language);
+    if (!selected) return true;
+    const profileLang = normalizeLanguageFilterValue(profile?.language);
+    if (!profileLang) return false;
+    return languageFilterMatches(selected, [profileLang]);
+};
+
+const accentDisplaysForLanguageFromVoice = (v, language) => {
+    const profiles = collectLanguageAccentProfilesFromVoice(v);
+    const matchedProfiles = profiles.filter((profile) => languageMatchesAccentProfile(language, profile));
+    const matchedProfileAccents = matchedProfiles
+        .map((profile) => profile.accent)
+        .filter(Boolean);
+    if (matchedProfiles.length) return matchedProfileAccents;
+    if (matchedProfileAccents.length) return matchedProfileAccents;
+    return collectFacetDisplaysFromVoice(v, "accent", "Accent");
+};
+
+const accentTokensForLanguageFromVoice = (v, language) =>
+    accentDisplaysForLanguageFromVoice(v, language)
+        .map((x) => String(x).trim().toLowerCase())
+        .filter(Boolean);
+
+const voiceLanguageDebugValues = (v) => ({
+    name: v?.name || "",
+    id: v?.providerVoiceId || v?.id || v?.docId || "",
+    language: v?.language || v?.labels?.language || v?.labels?.Language || "",
+    languages: v?.languages || [],
+    accent: v?.accent || v?.labels?.accent || v?.labels?.Accent || "",
+    verified_languages: v?.verified_languages || v?.verifiedLanguages || [],
+    languageAccentPairs: v?.languageAccentPairs || v?.languageAccents || [],
+});
+
+const debugArabicAccentMetadata = (voicesList, source) => {
+    if (typeof console === "undefined" || typeof console.debug !== "function") return;
+    const arabicVoices = voicesList.filter((v) => languageMatchesVoice("ar", v));
+    const arabicAccentValues = uniqueSortedDisplay(
+        arabicVoices.flatMap((v) => accentDisplaysForLanguageFromVoice(v, "ar"))
+    );
+    if (arabicAccentValues.length) return;
+    console.debug("[WeCast voice filters] Arabic voices have no accent metadata in this payload.", {
+        source,
+        arabicVoiceCount: arabicVoices.length,
+        sample: arabicVoices.slice(0, 8).map(voiceLanguageDebugValues),
+    });
+};
+
 const facetTokensLower = (v, ...keys) => {
     const bucket = [];
     for (const key of keys) {
+        pushFacetTokens(v?.[key], bucket);
         if (v?.labels && typeof v.labels === "object") pushFacetTokens(v.labels[key], bucket);
     }
     return Array.from(new Set(bucket.map((x) => String(x).trim().toLowerCase()).filter(Boolean)));
@@ -446,7 +539,7 @@ const clientRefineLibraryVoices = (items, applied) => {
         out = out.filter((v) => languageFilterMatches(lang, languageMatchTokensForVoice(v)));
     }
     if (accent) {
-        out = out.filter((v) => facetTokensLower(v, "accent", "Accent").includes(accent));
+        out = out.filter((v) => accentTokensForLanguageFromVoice(v, lang).includes(accent));
     }
     if (age) {
         out = out.filter((v) => facetTokensLower(v, "age", "Age").includes(age));
@@ -615,6 +708,7 @@ const [speakerVoiceAppliedFilters, setSpeakerVoiceAppliedFilters] = useState({})
 const [modalLibraryPreview, setModalLibraryPreview] = useState({});
 const [voiceLibraryWarning, setVoiceLibraryWarning] = useState("");
 const [elevenLabsAuthFailed, setElevenLabsAuthFailed] = useState(false);
+const arabicAccentDebugRef = useRef(new Set());
 
 // filters per speaker (modal draft)
 const [speakerVoiceFilters, setSpeakerVoiceFilters] = useState({});
@@ -847,11 +941,24 @@ useEffect(() => {
         const applied = filtersModalToApplied(f);
         setModalLibraryPreview((p) => ({ ...p, [i]: { ...(p[i] || {}), loading: true } }));
         try {
-            const r = await fetchLibraryItemsPage(applied, 0);
+            const accentApplied = { ...applied, accent: "" };
+            const r = await fetchLibraryItemsPage(accentApplied, 0);
             const refined = clientRefineLibraryVoices(r.items, applied);
+            if (normalizeLanguageFilterValue(accentApplied.language) === "ar") {
+                const accentValues = uniqueSortedDisplay(
+                    r.items
+                        .filter((v) => languageMatchesVoice("ar", v))
+                        .flatMap((v) => accentDisplaysForLanguageFromVoice(v, "ar"))
+                );
+                const debugKey = `${i}:${JSON.stringify(accentApplied)}:${r.items.length}:${accentValues.join("|")}`;
+                if (!accentValues.length && !arabicAccentDebugRef.current.has(debugKey)) {
+                    arabicAccentDebugRef.current.add(debugKey);
+                    debugArabicAccentMetadata(r.items, "Create/Add Speaker modal language preview");
+                }
+            }
             setModalLibraryPreview((p) => ({
                 ...p,
-                [i]: { totalCount: r.totalCount, refinedCount: refined.length, loading: false },
+                [i]: { totalCount: r.totalCount, refinedCount: refined.length, loading: false, accentItems: r.items },
             }));
         } catch {
             setModalLibraryPreview((p) => ({
@@ -2434,13 +2541,7 @@ const exportScript = async (format = "pdf") => {
                                                                         }));
                                                                     };
 
-                                                                    const languageOptions = uniqueLanguageOptions([
-                                                                        ...libraryFilterOptions.languages,
-                                                                        ...mergeDisplayOptionsFromVoices(
-                                                                            librarySeedVoices,
-                                                                            collectLanguageDisplaysFromVoice
-                                                                        ),
-                                                                    ]);
+                                                                    const languageOptions = uniqueLanguageOptions();
 
                                                                     const toneOptions = uniqueSortedDisplay(
                                                                         librarySeedVoices.flatMap((v) => getVoiceToneTags(v))
@@ -2457,17 +2558,45 @@ const exportScript = async (format = "pdf") => {
                                                                         label: g === "female" ? "Female" : g === "male" ? "Male" : g,
                                                                     }));
 
-                                                                    const accentOptions = uniqueSortedDisplay([
-                                                                        ...libraryFilterOptions.accents,
-                                                                        ...mergeDisplayOptionsFromVoices(librarySeedVoices, (v) => {
-                                                                            const acc = [];
-                                                                            if (v?.labels && typeof v.labels === "object") {
-                                                                                pushFacetTokens(v.labels.accent, acc);
-                                                                                pushFacetTokens(v.labels.Accent, acc);
-                                                                            }
-                                                                            return acc;
-                                                                        }),
-                                                                    ]);
+                                                                    const selectedLanguage = normalizeLanguageFilterValue(f.language || DEFAULT_VOICE_LANGUAGE);
+                                                                    const modalAccentItems = Array.isArray(modalLibraryPreview[i]?.accentItems)
+                                                                        ? modalLibraryPreview[i].accentItems
+                                                                        : [];
+                                                                    const accentSourceVoices = Array.from(
+                                                                        new Map(
+                                                                            [...modalAccentItems, ...rawPool, ...librarySeedVoices]
+                                                                                .filter(Boolean)
+                                                                                .map((v, idx) => [getVoiceId(v) || `voice-${idx}`, v])
+                                                                        ).values()
+                                                                    );
+                                                                    const accentOptions = uniqueSortedDisplay(
+                                                                        accentSourceVoices
+                                                                            .filter((v) => languageMatchesVoice(selectedLanguage, v))
+                                                                            .flatMap((v) => accentDisplaysForLanguageFromVoice(v, selectedLanguage))
+                                                                    );
+                                                                    const selectedAccentValid =
+                                                                        !f.accent ||
+                                                                        accentOptions.some(
+                                                                            (a) => String(a).trim().toLowerCase() === String(f.accent).trim().toLowerCase()
+                                                                        );
+                                                                    const setLanguageFilter = (language) => {
+                                                                        const nextLanguage = normalizeLanguageFilterValue(language || DEFAULT_VOICE_LANGUAGE);
+                                                                        const nextAccentOptions = uniqueSortedDisplay(
+                                                                            accentSourceVoices
+                                                                                .filter((v) => languageMatchesVoice(nextLanguage, v))
+                                                                                .flatMap((v) => accentDisplaysForLanguageFromVoice(v, nextLanguage))
+                                                                        );
+                                                                        const keepAccent =
+                                                                            f.accent &&
+                                                                            nextAccentOptions.some(
+                                                                                (a) => String(a).trim().toLowerCase() === String(f.accent).trim().toLowerCase()
+                                                                            );
+                                                                        setF({
+                                                                            language: nextLanguage,
+                                                                            accent: keepAccent ? f.accent : "",
+                                                                            languageMenuOpen: false,
+                                                                        });
+                                                                    };
 
                                                                     const ageOptions = uniqueSortedDisplay([
                                                                         ...libraryFilterOptions.ages,
@@ -2603,7 +2732,8 @@ const exportScript = async (format = "pdf") => {
                                                                                 <button
                                                                                 type="button"
                                                                                 onClick={() => {
-                                                                            const nextApplied = filtersModalToApplied(f);
+                                                                            const modalFilters = selectedAccentValid ? f : { ...f, accent: "" };
+                                                                            const nextApplied = filtersModalToApplied(modalFilters);
                                                                             const modalGenderTok = normalizeGenderToken(f.gender);
                                                                             const modalGenderLabel =
                                                                                 modalGenderTok === "female"
@@ -2670,6 +2800,26 @@ const exportScript = async (format = "pdf") => {
                                                                                 </div>
                                                                                 </div>
 
+                                                                                {/* Age */}
+                                                                                <div>
+                                                                                <label className="form-label mb-1 block">{t("create.speakers.age", "Age")}</label>
+                                                                                <div className="relative">
+                                                                                    <select
+                                                                                        value={f.age}
+                                                                                        onChange={(e) => setF({ age: e.target.value })}
+                                                                                        className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
+                                                                                    >
+                                                                                        <option value="">{t("create.speakers.allAges", "All ages")}</option>
+                                                                                        {ageOptions.map((a) => (
+                                                                                            <option key={a} value={a}>
+                                                                                                {a}
+                                                                                            </option>
+                                                                                        ))}
+                                                                                    </select>
+                                                                                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
+                                                                                </div>
+                                                                                </div>
+
                                                                                 {/* Language */}
                                                                                 <div>
                                                                                 <label className="form-label mb-1 block">{t("create.speakers.language")}</label>
@@ -2679,26 +2829,15 @@ const exportScript = async (format = "pdf") => {
                                                                                         onClick={() => setF({ languageMenuOpen: !f.languageMenuOpen })}
                                                                                         className="form-input !px-3 !py-2 min-h-10 w-full pr-10 text-start text-sm"
                                                                                     >
-                                                                                        {f.language ? (
-                                                                                            <LanguageLabel value={f.language} />
-                                                                                        ) : (
-                                                                                            <span className="text-black/55 dark:text-white/55">{t("create.speakers.allLanguages")}</span>
-                                                                                        )}
+                                                                                        <LanguageLabel value={f.language || DEFAULT_VOICE_LANGUAGE} />
                                                                                     </button>
                                                                                     {f.languageMenuOpen ? (
                                                                                         <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-[10030] max-h-56 overflow-y-auto rounded-xl border border-neutral-200 bg-white p-1.5 shadow-xl dark:border-white/10 dark:bg-neutral-950">
-                                                                                            <button
-                                                                                                type="button"
-                                                                                                onClick={() => setF({ language: "", languageMenuOpen: false })}
-                                                                                                className="flex w-full items-center rounded-lg px-3 py-2 text-start text-sm hover:bg-black/5 dark:hover:bg-white/10"
-                                                                                            >
-                                                                                                {t("create.speakers.allLanguages")}
-                                                                                            </button>
                                                                                             {languageOptions.map((lang) => (
                                                                                                 <button
                                                                                                     key={lang}
                                                                                                     type="button"
-                                                                                                    onClick={() => setF({ language: lang, languageMenuOpen: false })}
+                                                                                                    onClick={() => setLanguageFilter(lang)}
                                                                                                     className="flex w-full items-center rounded-lg px-3 py-2 text-start text-sm hover:bg-black/5 dark:hover:bg-white/10"
                                                                                                 >
                                                                                                     <LanguageLabel value={lang} />
@@ -2710,40 +2849,20 @@ const exportScript = async (format = "pdf") => {
                                                                                 </div>
                                                                                 </div>
 
-                                                                                {/* Tone */}
+                                                                                {/* Accent */}
                                                                                 <div>
-                                                                                <label className="form-label mb-1 block">{t("create.speakers.tone")}</label>
+                                                                                <label className="form-label mb-1 block">{t("create.speakers.accent", "Accent")}</label>
                                                                                 <div className="relative">
                                                                                     <select
-                                                                                        value={f.tone}
-                                                                                        onChange={(e) => setF({ tone: e.target.value })}
+                                                                                        value={selectedAccentValid ? f.accent : ""}
+                                                                                        onChange={(e) => setF({ accent: e.target.value })}
                                                                                         className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
                                                                                     >
-                                                                                        <option value="">{t("create.speakers.allTones")}</option>
-                                                                                        {toneOptions.map((tone) => (
-                                                                                        <option key={tone} value={tone}>
-                                                                                            {tone}
-                                                                                        </option>
-                                                                                        ))}
-                                                                                    </select>
-                                                                                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-                                                                                </div>
-                                                                                </div>
-
-                                                                                {/* Pitch */}
-                                                                                <div className="md:col-span-2">
-                                                                                <label className="form-label mb-1 block">{t("create.speakers.pitch")}</label>
-                                                                                <div className="relative">
-                                                                                    <select
-                                                                                        value={f.pitch}
-                                                                                        onChange={(e) => setF({ pitch: e.target.value })}
-                                                                                        className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
-                                                                                    >
-                                                                                        <option value="">{t("create.speakers.allPitches")}</option>
-                                                                                        {pitchOptions.map((p) => (
-                                                                                        <option key={p} value={p}>
-                                                                                            {p}
-                                                                                        </option>
+                                                                                        <option value="">{t("create.speakers.allAccents", "All accents")}</option>
+                                                                                        {accentOptions.map((a) => (
+                                                                                            <option key={a} value={a}>
+                                                                                                {a}
+                                                                                            </option>
                                                                                         ))}
                                                                                     </select>
                                                                                     <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
@@ -2751,50 +2870,47 @@ const exportScript = async (format = "pdf") => {
                                                                                 </div>
                                                                             </div>
 
-                                                                            {(accentOptions.length > 0 || ageOptions.length > 0) ? (
-                                                                                <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-x-3 md:gap-y-2.5">
-                                                                                    {accentOptions.length > 0 ? (
-                                                                                        <div>
-                                                                                            <label className="form-label mb-1 block">{t("create.speakers.accent", "Accent")}</label>
-                                                                                            <div className="relative">
-                                                                                                <select
-                                                                                                    value={f.accent}
-                                                                                                    onChange={(e) => setF({ accent: e.target.value })}
-                                                                                                    className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
-                                                                                                >
-                                                                                                    <option value="">{t("create.speakers.allAccents", "All accents")}</option>
-                                                                                                    {accentOptions.map((a) => (
-                                                                                                        <option key={a} value={a}>
-                                                                                                            {a}
-                                                                                                        </option>
-                                                                                                    ))}
-                                                                                                </select>
-                                                                                                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-                                                                                            </div>
-                                                                                        </div>
-                                                                                    ) : null}
-                                                                                    {ageOptions.length > 0 ? (
-                                                                                        <div>
-                                                                                            <label className="form-label mb-1 block">{t("create.speakers.age", "Age")}</label>
-                                                                                            <div className="relative">
-                                                                                                <select
-                                                                                                    value={f.age}
-                                                                                                    onChange={(e) => setF({ age: e.target.value })}
-                                                                                                    className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
-                                                                                                >
-                                                                                                    <option value="">{t("create.speakers.allAges", "All ages")}</option>
-                                                                                                    {ageOptions.map((a) => (
-                                                                                                        <option key={a} value={a}>
-                                                                                                            {a}
-                                                                                                        </option>
-                                                                                                    ))}
-                                                                                                </select>
-                                                                                                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-                                                                                            </div>
-                                                                                        </div>
-                                                                                    ) : null}
+                                                                            <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-x-3 md:gap-y-2.5">
+                                                                                {/* Tone */}
+                                                                                <div>
+                                                                                    <label className="form-label mb-1 block">{t("create.speakers.tone")}</label>
+                                                                                    <div className="relative">
+                                                                                        <select
+                                                                                            value={f.tone}
+                                                                                            onChange={(e) => setF({ tone: e.target.value })}
+                                                                                            className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
+                                                                                        >
+                                                                                            <option value="">{t("create.speakers.allTones")}</option>
+                                                                                            {toneOptions.map((tone) => (
+                                                                                                <option key={tone} value={tone}>
+                                                                                                    {tone}
+                                                                                                </option>
+                                                                                            ))}
+                                                                                        </select>
+                                                                                        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
+                                                                                    </div>
                                                                                 </div>
-                                                                            ) : null}
+
+                                                                                {/* Pitch */}
+                                                                                <div>
+                                                                                    <label className="form-label mb-1 block">{t("create.speakers.pitch")}</label>
+                                                                                    <div className="relative">
+                                                                                        <select
+                                                                                            value={f.pitch}
+                                                                                            onChange={(e) => setF({ pitch: e.target.value })}
+                                                                                            className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
+                                                                                        >
+                                                                                            <option value="">{t("create.speakers.allPitches")}</option>
+                                                                                            {pitchOptions.map((p) => (
+                                                                                                <option key={p} value={p}>
+                                                                                                    {p}
+                                                                                                </option>
+                                                                                            ))}
+                                                                                        </select>
+                                                                                        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
+                                                                                    </div>
+                                                                                </div>
+                                                                            </div>
 
                                                                             {categoryOptions.length > 0 ? (
                                                                                 <div>
@@ -2828,14 +2944,14 @@ const exportScript = async (format = "pdf") => {
                                                                                                 key={chip.key}
                                                                                                 type="button"
                                                                                                 onClick={() =>
-                                                                                                setF({
-                                                                                                    [chip.key]:
-                                                                                                        chip.key === "gender"
-                                                                                                            ? "__all__"
-                                                                                                            : chip.key === "language"
-                                                                                                                ? DEFAULT_VOICE_LANGUAGE
-                                                                                                                : "",
-                                                                                                })
+                                                                                                chip.key === "language"
+                                                                                                    ? setLanguageFilter(DEFAULT_VOICE_LANGUAGE)
+                                                                                                    : setF({
+                                                                                                          [chip.key]:
+                                                                                                              chip.key === "gender"
+                                                                                                                  ? "__all__"
+                                                                                                                  : "",
+                                                                                                      })
                                                                                             }
                                                                                                 className="inline-flex items-center gap-1 rounded-full border border-purple-300/70 dark:border-purple-400/45 bg-purple-50 dark:bg-purple-900/25 px-2 py-0.5 text-xs text-purple-700 dark:text-purple-200"
                                                                                                 title={t("create.speakers.removeFilter", "Remove filter")}

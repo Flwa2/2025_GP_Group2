@@ -78,6 +78,7 @@ const splitList = (value) => {
 };
 
 const DEFAULT_VOICE_LANGUAGE = "en";
+const VOICE_LANGUAGE_OPTIONS = ["en", "ar"];
 const LANGUAGE_LABELS = {
   en: { flagCode: "gb", name: "English" },
   "en-us": { flagCode: "gb", name: "English" },
@@ -173,17 +174,83 @@ const LanguageLabel = ({ value }) => {
   );
 };
 
-const uniqueLanguageOptions = (values) => {
-  const seen = new Set();
-  const out = [];
-  [DEFAULT_VOICE_LANGUAGE, ...values].forEach((value) => {
-    const normalized = normalizeLanguageFilterValue(value);
-    if (!normalized || seen.has(normalized)) return;
-    seen.add(normalized);
-    out.push(normalized);
-  });
-  return out.sort((a, b) => formatLanguageLabel(a).localeCompare(formatLanguageLabel(b)));
+const uniqueLanguageOptions = () => VOICE_LANGUAGE_OPTIONS;
+
+const voiceFacetValues = (value) => {
+  if (Array.isArray(value)) return value.map((x) => String(x).trim()).filter(Boolean);
+  if (typeof value === "string") {
+    return value
+      .split(/[,;/|]/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+  }
+  return [];
 };
+
+const collectLanguageAccentProfilesFromVoice = (voice) => {
+  const profiles = [];
+  const addProfile = (raw) => {
+    if (!raw || typeof raw !== "object") return;
+    const language = String(raw.language || raw.Language || raw.locale || raw.Locale || "").trim();
+    const accent = String(raw.accent || raw.Accent || "").trim();
+    if (language || accent) profiles.push({ language, accent });
+  };
+
+  addProfile({
+    language: voice?.language || voice?.labels?.language || voice?.labels?.Language,
+    locale: voice?.locale || voice?.labels?.locale || voice?.labels?.Locale,
+    accent: voice?.accent || voice?.labels?.accent || voice?.labels?.Accent,
+  });
+
+  [
+    voice?.languageAccents,
+    voice?.language_accents,
+    voice?.verified_languages,
+    voice?.verifiedLanguages,
+    voice?.labels?.languageAccents,
+    voice?.labels?.language_accents,
+    voice?.labels?.verified_languages,
+    voice?.labels?.verifiedLanguages,
+  ].forEach((list) => {
+    if (Array.isArray(list)) list.forEach(addProfile);
+  });
+
+  const seen = new Set();
+  return profiles.filter((profile) => {
+    const key = `${profile.language.toLowerCase()}|${profile.accent.toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const languageMatchesAccentProfile = (language, profile) => {
+  const selected = normalizeLanguageFilterValue(language);
+  if (!selected) return true;
+  const profileLang = normalizeLanguageFilterValue(profile?.language);
+  if (!profileLang) return false;
+  return profileLang === selected || profileLang.startsWith(`${selected}-`) || selected.startsWith(`${profileLang}-`);
+};
+
+const collectFlatAccentDisplaysFromVoice = (voice) => [
+  ...voiceFacetValues(voice?.accent),
+  ...voiceFacetValues(voice?.Accent),
+  ...voiceFacetValues(voice?.labels?.accent),
+  ...voiceFacetValues(voice?.labels?.Accent),
+];
+
+const accentDisplaysForLanguageFromVoice = (voice, language) => {
+  const profiles = collectLanguageAccentProfilesFromVoice(voice);
+  const matchedProfiles = profiles.filter((profile) => languageMatchesAccentProfile(language, profile));
+  const matchedProfileAccents = matchedProfiles.map((profile) => profile.accent).filter(Boolean);
+  if (matchedProfiles.length) return matchedProfileAccents;
+  return collectFlatAccentDisplaysFromVoice(voice);
+};
+
+const accentTokensForLanguageFromVoice = (voice, language) =>
+  accentDisplaysForLanguageFromVoice(voice, language)
+    .map((x) => String(x).trim().toLowerCase())
+    .filter(Boolean);
 
 const TONE_RULES = [
   { tone: "professional", keys: ["professional", "broadcaster", "corporate", "formal", "authoritative", "احترافي", "رسمي"] },
@@ -336,11 +403,59 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
       .filter((g) => Boolean(g) && !isNeutralGender(g))
   )].sort();
 
-  const languageOptions = uniqueLanguageOptions(
+  const languageOptions = uniqueLanguageOptions();
+  const languageMatchesVoice = (language, voice) => {
+    const selected = normalizeLanguageFilterValue(language || DEFAULT_VOICE_LANGUAGE);
+    const tokens = [
+      ...toList(voice?.languages),
+      ...toList(voice?.labels?.languages),
+      ...toList(voice?.labels?.language),
+      ...toList(voice?.labels?.Language),
+    ].map(normalizeLanguageFilterValue).filter(Boolean);
+    if (!selected) return true;
+    if (!tokens.length) return false;
+    return tokens.some((token) => token === selected || token.startsWith(`${selected}-`) || selected.startsWith(`${token}-`));
+  };
+  const facetDisplays = (voice, ...keys) => {
+    const out = [];
+    keys.forEach((key) => {
+      out.push(...toList(voice?.[key]));
+      if (voice?.labels && typeof voice.labels === "object") out.push(...toList(voice.labels[key]));
+    });
+    return out;
+  };
+  const uniqueDisplayOptions = (values) =>
+    Array.from(new Set(values.map((x) => String(x).trim()).filter(Boolean))).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" })
+    );
+  const selectedLanguage = normalizeLanguageFilterValue(filters.language || DEFAULT_VOICE_LANGUAGE);
+  const accentOptions = uniqueDisplayOptions(
     voices
-      .flatMap(v => [...toList(v.languages), ...toList(v.labels?.languages), ...toList(v.labels?.language)])
-      .filter(Boolean)
+      .filter((v) => languageMatchesVoice(selectedLanguage, v))
+      .flatMap((v) => accentDisplaysForLanguageFromVoice(v, selectedLanguage))
   );
+  const ageOptions = uniqueDisplayOptions(voices.flatMap((v) => facetDisplays(v, "age", "Age")));
+  const categoryOptions = uniqueDisplayOptions(voices.flatMap((v) => facetDisplays(v, "category", "Category")));
+  const selectedAccentValid =
+    !filters.accent ||
+    accentOptions.some((a) => String(a).trim().toLowerCase() === String(filters.accent).trim().toLowerCase());
+  const setLanguageFilter = (language) => {
+    const nextLanguage = normalizeLanguageFilterValue(language || DEFAULT_VOICE_LANGUAGE);
+    const nextAccentOptions = uniqueDisplayOptions(
+      voices
+        .filter((v) => languageMatchesVoice(nextLanguage, v))
+        .flatMap((v) => accentDisplaysForLanguageFromVoice(v, nextLanguage))
+    );
+    const keepAccent =
+      filters.accent &&
+      nextAccentOptions.some((a) => String(a).trim().toLowerCase() === String(filters.accent).trim().toLowerCase());
+    setFilters({
+      ...filters,
+      language: nextLanguage,
+      accent: keepAccent ? filters.accent : "",
+      languageMenuOpen: false,
+    });
+  };
 
   const toneOptions = [...new Set(
     voices
@@ -366,6 +481,9 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
       : null,
     filters.tone ? { key: "tone", label: `Tone: ${filters.tone}` } : null,
     filters.pitch ? { key: "pitch", label: `Pitch: ${filters.pitch}` } : null,
+    filters.accent ? { key: "accent", label: `Accent: ${filters.accent}` } : null,
+    filters.age ? { key: "age", label: `Age: ${filters.age}` } : null,
+    filters.category ? { key: "category", label: `Category: ${filters.category}` } : null,
   ].filter(Boolean);
 
   const modal = (
@@ -389,7 +507,7 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
             />
           </div>
 
-          {/* Gender and Language row */}
+          {/* Gender and Age row */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">Gender</label>
@@ -409,6 +527,26 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
             </div>
 
             <div>
+              <label className="block text-sm font-medium mb-1">Age</label>
+              <div className="relative">
+                <select
+                  value={filters.age || ""}
+                  onChange={(e) => setFilters({ ...filters, age: e.target.value })}
+                  className="w-full appearance-none pr-10 px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900 text-black dark:text-white border-neutral-300 dark:border-white/15 [color-scheme:light] dark:[color-scheme:dark]"
+                >
+                  <option value="">All ages</option>
+                  {ageOptions.map(age => (
+                    <option key={age} value={age}>{age}</option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
+              </div>
+            </div>
+          </div>
+
+          {/* Language and Accent row */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
               <label className="block text-sm font-medium mb-1">Language</label>
               <div className="relative">
                 <button
@@ -416,26 +554,15 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
                   onClick={() => setFilters({ ...filters, languageMenuOpen: !filters.languageMenuOpen })}
                   className="flex min-h-10 w-full items-center rounded-lg border border-neutral-300 bg-white px-3 py-2 pr-10 text-start text-sm text-black dark:border-white/15 dark:bg-neutral-900 dark:text-white"
                 >
-                  {filters.language ? (
-                    <LanguageLabel value={filters.language} />
-                  ) : (
-                    <span className="text-black/55 dark:text-white/55">All Languages</span>
-                  )}
+                  <LanguageLabel value={filters.language || DEFAULT_VOICE_LANGUAGE} />
                 </button>
                 {filters.languageMenuOpen ? (
                   <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-[10030] max-h-56 overflow-y-auto rounded-xl border border-neutral-200 bg-white p-1.5 shadow-xl dark:border-white/10 dark:bg-neutral-950">
-                    <button
-                      type="button"
-                      onClick={() => setFilters({ ...filters, language: "", languageMenuOpen: false })}
-                      className="flex w-full items-center rounded-lg px-3 py-2 text-start text-sm hover:bg-black/5 dark:hover:bg-white/10"
-                    >
-                      All Languages
-                    </button>
                     {languageOptions.map(lang => (
                       <button
                         key={lang}
                         type="button"
-                        onClick={() => setFilters({ ...filters, language: lang, languageMenuOpen: false })}
+                        onClick={() => setLanguageFilter(lang)}
                         className="flex w-full items-center rounded-lg px-3 py-2 text-start text-sm hover:bg-black/5 dark:hover:bg-white/10"
                       >
                         <LanguageLabel value={lang} />
@@ -443,6 +570,23 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
                     ))}
                   </div>
                 ) : null}
+                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Accent</label>
+              <div className="relative">
+                <select
+                  value={selectedAccentValid ? (filters.accent || "") : ""}
+                  onChange={(e) => setFilters({ ...filters, accent: e.target.value })}
+                  className="w-full appearance-none pr-10 px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900 text-black dark:text-white border-neutral-300 dark:border-white/15 [color-scheme:light] dark:[color-scheme:dark]"
+                >
+                  <option value="">All accents</option>
+                  {accentOptions.map(accent => (
+                    <option key={accent} value={accent}>{accent}</option>
+                  ))}
+                </select>
                 <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
               </div>
             </div>
@@ -485,6 +629,25 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
             </div>
           </div>
 
+          {categoryOptions.length > 0 ? (
+            <div>
+              <label className="block text-sm font-medium mb-1">Category</label>
+              <div className="relative">
+                <select
+                  value={filters.category || ""}
+                  onChange={(e) => setFilters({ ...filters, category: e.target.value })}
+                  className="w-full appearance-none pr-10 px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900 text-black dark:text-white border-neutral-300 dark:border-white/15 [color-scheme:light] dark:[color-scheme:dark]"
+                >
+                  <option value="">All categories</option>
+                  {categoryOptions.map(category => (
+                    <option key={category} value={category}>{category}</option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
+              </div>
+            </div>
+          ) : null}
+
           {activeChips.length > 0 && (
             <div>
               <p className="mb-2 text-xs font-semibold text-black/60 dark:text-white/60">Active filters</p>
@@ -493,7 +656,11 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
                   <button
                     key={chip.key}
                     type="button"
-                    onClick={() => setFilters({ ...filters, [chip.key]: chip.key === "gender" ? "__all__" : chip.key === "language" ? DEFAULT_VOICE_LANGUAGE : "" })}
+                    onClick={() =>
+                      chip.key === "language"
+                        ? setLanguageFilter(DEFAULT_VOICE_LANGUAGE)
+                        : setFilters({ ...filters, [chip.key]: chip.key === "gender" ? "__all__" : "" })
+                    }
                     className="inline-flex items-center gap-1 rounded-full border border-purple-300/70 dark:border-purple-400/45 bg-purple-50 dark:bg-purple-900/25 px-2.5 py-1 text-xs text-purple-700 dark:text-purple-200"
                     title="Remove filter"
                   >
@@ -507,7 +674,7 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
 
   {activeChips.length > 0 && (
   <button
-    onClick={() => setFilters({ q: "", gender: "__all__", language: DEFAULT_VOICE_LANGUAGE, tone: "", pitch: "" })}
+    onClick={() => setFilters({ q: "", gender: "__all__", language: DEFAULT_VOICE_LANGUAGE, tone: "", pitch: "", accent: "", age: "", category: "" })}
     className="px-3 py-1.5 rounded-md border border-purple-500 bg-transparent text-purple-600 font-medium text-sm transition hover:bg-purple-50 dark:text-purple-400 dark:border-purple-400 dark:hover:bg-purple-900/20"
   >
     Clear Filters
@@ -846,7 +1013,7 @@ useEffect(() => {
 
   // Filter voices for a specific speaker (matching CreatePro)
   const getFilteredVoicesForSpeaker = (speakerIndex) => {
-    const f = speakerVoiceFilters[speakerIndex] || { q: "", gender: "", language: DEFAULT_VOICE_LANGUAGE, tone: "", pitch: "" };
+    const f = speakerVoiceFilters[speakerIndex] || { q: "", gender: "", language: DEFAULT_VOICE_LANGUAGE, tone: "", pitch: "", accent: "", age: "", category: "" };
     const isNeutralGender = (value) => {
       const g = String(value || "").trim().toLowerCase();
       return g.includes("neutral") || g.includes("netural");
@@ -890,12 +1057,18 @@ useEffect(() => {
       const vPitch = getVoicePitchTag(v);
       const vTones = getVoiceToneTags(v);
       const vLangs = [...toListLower(v.languages), ...toListLower(v.labels?.languages), normalizeLanguageFilterValue(v.labels?.language)];
+      const vAccents = accentTokensForLanguageFromVoice(v, f.language);
+      const vAges = [...toListLower(v.age), ...toListLower(v.labels?.age), ...toListLower(v.labels?.Age)];
+      const vCategories = [...toListLower(v.category), ...toListLower(v.labels?.category), ...toListLower(v.labels?.Category), ...toListLower(v.labels?.use_case)];
 
       if (q && !(name.includes(q) || desc.includes(q))) return false;
       if (effectiveGender && vGender !== effectiveGender) return false;
       if (f.pitch && vPitch !== String(f.pitch).toLowerCase()) return false;
       if (!matchFacet(f.tone, vTones)) return false;
       if (!matchLanguageFacet(f.language, vLangs)) return false;
+      if (!matchFacet(f.accent, vAccents)) return false;
+      if (!matchFacet(f.age, vAges)) return false;
+      if (!matchFacet(f.category, vCategories)) return false;
 
       return true;
     });
@@ -2000,7 +2173,7 @@ const exportScript = async (format = "pdf") => {
                               onClick={() => {
                                 setSpeakerVoiceFilters((prev) => ({
                                   ...prev,
-                                  [index]: prev[index] || { q: "", gender: "__all__", language: DEFAULT_VOICE_LANGUAGE, tone: "", pitch: "" },
+                                  [index]: prev[index] || { q: "", gender: "__all__", language: DEFAULT_VOICE_LANGUAGE, tone: "", pitch: "", accent: "", age: "", category: "" },
                                 }));
                                 setActiveFilterSpeaker(index);
                               }}
@@ -2250,7 +2423,7 @@ const exportScript = async (format = "pdf") => {
         <VoiceFilterModal
           isOpen={true}
           onClose={() => setActiveFilterSpeaker(null)}
-          filters={speakerVoiceFilters[activeFilterSpeaker] || { q: "", gender: "__all__", language: DEFAULT_VOICE_LANGUAGE, tone: "", pitch: "" }}
+          filters={speakerVoiceFilters[activeFilterSpeaker] || { q: "", gender: "__all__", language: DEFAULT_VOICE_LANGUAGE, tone: "", pitch: "", accent: "", age: "", category: "" }}
           setFilters={(newFilters) => {
             setSpeakerVoiceFilters({
               ...speakerVoiceFilters,
