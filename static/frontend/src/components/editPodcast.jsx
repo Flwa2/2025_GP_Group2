@@ -134,6 +134,8 @@ const LANGUAGE_NAME_TO_CODE = Object.entries(LANGUAGE_LABELS).reduce((acc, [code
 const normalizeLanguageFilterValue = (value) => {
   const raw = String(value || "").trim().toLowerCase().replace("_", "-");
   if (!raw) return "";
+  if (raw === "arabic" || raw.startsWith("arabic ") || raw.startsWith("arabic(")) return "ar";
+  if (raw === "english" || raw.startsWith("english ") || raw.startsWith("english(")) return "en";
   if (LANGUAGE_NAME_TO_CODE[raw]) return LANGUAGE_NAME_TO_CODE[raw];
   if (LANGUAGE_LABELS[raw]) return raw.split("-")[0];
   const base = raw.split("-")[0];
@@ -204,10 +206,12 @@ const collectLanguageAccentProfilesFromVoice = (voice) => {
 
   [
     voice?.languageAccents,
+    voice?.languageAccentPairs,
     voice?.language_accents,
     voice?.verified_languages,
     voice?.verifiedLanguages,
     voice?.labels?.languageAccents,
+    voice?.labels?.languageAccentPairs,
     voice?.labels?.language_accents,
     voice?.labels?.verified_languages,
     voice?.labels?.verifiedLanguages,
@@ -244,6 +248,7 @@ const accentDisplaysForLanguageFromVoice = (voice, language) => {
   const matchedProfiles = profiles.filter((profile) => languageMatchesAccentProfile(language, profile));
   const matchedProfileAccents = matchedProfiles.map((profile) => profile.accent).filter(Boolean);
   if (matchedProfiles.length) return matchedProfileAccents;
+  if (profiles.length) return [];
   return collectFlatAccentDisplaysFromVoice(voice);
 };
 
@@ -286,6 +291,7 @@ const getVoiceToneTags = (voice) => {
 };
 
 const PITCH_VALUES = ["low", "medium", "high"];
+const VOICE_LIBRARY_PAGE_SIZE = 100;
 const PITCH_RULES = [
   { pitch: "low", keys: ["low", "deep", "resonant", "bass", "baritone", "grave"] },
   { pitch: "high", keys: ["high", "bright", "light", "youthful", "soprano"] },
@@ -306,6 +312,67 @@ const getVoicePitchTag = (voice) => {
 
   const inferred = PITCH_RULES.find((rule) => rule.keys.some((k) => haystack.includes(k)));
   return inferred?.pitch || "";
+};
+
+const emptyAppliedVoiceFilters = () => ({
+  search: "",
+  gender: "",
+  language: DEFAULT_VOICE_LANGUAGE,
+  accent: "",
+  age: "",
+  category: "",
+  tone: "",
+  pitch: "",
+});
+
+const buildLibraryUrlSearchParams = (applied, page, pageSize = VOICE_LIBRARY_PAGE_SIZE) => {
+  const p = new URLSearchParams();
+  p.set("provider", "ElevenLabs");
+  p.set("library", "true");
+  p.set("page", String(page));
+  p.set("page_size", String(Math.min(100, Math.max(1, pageSize))));
+  if (applied.search) p.set("search", applied.search);
+  if (applied.gender) p.set("gender", applied.gender);
+  if (applied.language) p.set("language", applied.language);
+  if (applied.accent) p.set("accent", applied.accent);
+  if (applied.age) p.set("age", applied.age);
+  if (applied.category) p.set("category", applied.category);
+  if (applied.tone) p.append("descriptives", applied.tone);
+  return p;
+};
+
+const mergeVoicesById = (...voiceLists) => {
+  const out = new Map();
+  voiceLists.flat().filter(Boolean).forEach((voice, idx) => {
+    const id = voice?.providerVoiceId || voice?.id || voice?.docId || `voice-${idx}`;
+    if (!out.has(id)) out.set(id, voice);
+  });
+  return Array.from(out.values());
+};
+
+const voiceAccentDebugSummary = (voicesList, language = "ar") => {
+  const matchingVoices = voicesList.filter((voice) => {
+    const tokens = [
+      ...voiceFacetValues(voice?.language),
+      ...voiceFacetValues(voice?.languages),
+      ...voiceFacetValues(voice?.locale),
+      ...voiceFacetValues(voice?.labels?.language),
+      ...voiceFacetValues(voice?.labels?.Language),
+      ...voiceFacetValues(voice?.labels?.languages),
+      ...voiceFacetValues(voice?.labels?.locale),
+      ...voiceFacetValues(voice?.labels?.Locale),
+    ].map(normalizeLanguageFilterValue).filter(Boolean);
+    return tokens.some((token) => token === language || token.startsWith(`${language}-`) || language.startsWith(`${token}-`));
+  });
+  return {
+    totalVoices: matchingVoices.length,
+    accents: Array.from(new Set(
+      matchingVoices
+        .flatMap((voice) => accentDisplaysForLanguageFromVoice(voice, language))
+        .map((accent) => String(accent).trim())
+        .filter(Boolean)
+    )).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })),
+  };
 };
 
 /* -------------------- loading overlay -------------------- */
@@ -373,7 +440,7 @@ function Toast({ toast, onClose }) {
 }
 
 /* -------------------- voice filter modal -------------------- */
-function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speakerIndex }) {
+function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speakerIndex, isRTL = false }) {
   if (!isOpen) return null;
 
   const toList = (value) => {
@@ -407,10 +474,14 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
   const languageMatchesVoice = (language, voice) => {
     const selected = normalizeLanguageFilterValue(language || DEFAULT_VOICE_LANGUAGE);
     const tokens = [
+      ...toList(voice?.language),
       ...toList(voice?.languages),
+      ...toList(voice?.locale),
       ...toList(voice?.labels?.languages),
       ...toList(voice?.labels?.language),
       ...toList(voice?.labels?.Language),
+      ...toList(voice?.labels?.locale),
+      ...toList(voice?.labels?.Locale),
     ].map(normalizeLanguageFilterValue).filter(Boolean);
     if (!selected) return true;
     if (!tokens.length) return false;
@@ -486,36 +557,51 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
     filters.category ? { key: "category", label: `Category: ${filters.category}` } : null,
   ].filter(Boolean);
 
-  const modal = (
-    <div className="wecast-overlay flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-      <div className="w-[min(92vw,560px)] rounded-2xl bg-white dark:bg-neutral-900 shadow-2xl p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-bold">Filter Voices - Speaker {speakerIndex + 1}</h2>
-          <button onClick={onClose} className="p-1 rounded-full hover:bg-black/5">
-            <X className="w-5 h-5" />
+  return (
+    <Modal
+      open={isOpen}
+      title={`Filter Voices - Speaker ${speakerIndex + 1}`}
+      onClose={onClose}
+      isRTL={isRTL}
+      dense
+      footer={
+        <>
+          <button
+            type="button"
+            onClick={() => setFilters({ q: "", gender: "__all__", language: DEFAULT_VOICE_LANGUAGE, tone: "", pitch: "", accent: "", age: "", category: "" })}
+            className="px-4 h-10 min-h-10 rounded-xl border border-neutral-300 dark:border-neutral-700 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition"
+          >
+            Clear Filters
           </button>
-        </div>
-
-        <div className="space-y-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 h-10 min-h-10 rounded-xl bg-purple-600 text-white text-sm font-semibold hover:opacity-95 transition"
+          >
+            Done
+          </button>
+        </>
+      }
+    >
+        <div className="grid grid-cols-1 gap-2.5">
           <div>
-            <label className="block text-sm font-medium mb-1">Search</label>
+            <label className="form-label mb-1 block">Search</label>
             <input
               value={filters.q || ""}
               onChange={(e) => setFilters({ ...filters, q: e.target.value })}
               placeholder="Search by voice name..."
-              className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900 text-black dark:text-white placeholder:text-black/45 dark:placeholder:text-white/45 caret-black dark:caret-white border-neutral-300 dark:border-white/15"
+              className="form-input !px-3 !py-2 min-h-10 text-sm"
             />
           </div>
 
-          {/* Gender and Age row */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-x-3 md:gap-y-2.5">
             <div>
-              <label className="block text-sm font-medium mb-1">Gender</label>
+              <label className="form-label mb-1 block">Gender</label>
               <div className="relative">
                 <select
                   value={safeGenderFilter}
                   onChange={(e) => setFilters({ ...filters, gender: e.target.value })}
-                  className="w-full appearance-none pr-10 px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900 text-black dark:text-white border-neutral-300 dark:border-white/15 [color-scheme:light] dark:[color-scheme:dark]"
+                  className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
                 >
                   <option value="__all__">All Genders</option>
                   {genderOptions.map(g => (
@@ -527,12 +613,12 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">Age</label>
+              <label className="form-label mb-1 block">Age</label>
               <div className="relative">
                 <select
                   value={filters.age || ""}
                   onChange={(e) => setFilters({ ...filters, age: e.target.value })}
-                  className="w-full appearance-none pr-10 px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900 text-black dark:text-white border-neutral-300 dark:border-white/15 [color-scheme:light] dark:[color-scheme:dark]"
+                  className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
                 >
                   <option value="">All ages</option>
                   {ageOptions.map(age => (
@@ -544,15 +630,14 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
             </div>
           </div>
 
-          {/* Language and Accent row */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-x-3 md:gap-y-2.5">
             <div>
-              <label className="block text-sm font-medium mb-1">Language</label>
+              <label className="form-label mb-1 block">Language</label>
               <div className="relative">
                 <button
                   type="button"
                   onClick={() => setFilters({ ...filters, languageMenuOpen: !filters.languageMenuOpen })}
-                  className="flex min-h-10 w-full items-center rounded-lg border border-neutral-300 bg-white px-3 py-2 pr-10 text-start text-sm text-black dark:border-white/15 dark:bg-neutral-900 dark:text-white"
+                  className="form-input !px-3 !py-2 min-h-10 w-full pr-10 text-start text-sm"
                 >
                   <LanguageLabel value={filters.language || DEFAULT_VOICE_LANGUAGE} />
                 </button>
@@ -575,12 +660,12 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">Accent</label>
+              <label className="form-label mb-1 block">Accent</label>
               <div className="relative">
                 <select
                   value={selectedAccentValid ? (filters.accent || "") : ""}
                   onChange={(e) => setFilters({ ...filters, accent: e.target.value })}
-                  className="w-full appearance-none pr-10 px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900 text-black dark:text-white border-neutral-300 dark:border-white/15 [color-scheme:light] dark:[color-scheme:dark]"
+                  className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
                 >
                   <option value="">All accents</option>
                   {accentOptions.map(accent => (
@@ -592,15 +677,14 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
             </div>
           </div>
 
-          {/* Tone and Pitch row */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-x-3 md:gap-y-2.5">
             <div>
-              <label className="block text-sm font-medium mb-1">Tone</label>
+              <label className="form-label mb-1 block">Tone</label>
               <div className="relative">
                 <select
                   value={filters.tone || ""}
                   onChange={(e) => setFilters({ ...filters, tone: e.target.value })}
-                  className="w-full appearance-none pr-10 px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900 text-black dark:text-white border-neutral-300 dark:border-white/15 [color-scheme:light] dark:[color-scheme:dark]"
+                  className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
                 >
                   <option value="">All Tones</option>
                   {toneOptions.map(tone => (
@@ -612,12 +696,12 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">Pitch</label>
+              <label className="form-label mb-1 block">Pitch</label>
               <div className="relative">
                 <select
                   value={filters.pitch || ""}
                   onChange={(e) => setFilters({ ...filters, pitch: e.target.value })}
-                  className="w-full appearance-none pr-10 px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900 text-black dark:text-white border-neutral-300 dark:border-white/15 [color-scheme:light] dark:[color-scheme:dark]"
+                  className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
                 >
                   <option value="">All Pitches</option>
                   {PITCH_VALUES.map((pitch) => (
@@ -631,12 +715,12 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
 
           {categoryOptions.length > 0 ? (
             <div>
-              <label className="block text-sm font-medium mb-1">Category</label>
+              <label className="form-label mb-1 block">Category</label>
               <div className="relative">
                 <select
                   value={filters.category || ""}
                   onChange={(e) => setFilters({ ...filters, category: e.target.value })}
-                  className="w-full appearance-none pr-10 px-3 py-2 border rounded-lg bg-white dark:bg-neutral-900 text-black dark:text-white border-neutral-300 dark:border-white/15 [color-scheme:light] dark:[color-scheme:dark]"
+                  className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
                 >
                   <option value="">All categories</option>
                   {categoryOptions.map(category => (
@@ -650,8 +734,8 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
 
           {activeChips.length > 0 && (
             <div>
-              <p className="mb-2 text-xs font-semibold text-black/60 dark:text-white/60">Active filters</p>
-              <div className="flex flex-wrap gap-2">
+              <p className="mb-1 text-xs font-semibold text-black/60 dark:text-white/60">Active filters</p>
+              <div className="flex flex-wrap gap-1.5">
                 {activeChips.map((chip) => (
                   <button
                     key={chip.key}
@@ -661,7 +745,7 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
                         ? setLanguageFilter(DEFAULT_VOICE_LANGUAGE)
                         : setFilters({ ...filters, [chip.key]: chip.key === "gender" ? "__all__" : "" })
                     }
-                    className="inline-flex items-center gap-1 rounded-full border border-purple-300/70 dark:border-purple-400/45 bg-purple-50 dark:bg-purple-900/25 px-2.5 py-1 text-xs text-purple-700 dark:text-purple-200"
+                    className="inline-flex items-center gap-1 rounded-full border border-purple-300/70 dark:border-purple-400/45 bg-purple-50 dark:bg-purple-900/25 px-2 py-0.5 text-xs text-purple-700 dark:text-purple-200"
                     title="Remove filter"
                   >
                     <span>{chip.label}</span>
@@ -671,30 +755,9 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
               </div>
             </div>
           )}
-
-  {activeChips.length > 0 && (
-  <button
-    onClick={() => setFilters({ q: "", gender: "__all__", language: DEFAULT_VOICE_LANGUAGE, tone: "", pitch: "", accent: "", age: "", category: "" })}
-    className="px-3 py-1.5 rounded-md border border-purple-500 bg-transparent text-purple-600 font-medium text-sm transition hover:bg-purple-50 dark:text-purple-400 dark:border-purple-400 dark:hover:bg-purple-900/20"
-  >
-    Clear Filters
-  </button>
-)}
         </div>
-
-        <div className="mt-6 flex justify-end">
-          <button
-            onClick={onClose}
-            className="px-6 py-2 rounded-xl bg-purple-600 text-white font-semibold hover:bg-purple-700"
-          >
-            Done
-          </button>
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
-  const portalTarget = getPortalTarget();
-  return portalTarget ? createPortal(modal, portalTarget) : modal;
 }
 
 export default function EditPodcast() {
@@ -974,35 +1037,54 @@ useEffect(() => {
   }
 }, [speakers, script, originalSpeakers]);
 
-  // Load voices from API (matching CreatePro)
+  // Load voices from the same ElevenLabs shared-library source used by CreatePro.
   useEffect(() => {
     async function loadVoices() {
       try {
         setLoadingVoices(true);
 
-        const params = new URLSearchParams();
-        params.set("provider", "ElevenLabs");
-        params.set("limit", "500");
+        const fetchLibraryPage = async (applied) => {
+          const params = buildLibraryUrlSearchParams(applied, 0, VOICE_LIBRARY_PAGE_SIZE);
+          const res = await fetch(`${API_BASE}/api/voices/elevenlabs?${params.toString()}`, {
+            credentials: "include",
+            headers: authHeaders(),
+          });
+          const data = await parseJsonResponse(res);
+          if (!res.ok) throw new Error(data?.error || `Failed to load voices (${res.status})`);
+          return Array.isArray(data?.items) ? data.items : [];
+        };
 
-        const url = `${API_BASE}/api/voices?${params.toString()}`;
-        const res = await fetch(url, { 
-          credentials: "include",
-          headers: authHeaders(),
-        });
+        const baseFilters = emptyAppliedVoiceFilters();
+        const [baseVoices, englishVoices, arabicVoices] = await Promise.all([
+          fetchLibraryPage(baseFilters),
+          fetchLibraryPage({ ...baseFilters, language: "en" }),
+          fetchLibraryPage({ ...baseFilters, language: "ar" }),
+        ]);
+        const raw = mergeVoicesById(baseVoices, englishVoices, arabicVoices);
 
-        const data = await parseJsonResponse(res);
-
-        if (!res.ok) {
-          throw new Error(data?.error || `Failed to load voices (${res.status})`);
+        if (typeof window !== "undefined" && window.localStorage?.getItem("wecastVoiceFilterDebug") === "1") {
+          console.debug("[WeCast voice filters] Edit Arabic summary", voiceAccentDebugSummary(raw, "ar"));
         }
-
-        const raw = Array.isArray(data?.items) ? data.items :
-                    Array.isArray(data?.voices) ? data.voices : [];
 
         setVoices(raw);
       } catch (e) {
         console.error("Failed to load voices", e);
-        setVoices([]);
+        try {
+          const params = new URLSearchParams();
+          params.set("provider", "ElevenLabs");
+          params.set("limit", "500");
+          const res = await fetch(`${API_BASE}/api/voices?${params.toString()}`, {
+            credentials: "include",
+            headers: authHeaders(),
+          });
+          const data = await parseJsonResponse(res);
+          if (!res.ok) throw new Error(data?.error || `Fallback voices failed (${res.status})`);
+          const fallback = Array.isArray(data?.items) ? data.items : Array.isArray(data?.voices) ? data.voices : [];
+          setVoices(fallback);
+        } catch (fallbackErr) {
+          console.error("Failed to load fallback voices", fallbackErr);
+          setVoices([]);
+        }
       } finally {
         setLoadingVoices(false);
       }
@@ -1056,7 +1138,16 @@ useEffect(() => {
       const vGender = String(v.gender || v.labels?.gender || "").toLowerCase();
       const vPitch = getVoicePitchTag(v);
       const vTones = getVoiceToneTags(v);
-      const vLangs = [...toListLower(v.languages), ...toListLower(v.labels?.languages), normalizeLanguageFilterValue(v.labels?.language)];
+      const vLangs = [
+        ...toListLower(v.language),
+        ...toListLower(v.languages),
+        ...toListLower(v.locale),
+        ...toListLower(v.labels?.languages),
+        ...toListLower(v.labels?.language),
+        ...toListLower(v.labels?.Language),
+        ...toListLower(v.labels?.locale),
+        ...toListLower(v.labels?.Locale),
+      ];
       const vAccents = accentTokensForLanguageFromVoice(v, f.language);
       const vAges = [...toListLower(v.age), ...toListLower(v.labels?.age), ...toListLower(v.labels?.Age)];
       const vCategories = [...toListLower(v.category), ...toListLower(v.labels?.category), ...toListLower(v.labels?.Category), ...toListLower(v.labels?.use_case)];
@@ -1075,7 +1166,7 @@ useEffect(() => {
   };
 
   // Preview voice (matching CreatePro)
-  const previewVoice = async (voiceId, voiceName = "") => {
+  const previewVoice = async (voiceId, voiceObj = null) => {
     if (!voiceId) {
       setToast({ type: "warning", message: "Please select a voice first" });
       setTimeout(() => setToast(null), 2500);
@@ -1086,6 +1177,14 @@ useEffect(() => {
       setPreviewLoadingVoiceId(voiceId);
       if (voicePreviewRef.current) {
         voicePreviewRef.current.pause();
+      }
+
+      const directUrl = String(voiceObj?.preview_url || voiceObj?.previewUrl || "").trim();
+      if (directUrl) {
+        const audio = new Audio(directUrl);
+        voicePreviewRef.current = audio;
+        await audio.play();
+        return;
       }
 
       const cachedUrl = voicePreviewCacheRef.current.get(voiceId);
@@ -1103,10 +1202,9 @@ useEffect(() => {
           headers: {
             "Content-Type": "application/json",
             ...authHeaders(),
-          },
+        },
         body: JSON.stringify({
           voiceId,
-          voiceName,
           text: "Hi, this is a WeCast sample.",
         }),
       });
@@ -2205,8 +2303,10 @@ const exportScript = async (format = "pdf") => {
                                   setSpeakers(newSpeakers);
 
                                   if (newVoice && shouldAutoplayVoicePreview()) {
-                                    const selected = pool.find((v) => getVoiceId(v) === newVoice);
-                                    previewVoice(newVoice, selected?.name || "");
+                                    const selected =
+                                      pool.find((v) => getVoiceId(v) === newVoice) ||
+                                      voices.find((v) => getVoiceId(v) === newVoice);
+                                    previewVoice(newVoice, selected || null);
                                   }
                                 }}
                                 className={`w-full appearance-none pr-10 px-3 py-2 rounded-lg ${studioFieldClass} [color-scheme:light] dark:[color-scheme:dark]`}
@@ -2227,16 +2327,18 @@ const exportScript = async (format = "pdf") => {
                               <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
                             </div>
 
-                            <button
+<button
   onClick={() => {
-    const selected = pool.find((v) => getVoiceId(v) === currentId);
-    previewVoice(currentId, selected?.name || "");
+    const selected =
+      pool.find((v) => getVoiceId(v) === currentId) ||
+      voices.find((v) => getVoiceId(v) === currentId);
+    previewVoice(currentId, selected || null);
   }}
   disabled={!currentId || previewLoadingVoiceId === currentId}
   className={`inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-xl border border-purple-500 px-3 py-2 text-sm font-semibold text-purple-600 transition hover:bg-purple-50 disabled:opacity-50 dark:hover:bg-purple-900/20 sm:h-[44px] sm:flex-none sm:px-5 sm:text-base ${isRTL ? "flex-row-reverse" : ""}`}
   title={previewLoadingVoiceId === currentId ? "Generating preview..." : "Preview voice"}
 >
-  <span>{previewLoadingVoiceId === currentId ? "Generating..." : "Preview"}</span>
+  <span>Preview</span>
   <Play className={`w-4 h-4 ${previewLoadingVoiceId === currentId ? "animate-pulse" : ""}`} />
 </button>
                           </div>
@@ -2436,6 +2538,7 @@ const exportScript = async (format = "pdf") => {
           }}
           voices={voices}
           speakerIndex={activeFilterSpeaker}
+          isRTL={isRTL}
         />
       )}
 

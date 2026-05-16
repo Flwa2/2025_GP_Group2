@@ -350,7 +350,7 @@ const accentDisplaysForLanguageFromVoice = (v, language) => {
         .map((profile) => profile.accent)
         .filter(Boolean);
     if (matchedProfiles.length) return matchedProfileAccents;
-    if (matchedProfileAccents.length) return matchedProfileAccents;
+    if (profiles.length) return [];
     return collectFacetDisplaysFromVoice(v, "accent", "Accent");
 };
 
@@ -381,6 +381,16 @@ const debugArabicAccentMetadata = (voicesList, source) => {
         arabicVoiceCount: arabicVoices.length,
         sample: arabicVoices.slice(0, 8).map(voiceLanguageDebugValues),
     });
+};
+
+const voiceAccentDebugSummary = (voicesList, language = "ar") => {
+    const matchingVoices = voicesList.filter((v) => languageMatchesVoice(language, v));
+    return {
+        totalVoices: matchingVoices.length,
+        accents: uniqueSortedDisplay(
+            matchingVoices.flatMap((v) => accentDisplaysForLanguageFromVoice(v, language))
+        ),
+    };
 };
 
 const facetTokensLower = (v, ...keys) => {
@@ -954,6 +964,9 @@ useEffect(() => {
                 if (!accentValues.length && !arabicAccentDebugRef.current.has(debugKey)) {
                     arabicAccentDebugRef.current.add(debugKey);
                     debugArabicAccentMetadata(r.items, "Create/Add Speaker modal language preview");
+                }
+                if (typeof window !== "undefined" && window.localStorage?.getItem("wecastVoiceFilterDebug") === "1") {
+                    console.debug("[WeCast voice filters] Create Arabic summary", voiceAccentDebugSummary(r.items, "ar"));
                 }
             }
             setModalLibraryPreview((p) => ({
