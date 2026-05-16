@@ -29,6 +29,16 @@ import Modal from "../components/Modal";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
 import { shouldAutoplayVoicePreview, shouldShowEditingNotifications } from "../utils/accountPreferences";
+import { collectVoiceAgeOptions, formatVoiceAgeLabel, voiceMatchesAge } from "../utils/voiceAgeFilters";
+import {
+    PITCH_VALUES,
+    buildTonePitchDebugMatrix,
+    collectVoiceToneOptions,
+    formatPitchLabel,
+    formatToneLabel,
+    voiceMatchesPitch,
+    voiceMatchesTone,
+} from "../utils/voiceTonePitchFilters";
 import {
     markEditNavigationFromCreate,
     markFinalizeNavigationFromCreate,
@@ -38,80 +48,6 @@ import {
 const API_BASE = import.meta.env.PROD
     ? "https://wecast.onrender.com"
     : "http://localhost:5000";
-
-const splitList = (value) => {
-    if (Array.isArray(value)) {
-        return value.map((x) => String(x || "").trim().toLowerCase()).filter(Boolean);
-    }
-    if (typeof value === "string") {
-        return value
-            .split(",")
-            .map((x) => x.trim().toLowerCase())
-            .filter(Boolean);
-    }
-    return [];
-};
-
-const TONE_RULES = [
-    { tone: "professional", keys: ["professional", "broadcaster", "corporate", "formal", "authoritative", "احترافي", "رسمي"] },
-    { tone: "funny", keys: ["funny", "humorous", "comedic", "comic", "quirky", "playful", "مضحك", "كوميدي", "مرح"] },
-    { tone: "warm", keys: ["warm", "friendly", "comforting", "cozy", "welcoming", "دافئ", "حنون"] },
-    { tone: "calm", keys: ["calm", "relaxed", "soothing", "gentle", "smooth", "هادئ", "مريح"] },
-    { tone: "energetic", keys: ["energetic", "dynamic", "lively", "upbeat", "excited", "حيوي", "نشيط"] },
-    { tone: "conversational", keys: ["conversational", "natural", "casual", "chatty", "محادثة", "طبيعي"] },
-    { tone: "serious", keys: ["serious", "deep", "resonant", "mature", "confident", "جدي", "عميق"] },
-    { tone: "educational", keys: ["educational", "educator", "teacher", "instructive", "explainer", "تعليمي"] },
-    { tone: "storytelling", keys: ["storytelling", "narration", "narrator", "cinematic", "قصصي", "سرد"] },
-];
-
-const getVoiceToneTags = (voice) => {
-    const explicit = [
-        ...splitList(voice?.tone),
-        ...splitList(voice?.labels?.tone),
-        ...splitList(voice?.labels?.descriptive),
-    ];
-
-    const haystack = [
-        String(voice?.name || ""),
-        String(voice?.description || ""),
-        String(voice?.labels?.description || ""),
-        String(voice?.labels?.descriptive || ""),
-        String(voice?.category || ""),
-        String(voice?.labels?.use_case || ""),
-    ]
-        .join(" ")
-        .toLowerCase();
-
-    const inferred = TONE_RULES
-        .filter((rule) => rule.keys.some((k) => haystack.includes(k)))
-        .map((rule) => rule.tone);
-
-    return Array.from(new Set([...explicit, ...inferred]));
-};
-
-const PITCH_VALUES = ["low", "medium", "high"];
-const PITCH_RULES = [
-    { pitch: "low", keys: ["low", "deep", "resonant", "bass", "baritone", "grave"] },
-    { pitch: "high", keys: ["high", "bright", "light", "youthful", "soprano"] },
-    { pitch: "medium", keys: ["medium", "balanced", "neutral", "natural"] },
-];
-
-const getVoicePitchTag = (voice) => {
-    const raw = String(voice?.pitch || voice?.labels?.pitch || "").trim().toLowerCase();
-    if (PITCH_VALUES.includes(raw)) return raw;
-
-    const haystack = [
-        String(voice?.name || ""),
-        String(voice?.description || ""),
-        String(voice?.labels?.description || ""),
-        String(voice?.labels?.descriptive || ""),
-    ]
-        .join(" ")
-        .toLowerCase();
-
-    const inferred = PITCH_RULES.find((rule) => rule.keys.some((k) => haystack.includes(k)));
-    return inferred?.pitch || "";
-};
 
 const FACET_SPLIT = /[,;/|]/;
 
@@ -509,23 +445,14 @@ const buildLibraryUrlSearchParams = (applied, page, pageSize = VOICE_LIBRARY_PAG
     if (applied.category && SHARED_LIBRARY_CATEGORY_API.has(applied.category.toLowerCase())) {
         p.set("category", applied.category.toLowerCase());
     }
-    if (applied.tone) p.append("descriptives", applied.tone);
     return p;
 };
 
 const clientRefineVoicesByTonePitch = (items, tone, pitch) => {
-    const t = String(tone || "").trim().toLowerCase();
-    const p = String(pitch || "").trim().toLowerCase();
-    if (!t && !p) return items;
+    if (!tone && !pitch) return items;
     return items.filter((v) => {
-        if (p) {
-            const vp = getVoicePitchTag(v);
-            if (vp !== p) return false;
-        }
-        if (t) {
-            const tags = getVoiceToneTags(v).map((x) => String(x).toLowerCase());
-            if (!tags.includes(t)) return false;
-        }
+        if (!voiceMatchesPitch(v, pitch)) return false;
+        if (!voiceMatchesTone(v, tone)) return false;
         return true;
     });
 };
@@ -536,7 +463,7 @@ const clientRefineLibraryVoices = (items, applied) => {
     const g = normalizeGenderToken(applied.gender);
     const lang = normalizeLanguageFilterValue(applied.language);
     const accent = String(applied.accent || "").trim().toLowerCase();
-    const age = String(applied.age || "").trim().toLowerCase();
+    const age = String(applied.age || "").trim();
     const c = String(applied.category || "").trim().toLowerCase();
 
     if (q) {
@@ -552,7 +479,7 @@ const clientRefineLibraryVoices = (items, applied) => {
         out = out.filter((v) => accentTokensForLanguageFromVoice(v, lang).includes(accent));
     }
     if (age) {
-        out = out.filter((v) => facetTokensLower(v, "age", "Age").includes(age));
+        out = out.filter((v) => voiceMatchesAge(v, age));
     }
     if (c && !SHARED_LIBRARY_CATEGORY_API.has(c)) {
         out = out.filter((v) => String(v.category || "").toLowerCase() === c);
@@ -968,6 +895,9 @@ useEffect(() => {
                 if (typeof window !== "undefined" && window.localStorage?.getItem("wecastVoiceFilterDebug") === "1") {
                     console.debug("[WeCast voice filters] Create Arabic summary", voiceAccentDebugSummary(r.items, "ar"));
                 }
+            }
+            if (typeof window !== "undefined" && window.localStorage?.getItem("wecastVoiceFilterDebug") === "1") {
+                console.debug("[WeCast voice filters] Create tone/pitch summary", buildTonePitchDebugMatrix(r.items));
             }
             setModalLibraryPreview((p) => ({
                 ...p,
@@ -2555,22 +2485,7 @@ const exportScript = async (format = "pdf") => {
                                                                     };
 
                                                                     const languageOptions = uniqueLanguageOptions();
-
-                                                                    const toneOptions = uniqueSortedDisplay(
-                                                                        librarySeedVoices.flatMap((v) => getVoiceToneTags(v))
-                                                                    );
-
                                                                     const pitchOptions = PITCH_VALUES;
-
-                                                                    const genderOptions = uniqueSortedDisplay(
-                                                                        librarySeedVoices
-                                                                            .map((v) => normalizeGenderToken(v.gender || v.labels?.gender))
-                                                                            .filter(Boolean)
-                                                                    ).map((g) => ({
-                                                                        value: g,
-                                                                        label: g === "female" ? "Female" : g === "male" ? "Male" : g,
-                                                                    }));
-
                                                                     const selectedLanguage = normalizeLanguageFilterValue(f.language || DEFAULT_VOICE_LANGUAGE);
                                                                     const modalAccentItems = Array.isArray(modalLibraryPreview[i]?.accentItems)
                                                                         ? modalLibraryPreview[i].accentItems
@@ -2582,6 +2497,14 @@ const exportScript = async (format = "pdf") => {
                                                                                 .map((v, idx) => [getVoiceId(v) || `voice-${idx}`, v])
                                                                         ).values()
                                                                     );
+                                                                    const genderOptions = uniqueSortedDisplay(
+                                                                        accentSourceVoices
+                                                                            .map((v) => normalizeGenderToken(v.gender || v.labels?.gender))
+                                                                            .filter(Boolean)
+                                                                    ).map((g) => ({
+                                                                        value: g,
+                                                                        label: g === "female" ? "Female" : g === "male" ? "Male" : g,
+                                                                    }));
                                                                     const accentOptions = uniqueSortedDisplay(
                                                                         accentSourceVoices
                                                                             .filter((v) => languageMatchesVoice(selectedLanguage, v))
@@ -2611,17 +2534,30 @@ const exportScript = async (format = "pdf") => {
                                                                         });
                                                                     };
 
-                                                                    const ageOptions = uniqueSortedDisplay([
-                                                                        ...libraryFilterOptions.ages,
-                                                                        ...mergeDisplayOptionsFromVoices(librarySeedVoices, (v) => {
-                                                                            const acc = [];
-                                                                            if (v?.labels && typeof v.labels === "object") {
-                                                                                pushFacetTokens(v.labels.age, acc);
-                                                                                pushFacetTokens(v.labels.Age, acc);
-                                                                            }
-                                                                            return acc;
-                                                                        }),
-                                                                    ]);
+                                                                    const ageOptions = collectVoiceAgeOptions(
+                                                                        accentSourceVoices.filter((v) => languageMatchesVoice(selectedLanguage, v))
+                                                                    );
+
+                                                                    const toneCandidateVoices = accentSourceVoices.filter((v) => {
+                                                                        const q = String(f.q || "").trim().toLowerCase();
+                                                                        const gender = normalizeGenderToken(f.gender);
+                                                                        const accent = String(f.accent || "").trim().toLowerCase();
+                                                                        const category = String(f.category || "").trim().toLowerCase();
+                                                                        if (q && !voiceSearchHaystack(v).includes(q)) return false;
+                                                                        if (gender && normalizeGenderToken(v.gender || v.labels?.gender || v.labels?.Gender) !== gender) return false;
+                                                                        if (selectedLanguage && !languageFilterMatches(selectedLanguage, languageMatchTokensForVoice(v))) return false;
+                                                                        if (accent && !accentTokensForLanguageFromVoice(v, selectedLanguage).includes(accent)) return false;
+                                                                        if (f.age && !voiceMatchesAge(v, f.age)) return false;
+                                                                        if (category && String(v.category || "").toLowerCase() !== category) return false;
+                                                                        if (!voiceMatchesPitch(v, f.pitch)) return false;
+                                                                        return true;
+                                                                    });
+                                                                    const toneOptions = collectVoiceToneOptions(toneCandidateVoices).filter((tone) =>
+                                                                        toneCandidateVoices.some((v) => voiceMatchesTone(v, tone))
+                                                                    );
+                                                                    const selectedToneValid =
+                                                                        !f.tone ||
+                                                                        toneOptions.some((tone) => String(tone).toLowerCase() === String(f.tone).toLowerCase());
 
                                                                     const categoryOptions = uniqueSortedDisplay([
                                                                         ...libraryFilterOptions.categories,
@@ -2662,10 +2598,10 @@ const exportScript = async (format = "pdf") => {
                                                                             ? { key: "category", label: `${t("create.speakers.category", "Category")}: ${f.category}` }
                                                                             : null,
                                                                         f.tone
-                                                                            ? { key: "tone", label: `${t("create.speakers.tone", "Tone")}: ${f.tone}` }
+                                                                            ? { key: "tone", label: `${t("create.speakers.tone", "Tone")}: ${formatToneLabel(f.tone)}` }
                                                                             : null,
                                                                         f.pitch
-                                                                            ? { key: "pitch", label: `${t("create.speakers.pitch", "Pitch")}: ${f.pitch}` }
+                                                                            ? { key: "pitch", label: `${t("create.speakers.pitch", "Pitch")}: ${formatPitchLabel(f.pitch)}` }
                                                                             : null,
                                                                         f.accent
                                                                             ? { key: "accent", label: `${t("create.speakers.accent", "Accent")}: ${f.accent}` }
@@ -2745,7 +2681,11 @@ const exportScript = async (format = "pdf") => {
                                                                                 <button
                                                                                 type="button"
                                                                                 onClick={() => {
-                                                                            const modalFilters = selectedAccentValid ? f : { ...f, accent: "" };
+                                                                            const modalFilters = {
+                                                                                ...f,
+                                                                                accent: selectedAccentValid ? f.accent : "",
+                                                                                tone: selectedToneValid ? f.tone : "",
+                                                                            };
                                                                             const nextApplied = filtersModalToApplied(modalFilters);
                                                                             const modalGenderTok = normalizeGenderToken(f.gender);
                                                                             const modalGenderLabel =
@@ -2825,7 +2765,7 @@ const exportScript = async (format = "pdf") => {
                                                                                         <option value="">{t("create.speakers.allAges", "All ages")}</option>
                                                                                         {ageOptions.map((a) => (
                                                                                             <option key={a} value={a}>
-                                                                                                {a}
+                                                                                                {formatVoiceAgeLabel(a)}
                                                                                             </option>
                                                                                         ))}
                                                                                     </select>
@@ -2889,14 +2829,14 @@ const exportScript = async (format = "pdf") => {
                                                                                     <label className="form-label mb-1 block">{t("create.speakers.tone")}</label>
                                                                                     <div className="relative">
                                                                                         <select
-                                                                                            value={f.tone}
+                                                                                            value={selectedToneValid ? f.tone : ""}
                                                                                             onChange={(e) => setF({ tone: e.target.value })}
                                                                                             className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
                                                                                         >
                                                                                             <option value="">{t("create.speakers.allTones")}</option>
                                                                                             {toneOptions.map((tone) => (
                                                                                                 <option key={tone} value={tone}>
-                                                                                                    {tone}
+                                                                                                    {formatToneLabel(tone)}
                                                                                                 </option>
                                                                                             ))}
                                                                                         </select>
@@ -2916,7 +2856,7 @@ const exportScript = async (format = "pdf") => {
                                                                                             <option value="">{t("create.speakers.allPitches")}</option>
                                                                                             {pitchOptions.map((p) => (
                                                                                                 <option key={p} value={p}>
-                                                                                                    {p}
+                                                                                                    {formatPitchLabel(p)}
                                                                                                 </option>
                                                                                             ))}
                                                                                         </select>

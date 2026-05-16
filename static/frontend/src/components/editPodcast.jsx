@@ -31,6 +31,16 @@ import Modal from "../components/Modal";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
 import { shouldAutoplayVoicePreview, shouldShowEditingNotifications } from "../utils/accountPreferences";
+import { collectVoiceAgeOptions, formatVoiceAgeLabel, voiceMatchesAge } from "../utils/voiceAgeFilters";
+import {
+  PITCH_VALUES,
+  buildTonePitchDebugMatrix,
+  collectVoiceToneOptions,
+  formatPitchLabel,
+  formatToneLabel,
+  voiceMatchesPitch,
+  voiceMatchesTone,
+} from "../utils/voiceTonePitchFilters";
 
 const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
@@ -62,19 +72,6 @@ const requestErrorMessage = (error, fallback) => {
     return `${fallback}. Could not reach the WeCast backend at ${API_BASE}.`;
   }
   return message || fallback;
-};
-
-const splitList = (value) => {
-  if (Array.isArray(value)) {
-    return value.map((x) => String(x || "").trim().toLowerCase()).filter(Boolean);
-  }
-  if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((x) => x.trim().toLowerCase())
-      .filter(Boolean);
-  }
-  return [];
 };
 
 const DEFAULT_VOICE_LANGUAGE = "en";
@@ -257,62 +254,7 @@ const accentTokensForLanguageFromVoice = (voice, language) =>
     .map((x) => String(x).trim().toLowerCase())
     .filter(Boolean);
 
-const TONE_RULES = [
-  { tone: "professional", keys: ["professional", "broadcaster", "corporate", "formal", "authoritative", "احترافي", "رسمي"] },
-  { tone: "funny", keys: ["funny", "humorous", "comedic", "comic", "quirky", "playful", "مضحك", "كوميدي", "مرح"] },
-  { tone: "warm", keys: ["warm", "friendly", "comforting", "cozy", "welcoming", "دافئ", "حنون"] },
-  { tone: "calm", keys: ["calm", "relaxed", "soothing", "gentle", "smooth", "هادئ", "مريح"] },
-  { tone: "energetic", keys: ["energetic", "dynamic", "lively", "upbeat", "excited", "حيوي", "نشيط"] },
-  { tone: "conversational", keys: ["conversational", "natural", "casual", "chatty", "محادثة", "طبيعي"] },
-  { tone: "serious", keys: ["serious", "deep", "resonant", "mature", "confident", "جدي", "عميق"] },
-  { tone: "educational", keys: ["educational", "educator", "teacher", "instructive", "explainer", "تعليمي"] },
-  { tone: "storytelling", keys: ["storytelling", "narration", "narrator", "cinematic", "قصصي", "سرد"] },
-];
-
-const getVoiceToneTags = (voice) => {
-  const explicit = [
-    ...splitList(voice?.tone),
-    ...splitList(voice?.labels?.tone),
-  ];
-
-  const haystack = [
-    String(voice?.name || ""),
-    String(voice?.description || ""),
-    String(voice?.labels?.description || ""),
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  const inferred = TONE_RULES
-    .filter((rule) => rule.keys.some((k) => haystack.includes(k)))
-    .map((rule) => rule.tone);
-
-  return Array.from(new Set([...explicit, ...inferred]));
-};
-
-const PITCH_VALUES = ["low", "medium", "high"];
 const VOICE_LIBRARY_PAGE_SIZE = 100;
-const PITCH_RULES = [
-  { pitch: "low", keys: ["low", "deep", "resonant", "bass", "baritone", "grave"] },
-  { pitch: "high", keys: ["high", "bright", "light", "youthful", "soprano"] },
-  { pitch: "medium", keys: ["medium", "balanced", "neutral", "natural"] },
-];
-
-const getVoicePitchTag = (voice) => {
-  const raw = String(voice?.pitch || voice?.labels?.pitch || "").trim().toLowerCase();
-  if (PITCH_VALUES.includes(raw)) return raw;
-
-  const haystack = [
-    String(voice?.name || ""),
-    String(voice?.description || ""),
-    String(voice?.labels?.description || ""),
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  const inferred = PITCH_RULES.find((rule) => rule.keys.some((k) => haystack.includes(k)));
-  return inferred?.pitch || "";
-};
 
 const emptyAppliedVoiceFilters = () => ({
   search: "",
@@ -337,7 +279,6 @@ const buildLibraryUrlSearchParams = (applied, page, pageSize = VOICE_LIBRARY_PAG
   if (applied.accent) p.set("accent", applied.accent);
   if (applied.age) p.set("age", applied.age);
   if (applied.category) p.set("category", applied.category);
-  if (applied.tone) p.append("descriptives", applied.tone);
   return p;
 };
 
@@ -505,7 +446,7 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
       .filter((v) => languageMatchesVoice(selectedLanguage, v))
       .flatMap((v) => accentDisplaysForLanguageFromVoice(v, selectedLanguage))
   );
-  const ageOptions = uniqueDisplayOptions(voices.flatMap((v) => facetDisplays(v, "age", "Age")));
+  const ageOptions = collectVoiceAgeOptions(voices.filter((v) => languageMatchesVoice(selectedLanguage, v)));
   const categoryOptions = uniqueDisplayOptions(voices.flatMap((v) => facetDisplays(v, "category", "Category")));
   const selectedAccentValid =
     !filters.accent ||
@@ -528,12 +469,35 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
     });
   };
 
-  const toneOptions = [...new Set(
-    voices
-      .flatMap((v) => getVoiceToneTags(v))
-      .map(normalize)
-      .filter(Boolean)
-  )].sort();
+  const toneCandidateVoices = voices.filter((v) => {
+    const q = String(filters.q || "").trim().toLowerCase();
+    const name = String(v.name || "").toLowerCase();
+    const desc = String(v.description || "").toLowerCase();
+    const effectiveGender = safeGenderFilter === "__all__" ? "" : safeGenderFilter;
+    const vGender = String(v.gender || v.labels?.gender || "").toLowerCase();
+    const accent = String(filters.accent || "").trim().toLowerCase();
+    const category = String(filters.category || "").trim().toLowerCase();
+    if (q && !(name.includes(q) || desc.includes(q))) return false;
+    if (effectiveGender && vGender !== effectiveGender) return false;
+    if (selectedLanguage && !languageMatchesVoice(selectedLanguage, v)) return false;
+    if (accent && !accentTokensForLanguageFromVoice(v, selectedLanguage).includes(accent)) return false;
+    if (filters.age && !voiceMatchesAge(v, filters.age)) return false;
+    if (category) {
+      const vCategories = [
+        ...facetDisplays(v, "category", "Category"),
+        ...voiceFacetValues(v.labels?.use_case),
+      ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+      if (!vCategories.includes(category)) return false;
+    }
+    if (!voiceMatchesPitch(v, filters.pitch)) return false;
+    return true;
+  });
+  const toneOptions = collectVoiceToneOptions(toneCandidateVoices).filter((tone) =>
+    toneCandidateVoices.some((v) => voiceMatchesTone(v, tone))
+  );
+  const selectedToneValid =
+    !filters.tone ||
+    toneOptions.some((tone) => String(tone).toLowerCase() === String(filters.tone).toLowerCase());
 
   const activeChips = [
     filters.q ? { key: "q", label: `Search: ${filters.q}` } : null,
@@ -550,8 +514,8 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
           ),
         }
       : null,
-    filters.tone ? { key: "tone", label: `Tone: ${filters.tone}` } : null,
-    filters.pitch ? { key: "pitch", label: `Pitch: ${filters.pitch}` } : null,
+    filters.tone ? { key: "tone", label: `Tone: ${formatToneLabel(filters.tone)}` } : null,
+    filters.pitch ? { key: "pitch", label: `Pitch: ${formatPitchLabel(filters.pitch)}` } : null,
     filters.accent ? { key: "accent", label: `Accent: ${filters.accent}` } : null,
     filters.age ? { key: "age", label: `Age: ${filters.age}` } : null,
     filters.category ? { key: "category", label: `Category: ${filters.category}` } : null,
@@ -575,7 +539,10 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
           </button>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => {
+              if (!selectedToneValid) setFilters({ ...filters, tone: "" });
+              onClose();
+            }}
             className="px-4 h-10 min-h-10 rounded-xl bg-purple-600 text-white text-sm font-semibold hover:opacity-95 transition"
           >
             Done
@@ -622,7 +589,7 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
                 >
                   <option value="">All ages</option>
                   {ageOptions.map(age => (
-                    <option key={age} value={age}>{age}</option>
+                    <option key={age} value={age}>{formatVoiceAgeLabel(age)}</option>
                   ))}
                 </select>
                 <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
@@ -682,13 +649,13 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
               <label className="form-label mb-1 block">Tone</label>
               <div className="relative">
                 <select
-                  value={filters.tone || ""}
+                  value={selectedToneValid ? (filters.tone || "") : ""}
                   onChange={(e) => setFilters({ ...filters, tone: e.target.value })}
                   className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
                 >
                   <option value="">All Tones</option>
                   {toneOptions.map(tone => (
-                    <option key={tone} value={tone}>{tone}</option>
+                    <option key={tone} value={tone}>{formatToneLabel(tone)}</option>
                   ))}
                 </select>
                 <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
@@ -705,7 +672,7 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
                 >
                   <option value="">All Pitches</option>
                   {PITCH_VALUES.map((pitch) => (
-                    <option key={pitch} value={pitch}>{pitch}</option>
+                    <option key={pitch} value={pitch}>{formatPitchLabel(pitch)}</option>
                   ))}
                 </select>
                 <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
@@ -1064,6 +1031,7 @@ useEffect(() => {
 
         if (typeof window !== "undefined" && window.localStorage?.getItem("wecastVoiceFilterDebug") === "1") {
           console.debug("[WeCast voice filters] Edit Arabic summary", voiceAccentDebugSummary(raw, "ar"));
+          console.debug("[WeCast voice filters] Edit tone/pitch summary", buildTonePitchDebugMatrix(raw));
         }
 
         setVoices(raw);
@@ -1136,8 +1104,6 @@ useEffect(() => {
       const q = String(f.q || "").trim().toLowerCase();
 
       const vGender = String(v.gender || v.labels?.gender || "").toLowerCase();
-      const vPitch = getVoicePitchTag(v);
-      const vTones = getVoiceToneTags(v);
       const vLangs = [
         ...toListLower(v.language),
         ...toListLower(v.languages),
@@ -1149,16 +1115,15 @@ useEffect(() => {
         ...toListLower(v.labels?.Locale),
       ];
       const vAccents = accentTokensForLanguageFromVoice(v, f.language);
-      const vAges = [...toListLower(v.age), ...toListLower(v.labels?.age), ...toListLower(v.labels?.Age)];
       const vCategories = [...toListLower(v.category), ...toListLower(v.labels?.category), ...toListLower(v.labels?.Category), ...toListLower(v.labels?.use_case)];
 
       if (q && !(name.includes(q) || desc.includes(q))) return false;
       if (effectiveGender && vGender !== effectiveGender) return false;
-      if (f.pitch && vPitch !== String(f.pitch).toLowerCase()) return false;
-      if (!matchFacet(f.tone, vTones)) return false;
+      if (!voiceMatchesPitch(v, f.pitch)) return false;
+      if (!voiceMatchesTone(v, f.tone)) return false;
       if (!matchLanguageFacet(f.language, vLangs)) return false;
       if (!matchFacet(f.accent, vAccents)) return false;
-      if (!matchFacet(f.age, vAges)) return false;
+      if (!voiceMatchesAge(v, f.age)) return false;
       if (!matchFacet(f.category, vCategories)) return false;
 
       return true;
