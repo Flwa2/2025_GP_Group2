@@ -22,19 +22,53 @@ Submission Package
 
 ## 🚀 Project Overview
 
-WeCast is an AI-powered podcast generation platform. The system allows users to create podcast episodes from written text by combining AI text generation, voice generation, audio processing, and publishing features.
+WeCast is an AI-powered podcast generation platform that enables users to transform written content into complete podcast episodes. The system supports script generation, multi-speaker voice synthesis, transition music, cover art, transcripts, summaries, sharing, and download-ready audio output.
 
-WeCast follows a client-server architecture where the React frontend communicates with a Flask backend API. AI services such as OpenAI and ElevenLabs are integrated for script generation, voice synthesis, summary generation, and media generation, while Firebase handles authentication, saved podcasts, Firestore data, and storage.
+## 🏗️ System Architecture
+
+WeCast follows a client-server architecture:
+
+- React frontend for user interaction
+- Flask backend API for orchestration and AI processing
+- Firestore database for structured application data
+- Cloudflare R2 for generated media storage
+- OpenAI and ElevenLabs APIs for AI-powered generation
 
 ## 📸 Screenshots
 
 ### Home Page
 
-[Insert Home Page screenshot]
+![Home Page](docs/images/home-page.png)
 
-### Podcast Preview Page
+### Cast Studio Library
 
-[Insert Podcast Preview Page screenshot]
+![Cast Studio Library](docs/images/cast-studio-library.png)
+
+### Create Podcast
+
+![Create Podcast](docs/images/create-podcast.png)
+
+### Voice Selection
+
+![Voice Selection 1](docs/images/voice-selection-1.png)
+
+![Voice Selection 2](docs/images/voice-selection-2.png)
+
+### Music Selection
+
+![Music Selection](docs/images/music-selection.png)
+
+### Edit Podcast
+
+![Edit Podcast](docs/images/edit-podcast.png)
+
+### Podcast Preview
+
+![Podcast Preview](docs/images/podcast-preview.png)
+
+### Cover Art / Final Output
+
+![Cover Art Generation](docs/images/cover-art-generation.png)
 
 ## ✨ Key Features
 
@@ -50,13 +84,31 @@ WeCast follows a client-server architecture where the React frontend communicate
 
 ## 🛠️ Technologies Used
 
-- Frontend: React, Vite, Tailwind CSS
-- Backend: Flask, Python
-- Database and Storage: Firebase Authentication, Firestore, Firebase Storage / configured object storage
-- AI Services: OpenAI, ElevenLabs
-- Audio Processing: FFmpeg, pydub
-- Email Services: Resend, SMTP
-- Deployment: Render, if deployed through the included Render configuration
+Frontend:
+
+- React.js
+- Vite
+- Tailwind CSS
+- Custom CSS
+
+Backend:
+
+- Flask
+- Python
+- OpenAI API
+- ElevenLabs API
+- FFmpeg
+- pydub
+
+Database and Storage:
+
+- Firestore
+- Firebase Authentication
+- Cloudflare R2 object storage
+
+Deployment:
+
+- Render
 
 ## ✅ Prerequisites
 
@@ -218,7 +270,7 @@ If object storage is configured separately for generated media, add the relevant
 
 ## 🧪 Testing Information
 
-Use the following placeholders for submission testing if final public credentials or URLs are not available:
+Use the following placeholder demo credentials for submission testing if final public credentials or URLs are not available:
 
 ```text
 Email: test@example.com
