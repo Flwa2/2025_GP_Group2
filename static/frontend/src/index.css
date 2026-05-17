@@ -325,15 +325,9 @@ body:has(.wecast-overlay) {
   align-items: start;
 }
 
-.preview-left-stack,
-.preview-right-stack {
-  align-self: start;
-}
-
 @media (min-width: 1024px) {
-  .preview-main-area {
-    max-height: calc(100dvh - 11rem);
-    overflow: visible;
+  .preview-transcript-scroll {
+    max-height: min(34rem, calc(100dvh - 22rem));
   }
 }
 
@@ -584,7 +578,7 @@ body:has(.wecast-overlay) {
   }
 
   .dark select.select-input {
-    background-image: url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 20 20' fill='none'><path d='M6 8l4 4 4-4' stroke='%23e5e7eb' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>\");
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 20 20' fill='none'><path d='M6 8l4 4 4-4' stroke='%23e5e7eb' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>");
   }
 
   [dir=\"rtl\"] select.select-input,

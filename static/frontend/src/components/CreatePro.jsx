@@ -25,11 +25,18 @@ import {
     ChevronDown,
 } from "lucide-react";
 import WeCastAudioPlayer from "./WeCastAudioPlayer";
+import VoiceFilterSelect from "./VoiceFilterSelect";
 import Modal from "../components/Modal";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
 import { shouldAutoplayVoicePreview, shouldShowEditingNotifications } from "../utils/accountPreferences";
-import { collectVoiceAgeOptions, formatVoiceAgeLabel, voiceMatchesAge } from "../utils/voiceAgeFilters";
+import {
+    VOICE_AGE_BUCKETS,
+    buildVoiceAgeDebugSummary,
+    collectVoiceAgeOptions,
+    formatVoiceAgeLabel,
+    voiceMatchesAge,
+} from "../utils/voiceAgeFilters";
 import {
     PITCH_VALUES,
     buildTonePitchDebugMatrix,
@@ -329,35 +336,6 @@ const voiceAccentDebugSummary = (voicesList, language = "ar") => {
     };
 };
 
-const facetTokensLower = (v, ...keys) => {
-    const bucket = [];
-    for (const key of keys) {
-        pushFacetTokens(v?.[key], bucket);
-        if (v?.labels && typeof v.labels === "object") pushFacetTokens(v.labels[key], bucket);
-    }
-    return Array.from(new Set(bucket.map((x) => String(x).trim().toLowerCase()).filter(Boolean)));
-};
-
-const useCaseTokensForVoice = (v) => {
-    const bucket = [];
-    pushFacetTokens(v?.category, bucket);
-    if (v?.labels && typeof v.labels === "object") {
-        pushFacetTokens(v.labels.use_case, bucket);
-        pushFacetTokens(v.labels.usecase, bucket);
-    }
-    return Array.from(new Set(bucket.map((x) => String(x).trim().toLowerCase()).filter(Boolean)));
-};
-
-const collectUseCaseDisplaysFromVoice = (v) => {
-    const acc = [];
-    pushFacetTokens(v?.category, acc);
-    if (v?.labels && typeof v.labels === "object") {
-        pushFacetTokens(v.labels.use_case, acc);
-        pushFacetTokens(v.labels.usecase, acc);
-    }
-    return acc;
-};
-
 const voiceSearchHaystack = (v) => {
     const parts = [v?.name, v?.description, v?.category];
     if (v?.labels && typeof v.labels === "object") {
@@ -375,19 +353,6 @@ const uniqueSortedDisplay = (displays) =>
     Array.from(new Set(displays.map((x) => String(x).trim()).filter(Boolean))).sort((a, b) =>
         a.localeCompare(b, undefined, { sensitivity: "base" })
     );
-
-const mergeDisplayOptionsFromVoices = (voicesList, extract) => {
-    const byLower = new Map();
-    for (const v of voicesList) {
-        for (const disp of extract(v)) {
-            const d = String(disp).trim();
-            if (!d) continue;
-            const low = d.toLowerCase();
-            if (!byLower.has(low)) byLower.set(low, d);
-        }
-    }
-    return Array.from(byLower.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
-};
 
 const VOICE_LIBRARY_PAGE_SIZE = 50;
 /** ElevenLabs shared-voices API only accepts these category filters; other values are applied client-side. */
@@ -689,6 +654,35 @@ const fetchLibraryItemsPage = useCallback(async (applied, page, pageSize = VOICE
     };
 }, [elevenLabsAuthFailed]);
 
+const fetchLibraryItemsWithAgeCoverage = useCallback(async (applied, pageSize = VOICE_LIBRARY_PAGE_SIZE) => {
+    const baseApplied = { ...applied };
+    if (baseApplied.age) return fetchLibraryItemsPage(baseApplied, 0, pageSize);
+
+    const base = await fetchLibraryItemsPage(baseApplied, 0, pageSize);
+    const ageResults = await Promise.allSettled(
+        VOICE_AGE_BUCKETS.map((age) => fetchLibraryItemsPage({ ...baseApplied, age }, 0, pageSize))
+    );
+    const agePages = ageResults
+        .filter((result) => result.status === "fulfilled")
+        .map((result) => result.value);
+    const byId = new Map();
+    [base.items, ...agePages.map((page) => page.items)].flat().filter(Boolean).forEach((voice, idx) => {
+        const id = getVoiceId(voice) || `voice-${idx}`;
+        if (!byId.has(id)) byId.set(id, voice);
+    });
+    const items = Array.from(byId.values());
+
+    if (typeof window !== "undefined" && window.localStorage?.getItem("wecastVoiceFilterDebug") === "1") {
+        console.debug("[WeCast voice filters] Create age summary", buildVoiceAgeDebugSummary(items));
+    }
+
+    return {
+        items,
+        hasMore: base.hasMore,
+        totalCount: Math.max(base.totalCount || 0, items.length),
+    };
+}, [fetchLibraryItemsPage]);
+
 const applyVoiceLibraryForSpeaker = useCallback(
     async (speakerIndex, applied) => {
         setSpeakerVoiceAppliedFilters((prev) => ({ ...prev, [speakerIndex]: { ...applied } }));
@@ -704,7 +698,7 @@ const applyVoiceLibraryForSpeaker = useCallback(
             },
         }));
         try {
-            const r = await fetchLibraryItemsPage(applied, 0);
+            const r = await fetchLibraryItemsWithAgeCoverage(applied);
             setSpeakerVoiceLibrary((prev) => ({
                 ...prev,
                 [speakerIndex]: {
@@ -741,7 +735,7 @@ const applyVoiceLibraryForSpeaker = useCallback(
             }));
         }
     },
-    [fetchFallbackVoices, fetchLibraryItemsPage]
+    [fetchFallbackVoices, fetchLibraryItemsWithAgeCoverage]
 );
 
 const appendVoiceLibraryPageForSpeaker = useCallback(
@@ -879,7 +873,7 @@ useEffect(() => {
         setModalLibraryPreview((p) => ({ ...p, [i]: { ...(p[i] || {}), loading: true } }));
         try {
             const accentApplied = { ...applied, accent: "" };
-            const r = await fetchLibraryItemsPage(accentApplied, 0);
+            const r = await fetchLibraryItemsWithAgeCoverage(accentApplied);
             const refined = clientRefineLibraryVoices(r.items, applied);
             if (normalizeLanguageFilterValue(accentApplied.language) === "ar") {
                 const accentValues = uniqueSortedDisplay(
@@ -911,7 +905,7 @@ useEffect(() => {
         }
     }, 400);
     return () => clearTimeout(t);
-}, [openFilterDraftKey, openFilterSpeakerIdx, fetchLibraryItemsPage]);
+}, [openFilterDraftKey, openFilterSpeakerIdx, fetchLibraryItemsWithAgeCoverage]);
 
 // Ensure each speaker has filter modal state
 useEffect(() => {
@@ -1079,15 +1073,16 @@ const defaultVoiceForGender = useCallback(
     };
 
     useEffect(() => {
+        const previewCache = voicePreviewCacheRef.current;
         return () => {
             if (voicePreviewRef.current) {
                 voicePreviewRef.current.pause();
                 voicePreviewRef.current = null;
             }
-            for (const url of voicePreviewCacheRef.current.values()) {
+            for (const url of previewCache.values()) {
                 URL.revokeObjectURL(url);
             }
-            voicePreviewCacheRef.current.clear();
+            previewCache.clear();
         };
     }, []);
 
@@ -2374,14 +2369,6 @@ const exportScript = async (format = "pdf") => {
                                                                         const gender = e.target.value;
                                                                         const next = [...arr];
 
-                                                                        // Voices used by OTHER speakers
-                                                                        const usedIds = new Set(
-                                                                            next
-                                                                                .filter((_, idx) => idx !== i)
-                                                                                .map((s) => s.voiceId)
-                                                                                .filter(Boolean)
-                                                                        );
-
                                                                         const appliedPrev = speakerVoiceAppliedFiltersRef.current[i] || emptyAppliedVoiceFilters();
                                                                         const appliedNext = {
                                                                             ...appliedPrev,
@@ -2736,90 +2723,57 @@ const exportScript = async (format = "pdf") => {
                                                                                 {/* Gender */}
                                                                                 <div>
                                                                                 <label className="form-label mb-1 block">{t("create.speakers.gender")}</label>
-                                                                                <div className="relative">
-                                                                                    <select
-                                                                                        value={safeGenderFilter}
-                                                                                        onChange={(e) => setF({ gender: e.target.value })}
-                                                                                        className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
-                                                                                    >
-                                                                                        <option value="__all__">{t("create.speakers.allGenders", "All Genders")}</option>
-                                                                                        {genderOptions.map((g) => (
-                                                                                        <option key={g.value} value={g.value}>
-                                                                                            {g.label}
-                                                                                        </option>
-                                                                                        ))}
-                                                                                    </select>
-                                                                                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-                                                                                </div>
+                                                                                <VoiceFilterSelect
+                                                                                    value={safeGenderFilter}
+                                                                                    onChange={(value) => setF({ gender: value })}
+                                                                                    options={[
+                                                                                        { value: "__all__", label: t("create.speakers.allGenders", "All Genders") },
+                                                                                        ...genderOptions,
+                                                                                    ]}
+                                                                                    isRTL={isRTL}
+                                                                                />
                                                                                 </div>
 
                                                                                 {/* Age */}
                                                                                 <div>
                                                                                 <label className="form-label mb-1 block">{t("create.speakers.age", "Age")}</label>
-                                                                                <div className="relative">
-                                                                                    <select
-                                                                                        value={f.age}
-                                                                                        onChange={(e) => setF({ age: e.target.value })}
-                                                                                        className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
-                                                                                    >
-                                                                                        <option value="">{t("create.speakers.allAges", "All ages")}</option>
-                                                                                        {ageOptions.map((a) => (
-                                                                                            <option key={a} value={a}>
-                                                                                                {formatVoiceAgeLabel(a)}
-                                                                                            </option>
-                                                                                        ))}
-                                                                                    </select>
-                                                                                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-                                                                                </div>
+                                                                                <VoiceFilterSelect
+                                                                                    value={f.age}
+                                                                                    onChange={(value) => setF({ age: value })}
+                                                                                    options={[
+                                                                                        { value: "", label: t("create.speakers.allAges", "All ages") },
+                                                                                        ...ageOptions.map((a) => ({ value: a, label: formatVoiceAgeLabel(a) })),
+                                                                                    ]}
+                                                                                    isRTL={isRTL}
+                                                                                />
                                                                                 </div>
 
                                                                                 {/* Language */}
                                                                                 <div>
                                                                                 <label className="form-label mb-1 block">{t("create.speakers.language")}</label>
-                                                                                <div className="relative">
-                                                                                    <button
-                                                                                        type="button"
-                                                                                        onClick={() => setF({ languageMenuOpen: !f.languageMenuOpen })}
-                                                                                        className="form-input !px-3 !py-2 min-h-10 w-full pr-10 text-start text-sm"
-                                                                                    >
-                                                                                        <LanguageLabel value={f.language || DEFAULT_VOICE_LANGUAGE} />
-                                                                                    </button>
-                                                                                    {f.languageMenuOpen ? (
-                                                                                        <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-[10030] max-h-56 overflow-y-auto rounded-xl border border-neutral-200 bg-white p-1.5 shadow-xl dark:border-white/10 dark:bg-neutral-950">
-                                                                                            {languageOptions.map((lang) => (
-                                                                                                <button
-                                                                                                    key={lang}
-                                                                                                    type="button"
-                                                                                                    onClick={() => setLanguageFilter(lang)}
-                                                                                                    className="flex w-full items-center rounded-lg px-3 py-2 text-start text-sm hover:bg-black/5 dark:hover:bg-white/10"
-                                                                                                >
-                                                                                                    <LanguageLabel value={lang} />
-                                                                                                </button>
-                                                                                            ))}
-                                                                                        </div>
-                                                                                    ) : null}
-                                                                                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-                                                                                </div>
+                                                                                <VoiceFilterSelect
+                                                                                    value={f.language || DEFAULT_VOICE_LANGUAGE}
+                                                                                    onChange={setLanguageFilter}
+                                                                                    options={languageOptions.map((lang) => ({
+                                                                                        value: lang,
+                                                                                        label: <LanguageLabel value={lang} />,
+                                                                                    }))}
+                                                                                    isRTL={isRTL}
+                                                                                />
                                                                                 </div>
 
                                                                                 {/* Accent */}
                                                                                 <div>
                                                                                 <label className="form-label mb-1 block">{t("create.speakers.accent", "Accent")}</label>
-                                                                                <div className="relative">
-                                                                                    <select
-                                                                                        value={selectedAccentValid ? f.accent : ""}
-                                                                                        onChange={(e) => setF({ accent: e.target.value })}
-                                                                                        className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
-                                                                                    >
-                                                                                        <option value="">{t("create.speakers.allAccents", "All accents")}</option>
-                                                                                        {accentOptions.map((a) => (
-                                                                                            <option key={a} value={a}>
-                                                                                                {a}
-                                                                                            </option>
-                                                                                        ))}
-                                                                                    </select>
-                                                                                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-                                                                                </div>
+                                                                                <VoiceFilterSelect
+                                                                                    value={selectedAccentValid ? f.accent : ""}
+                                                                                    onChange={(value) => setF({ accent: value })}
+                                                                                    options={[
+                                                                                        { value: "", label: t("create.speakers.allAccents", "All accents") },
+                                                                                        ...accentOptions.map((a) => ({ value: a, label: a })),
+                                                                                    ]}
+                                                                                    isRTL={isRTL}
+                                                                                />
                                                                                 </div>
                                                                             </div>
 
@@ -2827,62 +2781,44 @@ const exportScript = async (format = "pdf") => {
                                                                                 {/* Tone */}
                                                                                 <div>
                                                                                     <label className="form-label mb-1 block">{t("create.speakers.tone")}</label>
-                                                                                    <div className="relative">
-                                                                                        <select
-                                                                                            value={selectedToneValid ? f.tone : ""}
-                                                                                            onChange={(e) => setF({ tone: e.target.value })}
-                                                                                            className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
-                                                                                        >
-                                                                                            <option value="">{t("create.speakers.allTones")}</option>
-                                                                                            {toneOptions.map((tone) => (
-                                                                                                <option key={tone} value={tone}>
-                                                                                                    {formatToneLabel(tone)}
-                                                                                                </option>
-                                                                                            ))}
-                                                                                        </select>
-                                                                                        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-                                                                                    </div>
+                                                                                    <VoiceFilterSelect
+                                                                                        value={selectedToneValid ? f.tone : ""}
+                                                                                        onChange={(value) => setF({ tone: value })}
+                                                                                        options={[
+                                                                                            { value: "", label: t("create.speakers.allTones") },
+                                                                                            ...toneOptions.map((tone) => ({ value: tone, label: formatToneLabel(tone) })),
+                                                                                        ]}
+                                                                                        isRTL={isRTL}
+                                                                                    />
                                                                                 </div>
 
                                                                                 {/* Pitch */}
                                                                                 <div>
                                                                                     <label className="form-label mb-1 block">{t("create.speakers.pitch")}</label>
-                                                                                    <div className="relative">
-                                                                                        <select
-                                                                                            value={f.pitch}
-                                                                                            onChange={(e) => setF({ pitch: e.target.value })}
-                                                                                            className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
-                                                                                        >
-                                                                                            <option value="">{t("create.speakers.allPitches")}</option>
-                                                                                            {pitchOptions.map((p) => (
-                                                                                                <option key={p} value={p}>
-                                                                                                    {formatPitchLabel(p)}
-                                                                                                </option>
-                                                                                            ))}
-                                                                                        </select>
-                                                                                        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-                                                                                    </div>
+                                                                                    <VoiceFilterSelect
+                                                                                        value={f.pitch}
+                                                                                        onChange={(value) => setF({ pitch: value })}
+                                                                                        options={[
+                                                                                            { value: "", label: t("create.speakers.allPitches") },
+                                                                                            ...pitchOptions.map((p) => ({ value: p, label: formatPitchLabel(p) })),
+                                                                                        ]}
+                                                                                        isRTL={isRTL}
+                                                                                    />
                                                                                 </div>
                                                                             </div>
 
                                                                             {categoryOptions.length > 0 ? (
                                                                                 <div>
                                                                                     <label className="form-label mb-1 block">{t("create.speakers.category", "Category")}</label>
-                                                                                    <div className="relative">
-                                                                                        <select
-                                                                                            value={f.category}
-                                                                                            onChange={(e) => setF({ category: e.target.value })}
-                                                                                            className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
-                                                                                        >
-                                                                                            <option value="">{t("create.speakers.allCategories", "All categories")}</option>
-                                                                                            {categoryOptions.map((c) => (
-                                                                                                <option key={c} value={c}>
-                                                                                                    {c}
-                                                                                                </option>
-                                                                                            ))}
-                                                                                        </select>
-                                                                                        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-                                                                                    </div>
+                                                                                    <VoiceFilterSelect
+                                                                                        value={f.category}
+                                                                                        onChange={(value) => setF({ category: value })}
+                                                                                        options={[
+                                                                                            { value: "", label: t("create.speakers.allCategories", "All categories") },
+                                                                                            ...categoryOptions.map((c) => ({ value: c, label: c })),
+                                                                                        ]}
+                                                                                        isRTL={isRTL}
+                                                                                    />
                                                                                 </div>
                                                                             ) : null}
 
@@ -2959,7 +2895,8 @@ const exportScript = async (format = "pdf") => {
                                                                             );
 
                                                                             if (alreadyUsed) {
-                                                                                alert(t("create.speakers.voiceAlreadyUsed"));
+                                                                                setToast({ type: "warning", message: t("create.speakers.voiceAlreadyUsed") });
+                                                                                setTimeout(() => setToast(null), 2600);
                                                                                 return;
                                                                             }
 

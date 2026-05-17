@@ -1,4 +1,5 @@
 ﻿import React from "react";
+import { createElement } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Instagram,
@@ -129,7 +130,7 @@ export default function Footer() {
                     title={label}
                     className="inline-flex h-10 w-10 items-center justify-center text-[#3f3428]/85 transition hover:text-purple-700 dark:text-[#b8b8c7] dark:hover:text-purple-300"
                   >
-                    <Icon className="h-5 w-5" aria-hidden="true" />
+                    {createElement(Icon, { className: "h-5 w-5", "aria-hidden": "true" })}
                   </a>
                 </li>
               ))}

@@ -20,7 +20,7 @@ function applyDarkMode(enabled) {
 }
 
 /* ---- Toast notification ---- */
-function Toast({ message, type = "success", onClose }) {
+function Toast({ message, type = "success" }) {
   if (!message) return null;
   
   const bgColor = {

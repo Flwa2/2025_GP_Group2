@@ -102,7 +102,7 @@ function formatMMSS(sec) {
    Component
 ------------------------------ */
 
-export default function Preview() {
+export default function Preview({ onTitleChange } = {}) {
   const { t, i18n } = useTranslation();
   const [audioUrl, setAudioUrl] = useState("");
   const [audioKey, setAudioKey] = useState("");
@@ -117,8 +117,6 @@ export default function Preview() {
   const [chapters, setChapters] = useState([]);
   const [isChaptersOpen, setIsChaptersOpen] = useState(true);
   const [isSummaryOpen, setIsSummaryOpen] = useState(false);
-  const [transcriptCardHeight, setTranscriptCardHeight] = useState(null);
-  const [transcriptBodyHeight, setTranscriptBodyHeight] = useState(null);
   const [podcastLanguage, setPodcastLanguage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
@@ -139,11 +137,7 @@ export default function Preview() {
 
   const transcriptRef = useRef(null);
   const activeWordRef = useRef(null);
-  const audioCardRef = useRef(null);
-  const rightColRef = useRef(null);
   const transcriptCardRef = useRef(null);
-  const transcriptHeaderRef = useRef(null);
-  const transcriptFooterRef = useRef(null);
   const chaptersRecoveryAttemptedRef = useRef(false);
 
   // user scroll control
@@ -177,6 +171,10 @@ export default function Preview() {
     "mx-auto flex w-full min-w-0 max-w-[1400px] flex-1 flex-col space-y-6 px-5 pt-4 pb-6 sm:px-8 sm:pt-5 sm:pb-8 lg:px-10 lg:pt-6 lg:pb-10";
   const [externalSeek, setExternalSeek] = useState(null);
   const displayTitle = title || t("episodes.untitledEpisode");
+
+  useEffect(() => {
+    onTitleChange?.(title);
+  }, [title, onTitleChange]);
 
   const resolvedCoverSrc = useMemo(() => {
     if (!coverImageFailed && coverUrl) return coverUrl;
@@ -281,9 +279,13 @@ export default function Preview() {
               if (d?.url) setAudioUrl(d.url);
               if (d?.audioKey) setAudioKey(d.audioKey);
             })
-            .catch(() => {});
+            .catch(() => {
+              // Keep preview usable if the last-audio fallback is unavailable.
+            });
         }
-      } catch {}
+      } catch {
+        // Ignore malformed draft data and continue with backend fallbacks.
+      }
     }
 
     if (!saved) {
@@ -293,14 +295,18 @@ export default function Preview() {
           if (d?.url) setAudioUrl(d.url);
           if (d?.audioKey) setAudioKey(d.audioKey);
         })
-        .catch(() => {});
+        .catch(() => {
+          // Keep preview usable if the last-audio fallback is unavailable.
+        });
 
       fetch(`${API_BASE}/api/transcript/last`, { credentials: "include" })
         .then((r) => r.json())
         .then((d) => {
           if (Array.isArray(d?.words)) setWords(d.words);
         })
-        .catch(() => {});
+        .catch(() => {
+          // Keep preview usable if the last-transcript fallback is unavailable.
+        });
     }
   }, [episodeId]);
 
@@ -313,7 +319,9 @@ export default function Preview() {
         setSaveMessage(parsed.message);
         setSaveMessageType(parsed.type || "success");
       }
-    } catch {}
+    } catch {
+      // Ignore malformed notification payloads.
+    }
     sessionStorage.removeItem(previewNoticeKey);
   }, []);
 
@@ -405,7 +413,9 @@ export default function Preview() {
           setSummary("");
           setSummaryLoadedFromDb(false);
         }
-      } catch {}
+      } catch {
+        // Ignore incomplete episode metadata and keep loading other preview data.
+      }
     };
 
     const loadTranscript = async () => {
@@ -418,7 +428,9 @@ export default function Preview() {
         if (res.ok && Array.isArray(data?.words)) {
           if (isMounted) setWords(data.words);
         }
-      } catch {}
+      } catch {
+        // Transcript recovery is best-effort; the page still renders without it.
+      }
     };
 
     loadEpisode();
@@ -453,7 +465,9 @@ export default function Preview() {
         if (Array.isArray(data?.chapters) && data.chapters.length > 0) {
           setChapters(data.chapters);
         }
-      } catch {}
+      } catch {
+        // Chapter recovery is best-effort; keep existing chapters if available.
+      }
     };
 
     ensureChapters();
@@ -514,7 +528,9 @@ export default function Preview() {
             p.summary = newSummary;
             sessionStorage.setItem("wecast_preview", JSON.stringify(p));
           }
-        } catch {}
+        } catch {
+          // Ignore session persistence failures for generated preview summaries.
+        }
       } catch (e) {
         console.error("Summary load/generate failed:", e);
         setSummary(generateSimpleSummary(words));
@@ -606,47 +622,6 @@ export default function Preview() {
     }
   }, [activeIndex, userInteracting]);
 
-  useEffect(() => {
-    const rightEl = rightColRef.current;
-    const audioEl = audioCardRef.current;
-    const headerEl = transcriptHeaderRef.current;
-    const footerEl = transcriptFooterRef.current;
-
-    if (!rightEl || !audioEl || !headerEl) return;
-
-    const gap = 16; // matches gap-4 between audio + transcript
-    const minCard = 260;
-
-    const update = () => {
-      const rightH = rightEl.offsetHeight || 0;
-      const audioH = audioEl.offsetHeight || 0;
-      const headerH = headerEl.offsetHeight || 0;
-      const footerH = footerEl ? footerEl.offsetHeight || 0 : 0;
-
-      let target = rightH - audioH - gap;
-      if (!Number.isFinite(target) || target <= 0) return;
-      if (target < minCard) target = minCard;
-
-      const bodyTarget = Math.max(80, target - headerH - footerH - 40);
-
-      setTranscriptCardHeight(target);
-      setTranscriptBodyHeight(bodyTarget);
-    };
-
-    update();
-
-    const ro = new ResizeObserver(update);
-    ro.observe(rightEl);
-    ro.observe(audioEl);
-    ro.observe(headerEl);
-    if (footerEl) ro.observe(footerEl);
-    window.addEventListener("resize", update);
-
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", update);
-    };
-  }, [isChaptersOpen, isSummaryOpen, summary, chapters]);
   const markUserInteraction = () => {
     setUserInteracting(true);
     if (interactionTimerRef.current) clearTimeout(interactionTimerRef.current);
@@ -914,12 +889,9 @@ export default function Preview() {
               )}
             </div>
 
-        <div className="grid w-full min-w-0 max-w-full grid-cols-1 items-start gap-6 lg:grid-cols-12">
-          <div className="min-w-0 space-y-4 lg:col-span-7">
-            <div
-              ref={audioCardRef}
-              className={`${previewCardClass} relative w-full min-w-0 max-w-full overflow-hidden p-3 sm:p-4`}
-            >
+        <div className="preview-layout-grid grid w-full min-w-0 max-w-full grid-cols-1 items-start gap-6 lg:grid-cols-12">
+          <div className="flex min-w-0 max-w-full flex-col gap-4 lg:col-span-7">
+            <div className={`${previewCardClass} relative w-full min-w-0 max-w-full overflow-hidden p-3 sm:p-4`}>
               <WeCastAudioPlayer
                 src={audioUrl}
                 title={displayTitle}
@@ -937,12 +909,8 @@ export default function Preview() {
             <div
               ref={transcriptCardRef}
               className={`${previewCardClass} w-full min-h-[260px] min-w-0 max-w-full p-5`}
-              style={transcriptCardHeight ? { minHeight: transcriptCardHeight } : undefined}
             >
-              <div
-                ref={transcriptHeaderRef}
-                className="mb-3 flex min-w-0 items-center justify-between gap-2"
-              >
+              <div className="mb-3 flex min-w-0 items-center justify-between gap-2">
                 <div className="min-w-0 text-sm font-bold [overflow-wrap:anywhere]">
                   {t("preview.liveTranscript")}
                 </div>
@@ -959,10 +927,9 @@ export default function Preview() {
                 onTouchMove={markUserInteraction}
                 onMouseDown={markUserInteraction}
                 className={[
-                  "min-w-0 max-w-full overflow-y-auto overflow-x-hidden text-[15px] leading-8 [overflow-wrap:anywhere]",
+                  "preview-transcript-scroll min-w-0 max-w-full overflow-y-auto overflow-x-hidden text-[15px] leading-8 [overflow-wrap:anywhere]",
                   transcriptDir === "rtl" ? "pl-2 text-right sm:pl-3" : "pr-2 text-left sm:pr-3",
                 ].join(" ")}
-                style={transcriptBodyHeight ? { height: transcriptBodyHeight } : undefined}
               >
                 <div dir={transcriptDir} className="min-w-0 max-w-full text-[15px] leading-8 [overflow-wrap:anywhere]">
                   {transcriptTokens.map((tok) => {
@@ -1008,18 +975,16 @@ export default function Preview() {
               </div>
 
               {!hasSpeakerInfo && words.length > 0 && (
-                <p ref={transcriptFooterRef} className="mt-3 text-xs text-black/50 dark:text-white/40">
+                <p className="mt-3 text-xs text-black/50 dark:text-white/40">
                   {t("preview.noSpeakers")}
                 </p>
               )}
             </div>
           </div>
 
-          {/* Right rail: chapters + summary */}
-          <div ref={rightColRef} className="w-full min-w-0 max-w-full lg:col-span-5">
-            <div className="w-full min-w-0 space-y-4 lg:sticky lg:top-24">
-              {/* Chapters card */}
-              <div className={`${previewCardClass} max-w-full min-w-0 overflow-hidden`}>
+          <div className="flex min-w-0 max-w-full flex-col gap-4 lg:col-span-5">
+            {/* Chapters card */}
+            <div className={`${previewCardClass} max-w-full min-w-0 overflow-hidden`}>
                 <button
                   type="button"
                   onClick={() => {
@@ -1065,10 +1030,10 @@ export default function Preview() {
                     )}
                   </div>
                 )}
-              </div>
+            </div>
 
-              {/* Summary card */}
-              <div className={`${previewCardClass} max-w-full min-w-0 overflow-hidden`}>
+            {/* Summary card */}
+            <div className={`${previewCardClass} max-w-full min-w-0 overflow-hidden`}>
                 <button
                   type="button"
                   onClick={() => {
@@ -1078,13 +1043,16 @@ export default function Preview() {
                       return next;
                     });
                   }}
-                  className="flex w-full min-w-0 items-center justify-between gap-2 px-4 py-3.5 text-sm font-bold sm:px-5 sm:py-4"
+                  className={[
+                    "flex w-full min-w-0 items-center justify-between gap-2 px-4 text-sm font-bold sm:px-5",
+                    isSummaryOpen ? "py-2.5 sm:py-3" : "py-3.5 sm:py-4",
+                  ].join(" ")}
                 >
                   <span className="min-w-0 [overflow-wrap:anywhere]">{t("preview.summary")}</span>
                   <span className="text-black/50 dark:text-white/50">v</span>
                 </button>
                 {isSummaryOpen && (
-                  <div className="border-t border-black/5 px-4 pb-4 text-sm leading-relaxed text-black/60 [overflow-wrap:anywhere] dark:border-white/10 dark:text-white/60 sm:px-5 sm:pb-5">
+                  <div className="border-t border-black/5 px-4 pb-4 pt-0 text-sm leading-relaxed text-black/60 [overflow-wrap:anywhere] dark:border-white/10 dark:text-white/60 sm:px-5 sm:pb-5">
                     {isGeneratingSummary ? (
                       <div className="flex items-center space-x-2">
                         <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
@@ -1111,7 +1079,6 @@ export default function Preview() {
                     )}
                   </div>
                 )}
-              </div>
             </div>
           </div>
         </div>
@@ -1133,10 +1100,17 @@ export default function Preview() {
             {episodeId ? (
               <button
                 type="button"
-                onClick={() => {
+                onClick={async () => {
                   const link = `${window.location.origin}/#/share/${encodeURIComponent(episodeId)}`;
-                  navigator.clipboard.writeText(link);
-                  alert("Share link copied!");
+                  try {
+                    await navigator.clipboard.writeText(link);
+                    setSaveMessage("Share link copied.");
+                    setSaveMessageType("success");
+                  } catch {
+                    setSaveMessage(link);
+                    setSaveMessageType("info");
+                  }
+                  setTimeout(() => setSaveMessage(""), 3000);
                 }}
                 className="inline-flex h-11 w-full min-w-0 shrink-0 items-center justify-center rounded-2xl bg-purple-600 px-5 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 sm:w-auto sm:min-w-[10.75rem]"
               >

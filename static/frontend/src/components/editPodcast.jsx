@@ -28,10 +28,17 @@ import {
   RefreshCw
 } from "lucide-react";
 import Modal from "../components/Modal";
+import VoiceFilterSelect from "./VoiceFilterSelect";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
 import { shouldAutoplayVoicePreview, shouldShowEditingNotifications } from "../utils/accountPreferences";
-import { collectVoiceAgeOptions, formatVoiceAgeLabel, voiceMatchesAge } from "../utils/voiceAgeFilters";
+import {
+  VOICE_AGE_BUCKETS,
+  buildVoiceAgeDebugSummary,
+  collectVoiceAgeOptions,
+  formatVoiceAgeLabel,
+  voiceMatchesAge,
+} from "../utils/voiceAgeFilters";
 import {
   PITCH_VALUES,
   buildTonePitchDebugMatrix,
@@ -72,6 +79,209 @@ const requestErrorMessage = (error, fallback) => {
     return `${fallback}. Could not reach the WeCast backend at ${API_BASE}.`;
   }
   return message || fallback;
+};
+
+const firstText = (...values) => {
+  for (const value of values) {
+    if (value == null) continue;
+    if (typeof value === "object") continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return "";
+};
+
+const normalizeSavedSpeaker = (speaker = {}) => {
+  const selectedVoice = speaker.selectedVoice && typeof speaker.selectedVoice === "object"
+    ? speaker.selectedVoice
+    : {};
+  const voiceId = firstText(
+    speaker.voiceId,
+    speaker.voice_id,
+    speaker.providerVoiceId,
+    speaker.provider_voice_id,
+    speaker.selectedVoiceId,
+    speaker.selected_voice_id,
+    selectedVoice.voiceId,
+    selectedVoice.voice_id,
+    selectedVoice.providerVoiceId,
+    selectedVoice.id,
+    selectedVoice.docId
+  );
+  const voiceName = firstText(
+    speaker.voiceName,
+    speaker.voice_name,
+    speaker.selectedVoiceName,
+    speaker.selected_voice_name,
+    speaker.voiceLabel,
+    speaker.voice_label,
+    speaker.displayVoiceName,
+    speaker.display_voice_name,
+    selectedVoice.name,
+    selectedVoice.label,
+    selectedVoice.displayName
+  );
+
+  return {
+    ...speaker,
+    name: firstText(speaker.name, speaker.speakerName, speaker.speaker_name) || "",
+    gender: firstText(speaker.gender, speaker.Gender) || "Male",
+    role: firstText(speaker.role, speaker.Role) || "host",
+    voiceId,
+    voiceName,
+  };
+};
+
+const normalizeSavedSpeakers = (speakers) =>
+  Array.isArray(speakers) ? speakers.map(normalizeSavedSpeaker) : [];
+
+const isGeneratedVoiceFallback = (label, voiceId = "") => {
+  const text = String(label || "").trim();
+  const id = String(voiceId || "").trim();
+  if (!text) return false;
+  if (/^selected voice\s*(\(|$)/i.test(text)) return true;
+  return Boolean(id && text.toLowerCase().includes(id.toLowerCase()));
+};
+
+const getVoiceCatalogId = (voice = {}) => firstText(
+  voice.providerVoiceId,
+  voice.provider_voice_id,
+  voice.voiceId,
+  voice.voice_id,
+  voice.id,
+  voice.docId,
+  voice.doc_id
+);
+
+const getVoiceDisplayName = (voice = {}) => {
+  const labels = voice.labels && typeof voice.labels === "object" ? voice.labels : {};
+  return firstText(
+    voice.name,
+    voice.label,
+    voice.displayName,
+    voice.display_name,
+    voice.voiceName,
+    voice.voice_name,
+    voice.selectedVoiceName,
+    labels.name,
+    labels.label,
+    labels.displayName,
+    labels.display_name
+  );
+};
+
+const resolveMusicTrackValue = (raw) => {
+  if (raw == null) return "";
+  if (typeof raw === "object") {
+    return firstText(raw.file, raw.filename, raw.trackFile, raw.trackId, raw.id, raw.value, raw.name);
+  }
+  return String(raw).trim();
+};
+
+const musicToken = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\\/g, "/")
+    .split("/")
+    .pop();
+
+const findMusicCategoryForTracks = (tracks, preferredCategory = "", musicCategories = {}) => {
+  const preferred = String(preferredCategory || "").trim();
+  if (preferred && musicCategories[preferred]) return preferred;
+  const selectedTokens = [tracks.introMusic, tracks.bodyMusic, tracks.outroMusic]
+    .map(musicToken)
+    .filter(Boolean);
+  if (!selectedTokens.length) return preferred && musicCategories[preferred] ? preferred : "";
+  for (const [cat, trackList] of Object.entries(musicCategories)) {
+    const categoryTokens = trackList.flatMap((track) => [musicToken(track.file), musicToken(track.name)]);
+    if (selectedTokens.some((token) => categoryTokens.includes(token))) return cat;
+  }
+  return "";
+};
+
+const resolveMusicTrackForCategory = (value, category = "", musicCategories = {}) => {
+  const token = musicToken(value);
+  if (!token) return "";
+  const entries = category && musicCategories[category]
+    ? [[category, musicCategories[category]]]
+    : Object.entries(musicCategories);
+  for (const [, trackList] of entries) {
+    const match = trackList.find((track) =>
+      [track.file, track.name, track.id, track.value].map(musicToken).includes(token)
+    );
+    if (match?.file) return match.file;
+  }
+  return String(value || "").trim();
+};
+
+const resolveSavedMusicState = (source = {}, fallback = {}, musicCategories = {}) => {
+  const transitionMusic = source.transitionMusic && typeof source.transitionMusic === "object"
+    ? source.transitionMusic
+    : {};
+  const musicSelections = source.musicSelections && typeof source.musicSelections === "object"
+    ? source.musicSelections
+    : {};
+  const selectedMusic = source.selectedMusic && typeof source.selectedMusic === "object"
+    ? source.selectedMusic
+    : {};
+  const hasMusicFields =
+    "introMusic" in source ||
+    "introTrack" in source ||
+    "bodyMusic" in source ||
+    "bodyTrack" in source ||
+    "outroMusic" in source ||
+    "outroTrack" in source ||
+    "intro_music" in source ||
+    "body_music" in source ||
+    "outro_music" in source ||
+    "category" in source ||
+    "musicCategory" in source ||
+    "music_category" in source ||
+    "transitionMusicCategory" in source ||
+    Object.keys(transitionMusic).length > 0 ||
+    Object.keys(musicSelections).length > 0 ||
+    Object.keys(selectedMusic).length > 0;
+
+  if (!hasMusicFields) {
+    return {
+      introMusic: fallback.introMusic || "",
+      bodyMusic: fallback.bodyMusic || "",
+      outroMusic: fallback.outroMusic || "",
+      category: fallback.category || "",
+    };
+  }
+
+  const rawTracks = {
+    introMusic: resolveMusicTrackValue(
+      source.introMusic ?? source.introTrack ?? source.intro_music ?? transitionMusic.introMusic ?? transitionMusic.intro ?? transitionMusic.introTrack ?? musicSelections.introMusic ?? musicSelections.intro ?? musicSelections.introTrack ?? selectedMusic.introMusic ?? selectedMusic.intro ?? selectedMusic.introTrack
+    ),
+    bodyMusic: resolveMusicTrackValue(
+      source.bodyMusic ?? source.bodyTrack ?? source.body_music ?? transitionMusic.bodyMusic ?? transitionMusic.body ?? transitionMusic.bodyTrack ?? musicSelections.bodyMusic ?? musicSelections.body ?? musicSelections.bodyTrack ?? selectedMusic.bodyMusic ?? selectedMusic.body ?? selectedMusic.bodyTrack
+    ),
+    outroMusic: resolveMusicTrackValue(
+      source.outroMusic ?? source.outroTrack ?? source.outro_music ?? transitionMusic.outroMusic ?? transitionMusic.outro ?? transitionMusic.outroTrack ?? musicSelections.outroMusic ?? musicSelections.outro ?? musicSelections.outroTrack ?? selectedMusic.outroMusic ?? selectedMusic.outro ?? selectedMusic.outroTrack
+    ),
+  };
+  const rawCategory = firstText(
+    source.category,
+    source.musicCategory,
+    source.music_category,
+    source.transitionMusicCategory,
+    source.transition_music_category,
+    transitionMusic.category,
+    musicSelections.category,
+    selectedMusic.category,
+    fallback.category
+  );
+
+  const resolvedCategory = findMusicCategoryForTracks(rawTracks, rawCategory, musicCategories);
+  return {
+    introMusic: resolveMusicTrackForCategory(rawTracks.introMusic, resolvedCategory, musicCategories),
+    bodyMusic: resolveMusicTrackForCategory(rawTracks.bodyMusic, resolvedCategory, musicCategories),
+    outroMusic: resolveMusicTrackForCategory(rawTracks.outroMusic, resolvedCategory, musicCategories),
+    category: resolvedCategory,
+  };
 };
 
 const DEFAULT_VOICE_LANGUAGE = "en";
@@ -285,10 +495,22 @@ const buildLibraryUrlSearchParams = (applied, page, pageSize = VOICE_LIBRARY_PAG
 const mergeVoicesById = (...voiceLists) => {
   const out = new Map();
   voiceLists.flat().filter(Boolean).forEach((voice, idx) => {
-    const id = voice?.providerVoiceId || voice?.id || voice?.docId || `voice-${idx}`;
+    const id = getVoiceCatalogId(voice) || `voice-${idx}`;
     if (!out.has(id)) out.set(id, voice);
   });
   return Array.from(out.values());
+};
+
+const fetchLibraryPagesWithAgeCoverage = async (fetchLibraryPage, applied) => {
+  if (applied.age) return fetchLibraryPage(applied);
+  const baseVoices = await fetchLibraryPage(applied);
+  const ageResults = await Promise.allSettled(
+    VOICE_AGE_BUCKETS.map((age) => fetchLibraryPage({ ...applied, age }))
+  );
+  const ageVoices = ageResults
+    .filter((result) => result.status === "fulfilled")
+    .map((result) => result.value);
+  return mergeVoicesById(baseVoices, ...ageVoices);
 };
 
 const voiceAccentDebugSummary = (voicesList, language = "ar") => {
@@ -564,138 +786,99 @@ function VoiceFilterModal({ isOpen, onClose, filters, setFilters, voices, speake
           <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-x-3 md:gap-y-2.5">
             <div>
               <label className="form-label mb-1 block">Gender</label>
-              <div className="relative">
-                <select
-                  value={safeGenderFilter}
-                  onChange={(e) => setFilters({ ...filters, gender: e.target.value })}
-                  className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
-                >
-                  <option value="__all__">All Genders</option>
-                  {genderOptions.map(g => (
-                    <option key={g} value={g}>{g}</option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-              </div>
+              <VoiceFilterSelect
+                value={safeGenderFilter}
+                onChange={(value) => setFilters({ ...filters, gender: value })}
+                options={[
+                  { value: "__all__", label: "All Genders" },
+                  ...genderOptions.map((g) => ({ value: g, label: g })),
+                ]}
+                isRTL={isRTL}
+              />
             </div>
 
             <div>
               <label className="form-label mb-1 block">Age</label>
-              <div className="relative">
-                <select
-                  value={filters.age || ""}
-                  onChange={(e) => setFilters({ ...filters, age: e.target.value })}
-                  className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
-                >
-                  <option value="">All ages</option>
-                  {ageOptions.map(age => (
-                    <option key={age} value={age}>{formatVoiceAgeLabel(age)}</option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-              </div>
+              <VoiceFilterSelect
+                value={filters.age || ""}
+                onChange={(value) => setFilters({ ...filters, age: value })}
+                options={[
+                  { value: "", label: "All ages" },
+                  ...ageOptions.map((age) => ({ value: age, label: formatVoiceAgeLabel(age) })),
+                ]}
+                isRTL={isRTL}
+              />
             </div>
           </div>
 
           <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-x-3 md:gap-y-2.5">
             <div>
               <label className="form-label mb-1 block">Language</label>
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setFilters({ ...filters, languageMenuOpen: !filters.languageMenuOpen })}
-                  className="form-input !px-3 !py-2 min-h-10 w-full pr-10 text-start text-sm"
-                >
-                  <LanguageLabel value={filters.language || DEFAULT_VOICE_LANGUAGE} />
-                </button>
-                {filters.languageMenuOpen ? (
-                  <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-[10030] max-h-56 overflow-y-auto rounded-xl border border-neutral-200 bg-white p-1.5 shadow-xl dark:border-white/10 dark:bg-neutral-950">
-                    {languageOptions.map(lang => (
-                      <button
-                        key={lang}
-                        type="button"
-                        onClick={() => setLanguageFilter(lang)}
-                        className="flex w-full items-center rounded-lg px-3 py-2 text-start text-sm hover:bg-black/5 dark:hover:bg-white/10"
-                      >
-                        <LanguageLabel value={lang} />
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-              </div>
+              <VoiceFilterSelect
+                value={filters.language || DEFAULT_VOICE_LANGUAGE}
+                onChange={setLanguageFilter}
+                options={languageOptions.map((lang) => ({
+                  value: lang,
+                  label: <LanguageLabel value={lang} />,
+                }))}
+                isRTL={isRTL}
+              />
             </div>
 
             <div>
               <label className="form-label mb-1 block">Accent</label>
-              <div className="relative">
-                <select
-                  value={selectedAccentValid ? (filters.accent || "") : ""}
-                  onChange={(e) => setFilters({ ...filters, accent: e.target.value })}
-                  className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
-                >
-                  <option value="">All accents</option>
-                  {accentOptions.map(accent => (
-                    <option key={accent} value={accent}>{accent}</option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-              </div>
+              <VoiceFilterSelect
+                value={selectedAccentValid ? (filters.accent || "") : ""}
+                onChange={(value) => setFilters({ ...filters, accent: value })}
+                options={[
+                  { value: "", label: "All accents" },
+                  ...accentOptions.map((accent) => ({ value: accent, label: accent })),
+                ]}
+                isRTL={isRTL}
+              />
             </div>
           </div>
 
           <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-x-3 md:gap-y-2.5">
             <div>
               <label className="form-label mb-1 block">Tone</label>
-              <div className="relative">
-                <select
-                  value={selectedToneValid ? (filters.tone || "") : ""}
-                  onChange={(e) => setFilters({ ...filters, tone: e.target.value })}
-                  className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
-                >
-                  <option value="">All Tones</option>
-                  {toneOptions.map(tone => (
-                    <option key={tone} value={tone}>{formatToneLabel(tone)}</option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-              </div>
+              <VoiceFilterSelect
+                value={selectedToneValid ? (filters.tone || "") : ""}
+                onChange={(value) => setFilters({ ...filters, tone: value })}
+                options={[
+                  { value: "", label: "All Tones" },
+                  ...toneOptions.map((tone) => ({ value: tone, label: formatToneLabel(tone) })),
+                ]}
+                isRTL={isRTL}
+              />
             </div>
 
             <div>
               <label className="form-label mb-1 block">Pitch</label>
-              <div className="relative">
-                <select
-                  value={filters.pitch || ""}
-                  onChange={(e) => setFilters({ ...filters, pitch: e.target.value })}
-                  className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
-                >
-                  <option value="">All Pitches</option>
-                  {PITCH_VALUES.map((pitch) => (
-                    <option key={pitch} value={pitch}>{formatPitchLabel(pitch)}</option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-              </div>
+              <VoiceFilterSelect
+                value={filters.pitch || ""}
+                onChange={(value) => setFilters({ ...filters, pitch: value })}
+                options={[
+                  { value: "", label: "All Pitches" },
+                  ...PITCH_VALUES.map((pitch) => ({ value: pitch, label: formatPitchLabel(pitch) })),
+                ]}
+                isRTL={isRTL}
+              />
             </div>
           </div>
 
           {categoryOptions.length > 0 ? (
             <div>
               <label className="form-label mb-1 block">Category</label>
-              <div className="relative">
-                <select
-                  value={filters.category || ""}
-                  onChange={(e) => setFilters({ ...filters, category: e.target.value })}
-                  className="form-input !px-3 !py-2 min-h-10 appearance-none pr-10 text-sm [color-scheme:light] dark:[color-scheme:dark]"
-                >
-                  <option value="">All categories</option>
-                  {categoryOptions.map(category => (
-                    <option key={category} value={category}>{category}</option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-black/50 dark:text-white/60" />
-              </div>
+              <VoiceFilterSelect
+                value={filters.category || ""}
+                onChange={(value) => setFilters({ ...filters, category: value })}
+                options={[
+                  { value: "", label: "All categories" },
+                  ...categoryOptions.map((category) => ({ value: category, label: category })),
+                ]}
+                isRTL={isRTL}
+              />
             </div>
           ) : null}
 
@@ -735,7 +918,6 @@ export default function EditPodcast() {
   const [podcastId, setPodcastId] = useState(null);
   const [script, setScript] = useState("");
   const [originalScript, setOriginalScript] = useState("");
-  const [scriptTemplate, setScriptTemplate] = useState("");
   const [showTitle, setShowTitle] = useState("");
   const [originalShowTitle, setOriginalShowTitle] = useState("");
   const [scriptStyle, setScriptStyle] = useState("");
@@ -787,12 +969,7 @@ export default function EditPodcast() {
   const voicePreviewCacheRef = useRef(new Map());
   const [previewLoadingVoiceId, setPreviewLoadingVoiceId] = useState("");
 
-  const [exporting, setExporting] = useState(false);
-  const [toastMsg, setToastMsg] = useState("");
   const [showExportMenu, setShowExportMenu] = useState(false);
-  const isAuthenticated = () => {
-  return !!(localStorage.getItem("token") || sessionStorage.getItem("token"));
-};
   const formatDraftTime = (iso) => {
     if (!iso) return "";
     const value = new Date(iso);
@@ -823,7 +1000,7 @@ export default function EditPodcast() {
   };
 
   // Helper function to get voice ID (matching CreatePro)
-  const getVoiceId = (v) => v?.providerVoiceId || v?.id || v?.docId || "";
+  const getVoiceId = (v) => getVoiceCatalogId(v);
  const defaultVoiceForGender = (gender, usedIds, voicesList) => {
   if (!gender) return "";
   const available = voicesList.find(v => 
@@ -832,6 +1009,37 @@ export default function EditPodcast() {
   );
   return available ? getVoiceId(available) : "";
 };
+  const getVoiceNameById = (voiceId, voiceList = voices) => {
+    const targetId = String(voiceId || "").trim();
+    if (!targetId) return "";
+    const match = (voiceList || []).find((voice) => getVoiceId(voice) === targetId);
+    return getVoiceDisplayName(match);
+  };
+  const resolveSpeakerVoiceName = (speaker = {}, voiceList = voices) => {
+    const voiceId = speaker.voiceId || "";
+    const catalogName = getVoiceNameById(voiceId, voiceList);
+    const savedName = firstText(
+      speaker.voiceName,
+      speaker.voice_name,
+      speaker.selectedVoiceName,
+      speaker.selected_voice_name,
+      speaker.voiceLabel,
+      speaker.voice_label,
+      speaker.displayVoiceName,
+      speaker.display_voice_name
+    );
+    if (catalogName && !isGeneratedVoiceFallback(catalogName, voiceId)) return catalogName;
+    if (savedName && !isGeneratedVoiceFallback(savedName, voiceId)) return savedName;
+    return voiceId ? "Selected voice" : "";
+  };
+  const enrichSpeakersWithVoiceNames = (speakerList = speakers, voiceList = voices) =>
+    (Array.isArray(speakerList) ? speakerList : []).map((speaker) => {
+      const voiceName = resolveSpeakerVoiceName(speaker, voiceList);
+      return {
+        ...speaker,
+        voiceName,
+      };
+    });
   const buildEditableSnapshot = ({
     nextShowTitle = showTitle,
     nextScript = script,
@@ -910,18 +1118,20 @@ const willRegenerateAudio = useCallback(() => {
         console.log("Loaded podcast data:", data);
 
         const resolvedBaseTitle = data.showTitle || data.title || "Untitled Episode";
+        const baseMusicState = resolveSavedMusicState(data, {}, MUSIC_CATEGORIES);
         const baseState = {
           script: applyShowTitleToScript(data.script || "", resolvedBaseTitle),
           showTitle: data.showTitle || data.title || "Untitled Episode",
-          speakers: data.speakers || [],
-          introMusic: data.introMusic || "",
-          bodyMusic: data.bodyMusic || "",
-          outroMusic: data.outroMusic || "",
-          category: data.category || "",
+          speakers: normalizeSavedSpeakers(data.speakers),
+          ...baseMusicState,
         };
         const draftState = data.editDraft
           ? {
               ...data.editDraft,
+              speakers: Array.isArray(data.editDraft.speakers)
+                ? normalizeSavedSpeakers(data.editDraft.speakers)
+                : baseState.speakers,
+              ...resolveSavedMusicState(data.editDraft, baseMusicState, MUSIC_CATEGORIES),
               script: applyShowTitleToScript(
                 data.editDraft.script || "",
                 data.editDraft.showTitle || resolvedBaseTitle
@@ -932,7 +1142,6 @@ const willRegenerateAudio = useCallback(() => {
 
         setScript(nextState.script);
         setOriginalScript(baseState.script);
-        setScriptTemplate(data.scriptTemplate || "");
         setShowTitle(nextState.showTitle);
         setOriginalShowTitle(baseState.showTitle);
         setScriptStyle(data.scriptStyle || "");
@@ -1023,15 +1232,35 @@ useEffect(() => {
 
         const baseFilters = emptyAppliedVoiceFilters();
         const [baseVoices, englishVoices, arabicVoices] = await Promise.all([
-          fetchLibraryPage(baseFilters),
-          fetchLibraryPage({ ...baseFilters, language: "en" }),
-          fetchLibraryPage({ ...baseFilters, language: "ar" }),
+          fetchLibraryPagesWithAgeCoverage(fetchLibraryPage, baseFilters),
+          fetchLibraryPagesWithAgeCoverage(fetchLibraryPage, { ...baseFilters, language: "en" }),
+          fetchLibraryPagesWithAgeCoverage(fetchLibraryPage, { ...baseFilters, language: "ar" }),
         ]);
-        const raw = mergeVoicesById(baseVoices, englishVoices, arabicVoices);
+        let accountVoices = [];
+        try {
+          const params = new URLSearchParams();
+          params.set("provider", "ElevenLabs");
+          params.set("limit", "500");
+          const res = await fetch(`${API_BASE}/api/voices?${params.toString()}`, {
+            credentials: "include",
+            headers: authHeaders(),
+          });
+          const data = await parseJsonResponse(res);
+          if (res.ok) {
+            accountVoices = Array.isArray(data?.items) ? data.items : Array.isArray(data?.voices) ? data.voices : [];
+          } else {
+            console.warn("Failed to load account voices for Edit labels", data?.error || res.status);
+          }
+        } catch (accountErr) {
+          console.warn("Failed to load account voices for Edit labels", accountErr);
+        }
+
+        const raw = mergeVoicesById(baseVoices, englishVoices, arabicVoices, accountVoices);
 
         if (typeof window !== "undefined" && window.localStorage?.getItem("wecastVoiceFilterDebug") === "1") {
           console.debug("[WeCast voice filters] Edit Arabic summary", voiceAccentDebugSummary(raw, "ar"));
           console.debug("[WeCast voice filters] Edit tone/pitch summary", buildTonePitchDebugMatrix(raw));
+          console.debug("[WeCast voice filters] Edit age summary", buildVoiceAgeDebugSummary(raw));
         }
 
         setVoices(raw);
@@ -1060,6 +1289,28 @@ useEffect(() => {
 
     loadVoices();
   }, []);
+
+  useEffect(() => {
+    if (!voices.length) return;
+    setSpeakers((prev) => {
+      let changed = false;
+      const next = prev.map((speaker) => {
+        const voiceId = speaker.voiceId || "";
+        const resolvedName = resolveSpeakerVoiceName(speaker, voices);
+        const currentName = firstText(
+          speaker.voiceName,
+          speaker.voice_name,
+          speaker.selectedVoiceName,
+          speaker.selected_voice_name
+        );
+        if (!voiceId || !resolvedName || resolvedName === currentName) return speaker;
+        if (currentName && !isGeneratedVoiceFallback(currentName, voiceId)) return speaker;
+        changed = true;
+        return { ...speaker, voiceName: resolvedName };
+      });
+      return changed ? next : prev;
+    });
+  }, [voices]);
 
   // Filter voices for a specific speaker (matching CreatePro)
   const getFilteredVoicesForSpeaker = (speakerIndex) => {
@@ -1231,15 +1482,16 @@ useEffect(() => {
   }, [hasUnsavedChanges]);
 
   useEffect(() => {
+    const previewCache = voicePreviewCacheRef.current;
     return () => {
       if (voicePreviewRef.current) {
         voicePreviewRef.current.pause();
         voicePreviewRef.current = null;
       }
-      for (const url of voicePreviewCacheRef.current.values()) {
+      for (const url of previewCache.values()) {
         URL.revokeObjectURL(url);
       }
-      voicePreviewCacheRef.current.clear();
+      previewCache.clear();
     };
   }, []);
 
@@ -1299,6 +1551,7 @@ useEffect(() => {
         applySpeakerLabelRenames(script, originalSpeakers, speakers),
         showTitle
       );
+      const speakersForSave = enrichSpeakersWithVoiceNames(speakers);
       const res = await fetch(`${API_BASE}/api/podcast/${encodeURIComponent(podcastId)}/update`, {
         method: "POST",
         credentials: "include",
@@ -1309,11 +1562,23 @@ useEffect(() => {
         body: JSON.stringify({
           mode: "draft",
           script: updatedScript,
-          speakers,
+          speakers: speakersForSave,
           introMusic,
           bodyMusic,
           outroMusic,
           category,
+          musicSelections: {
+            category,
+            introTrack: introMusic,
+            bodyTrack: bodyMusic,
+            outroTrack: outroMusic,
+          },
+          transitionMusic: {
+            category,
+            introTrack: introMusic,
+            bodyTrack: bodyMusic,
+            outroTrack: outroMusic,
+          },
           showTitle,
           scriptStyle,
           description: "",
@@ -1327,13 +1592,14 @@ useEffect(() => {
       const savedSnapshot = buildEditableSnapshot({
         nextShowTitle: showTitle,
         nextScript: updatedScript,
-        nextSpeakers: speakers,
+        nextSpeakers: speakersForSave,
         nextIntroMusic: introMusic,
         nextBodyMusic: bodyMusic,
         nextOutroMusic: outroMusic,
         nextCategory: category,
       });
       setScript(updatedScript);
+      setSpeakers(speakersForSave);
       setDraftBaseline(savedSnapshot);
       setDraftRestored(true);
       setDraftSavedAt(data?.draft?.savedAt || data?.draft?.updatedAt || new Date().toISOString());
@@ -1460,7 +1726,9 @@ const persistChanges = async ({
   regenerateAfterSave = true,
 }) => {
   const resolvedScript = String(nextScript || "");
-  const resolvedSpeakers = Array.isArray(nextSpeakers) ? nextSpeakers : speakers;
+  const resolvedSpeakers = enrichSpeakersWithVoiceNames(
+    Array.isArray(nextSpeakers) ? nextSpeakers : speakers
+  );
 
   const res = await fetch(`${API_BASE}/api/podcast/${encodeURIComponent(podcastId)}/update`, {
       method: "POST",
@@ -1477,6 +1745,18 @@ const persistChanges = async ({
         bodyMusic,
         outroMusic,
         category: nextCategory,
+        musicSelections: {
+          category: nextCategory,
+          introTrack: introMusic,
+          bodyTrack: bodyMusic,
+          outroTrack: outroMusic,
+        },
+        transitionMusic: {
+          category: nextCategory,
+          introTrack: introMusic,
+          bodyTrack: bodyMusic,
+          outroTrack: outroMusic,
+        },
         showTitle: nextShowTitle,
         scriptStyle,
         description: "",
@@ -1522,7 +1802,7 @@ const persistChanges = async ({
       nextIntroMusic: introMusic,
       nextBodyMusic: bodyMusic,
       nextOutroMusic: outroMusic,
-      nextCategory,
+      nextCategory: nextCategory,
     }));
     setHasUnsavedChanges(false);
     setDraftRestored(false);
@@ -1569,7 +1849,7 @@ const finalizeChanges = async () => {
 
     await persistChanges({
       nextScript: updatedScript,
-      nextSpeakers: speakers,
+      nextSpeakers: enrichSpeakersWithVoiceNames(speakers),
       nextShowTitle: showTitle,
       nextCategory: category,
       regenerateAfterSave: shouldRegenerateAudio,
@@ -1623,10 +1903,6 @@ const finalizeChanges = async () => {
         throw new Error(data.error || "Failed to generate audio");
       }
 
-      const audioUrl = data.url.startsWith("http")
-        ? data.url
-        : `${API_BASE}${data.url}`;
-
       setToast({ type: "success", message: successMessage });
       return true;
     } catch (error) {
@@ -1648,15 +1924,12 @@ const exportScript = async (format = "pdf") => {
       return;
     }
 
-    setExporting(true);
-    
     let scriptContent = script.trim();
     let title = showTitle || "Podcast Script";
     
     if (!scriptContent) {
       setToast({ type: "warning", message: "No script content to export!" });
       setTimeout(() => setToast(null), 3000);
-      setExporting(false);
       return;
     }
 
@@ -1676,8 +1949,6 @@ const exportScript = async (format = "pdf") => {
     console.error("Error exporting script:", error);
     setToast({ type: "error", message: "Failed to export script. Please try again." });
     setTimeout(() => setToast(null), 3000);
-  } finally {
-    setExporting(false);
   }
 };
 
@@ -2142,11 +2413,18 @@ const exportScript = async (format = "pdf") => {
           <div className="space-y-6">
             {speakers.map((speaker, index) => {
               const pool = getFilteredVoicesForSpeaker(index);
-              const poolIds = new Set(pool.map(getVoiceId));
               const currentId = speaker.voiceId || "";
-              const safeValue = poolIds.has(currentId) ? currentId : "";
+              const selectedVoice =
+                pool.find((voice) => getVoiceId(voice) === currentId) ||
+                voices.find((voice) => getVoiceId(voice) === currentId);
+              const selectedVoiceName =
+                getVoiceDisplayName(selectedVoice) ||
+                resolveSpeakerVoiceName(speaker) ||
+                (currentId ? "Selected voice" : "");
+              const safeValue = currentId || "";
               const visibleCount = speakerVoiceVisibleCounts[index] || VOICE_PAGE_SIZE;
               const visiblePool = pool.slice(0, visibleCount);
+              const selectedVoiceVisible = currentId && visiblePool.some((voice) => getVoiceId(voice) === currentId);
               const hasMoreVoices = pool.length > visibleCount;
 
               return (
@@ -2205,6 +2483,7 @@ const exportScript = async (format = "pdf") => {
               ...next[index],
               gender,
               voiceId,
+              voiceName: getVoiceNameById(voiceId),
             };
 
             return next;
@@ -2257,26 +2536,31 @@ const exportScript = async (format = "pdf") => {
                                     (s, idx) => s.voiceId === newVoice && idx !== index
                                   );
                                   if (alreadyUsed) {
-                                    alert("This voice is already used by another speaker");
+                                    setToast({ type: "warning", message: "This voice is already used by another speaker" });
+                                    setTimeout(() => setToast(null), 3000);
                                     return;
                                   }
                                   const newSpeakers = [...speakers];
+                                  const selected =
+                                    pool.find((v) => getVoiceId(v) === newVoice) ||
+                                    voices.find((v) => getVoiceId(v) === newVoice);
                                   newSpeakers[index] = {
                                     ...newSpeakers[index],
                                     voiceId: newVoice,
+                                    voiceName: getVoiceDisplayName(selected) || "",
                                   };
                                   setSpeakers(newSpeakers);
 
                                   if (newVoice && shouldAutoplayVoicePreview()) {
-                                    const selected =
-                                      pool.find((v) => getVoiceId(v) === newVoice) ||
-                                      voices.find((v) => getVoiceId(v) === newVoice);
                                     previewVoice(newVoice, selected || null);
                                   }
                                 }}
                                 className={`w-full appearance-none pr-10 px-3 py-2 rounded-lg ${studioFieldClass} [color-scheme:light] dark:[color-scheme:dark]`}
                               >
                                 <option value="">Select a voice</option>
+                                {currentId && !selectedVoiceVisible ? (
+                                  <option value={currentId}>{selectedVoiceName}</option>
+                                ) : null}
                                 {visiblePool.map((v) => {
                                   const vid = getVoiceId(v);
                                   const isTaken = speakers.some(
@@ -2284,7 +2568,7 @@ const exportScript = async (format = "pdf") => {
                                   );
                                   return (
                                     <option key={vid} value={vid} disabled={isTaken}>
-                                      {v.name} {isTaken ? "(used)" : ""}
+                                      {getVoiceDisplayName(v) || "Unnamed voice"} {isTaken ? "(used)" : ""}
                                     </option>
                                   );
                                 })}
@@ -2428,16 +2712,18 @@ const exportScript = async (format = "pdf") => {
     {/* TRACK LIST */}
     {category && availableTracks.length > 0 && (
       <div className="mt-8 space-y-4">
-        {["Intro Music", "Body Music", "Outro Music"].map((label, index) => (
+        {["Intro Music", "Body Music", "Outro Music"].map((label, index) => {
+          const selectedValue = index === 0 ? introMusic : index === 1 ? bodyMusic : outroMusic;
+          const selectedTrackVisible = !selectedValue || availableTracks.some((track) => track.file === selectedValue);
+
+          return (
           <div key={label} className="flex items-center justify-between border p-3 rounded-xl dark:border-neutral-700">
             <span className="font-medium">{label}</span>
 
             <div className="flex items-center gap-3">
               <select
                 className="p-2 rounded-lg border dark:bg-neutral-800 dark:border-neutral-700"
-                value={
-                  index === 0 ? introMusic : index === 1 ? bodyMusic : outroMusic
-                }
+                value={selectedValue}
                 onChange={(e) => {
                   if (index === 0) setIntroMusic(e.target.value);
                   if (index === 1) setBodyMusic(e.target.value);
@@ -2445,6 +2731,9 @@ const exportScript = async (format = "pdf") => {
                 }}
               >
                 <option value="">Select track</option>
+                {selectedValue && !selectedTrackVisible ? (
+                  <option value={selectedValue}>{selectedValue}</option>
+                ) : null}
                 {availableTracks.map((track) => (
                   <option key={track.file} value={track.file}>{track.name}</option>
                 ))}
@@ -2471,7 +2760,8 @@ const exportScript = async (format = "pdf") => {
               </button>
             </div>
           </div>
-        ))}
+          );
+        })}
 
         {musicPreview && (
           <audio autoPlay src={musicPreview} onEnded={() => setMusicPreview(null)} />
@@ -2630,13 +2920,6 @@ const exportScript = async (format = "pdf") => {
 )}
 
       <Toast toast={toast} onClose={() => setToast(null)} />
-{toastMsg && (
-  <div className="fixed top-6 right-6 z-[10000] bg-green-500 text-white px-6 py-3 rounded-xl shadow-2xl border border-green-300 animate-in slide-in-from-right-8 duration-300">
-    <div className="flex items-center gap-2 font-semibold">
-      {toastMsg}
-    </div>
-  </div>
-)}
     </div>
   );
 }

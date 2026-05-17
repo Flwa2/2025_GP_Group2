@@ -15,7 +15,9 @@ function readStorageValue(key, preferLocal = false) {
     try {
       const value = storage.getItem(key);
       if (value) return value;
-    } catch {}
+    } catch {
+      // Ignore unavailable storage and continue with the next fallback.
+    }
   }
   return "";
 }
@@ -27,7 +29,9 @@ function writeStorageValue(key, value, localOnly = false) {
     if (!storage) continue;
     try {
       storage.setItem(key, value);
-    } catch {}
+    } catch {
+      // Ignore unavailable storage and continue with the next fallback.
+    }
   }
 }
 
@@ -38,7 +42,9 @@ function removeStorageValue(key, localOnly = false) {
     if (!storage) continue;
     try {
       storage.removeItem(key);
-    } catch {}
+    } catch {
+      // Ignore unavailable storage and continue with the next fallback.
+    }
   }
 }
 

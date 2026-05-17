@@ -1,5 +1,5 @@
 // src/App.jsx
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import Header from "./components/Header";
 import HeroSection from "./components/HeroSection";
@@ -21,6 +21,67 @@ import EmailAction from "./components/EmailAction";
 import Share from "./components/Share";
 import { syncCreateDraftLease } from "./utils/createDraftSession";
 
+
+const APP_TITLE = "WeCast";
+
+function formatDocumentTitle(pageTitle) {
+  const cleanTitle = String(pageTitle || "").trim();
+  return cleanTitle ? `${APP_TITLE} | ${cleanTitle}` : APP_TITLE;
+}
+
+function getPreviewTitleFromStorage() {
+  try {
+    const saved = sessionStorage.getItem("wecast_preview");
+    if (!saved) return "";
+    const data = JSON.parse(saved);
+    return (
+      data?.title ||
+      data?.episodeTitle ||
+      data?.podcastTitle ||
+      data?.showTitle ||
+      data?.generatedTitle ||
+      ""
+    );
+  } catch {
+    return "";
+  }
+}
+
+function getHashSearchParams(hash) {
+  const query = String(hash || "").split("?")[1] || "";
+  return new URLSearchParams(query);
+}
+
+function initialPreviewTitleForHash(hash) {
+  if (!String(hash || "").startsWith("#/preview")) return "";
+  const params = getHashSearchParams(hash);
+  return params.get("id") ? "" : getPreviewTitleFromStorage();
+}
+
+function routePageTitle(hash, previewTitle = "") {
+  const route = (hash || "#/").split("?")[0];
+
+  if (route.startsWith("#/preview")) {
+    return previewTitle || "";
+  }
+  if (route.startsWith("#/episodes")) return "Cast Studio";
+  if (route.startsWith("#/create")) return "Create Podcast";
+  if (route.startsWith("#/edit-podcast") || route.startsWith("#/edit")) return "Edit Podcast";
+  if (route.startsWith("#/login")) return "Login";
+  if (route.startsWith("#/signup")) return "Sign Up";
+  if (route.startsWith("#/account")) return "Account";
+  if (route === "#/" || route === "" || route === "#" || route === "#about" || route === "#episodes") {
+    return "Home";
+  }
+
+  return "";
+}
+
+function useDocumentTitle(pageTitle) {
+  useLayoutEffect(() => {
+    document.title = formatDocumentTitle(pageTitle);
+  }, [pageTitle]);
+}
 
 
 function isAuthenticated() {
@@ -67,6 +128,33 @@ function useHashRoute() {
 export default function App() {
   useTranslation();
   const hash = useHashRoute();
+  const isPreview = hash.startsWith("#/preview");
+  const [previewTitleState, setPreviewTitleState] = useState(() => ({
+    hash,
+    title: initialPreviewTitleForHash(hash),
+  }));
+
+  useEffect(() => {
+    if (isPreview) {
+      setPreviewTitleState({
+        hash,
+        title: initialPreviewTitleForHash(hash),
+      });
+      return;
+    }
+    setPreviewTitleState({ hash, title: "" });
+  }, [hash, isPreview]);
+
+  const previewTitle =
+    isPreview && previewTitleState.hash === hash ? previewTitleState.title : "";
+  const handlePreviewTitleChange = useCallback(
+    (nextTitle) => {
+      setPreviewTitleState({ hash, title: nextTitle || "" });
+    },
+    [hash]
+  );
+  useDocumentTitle(routePageTitle(hash, previewTitle));
+
   /** Run lease sync before any child (e.g. Create) reads sessionStorage during render. */
   const createLeaseHashRef = useRef(null);
   if (createLeaseHashRef.current !== hash) {
@@ -86,7 +174,6 @@ export default function App() {
     hash.startsWith("#/reset-password") ||
     hash.startsWith("#/email-change-confirm");
   const isShare = hash.startsWith("#/share");
-  const isPreview = hash.startsWith("#/preview");
   const isEpisodes = hash.startsWith("#/episodes");
   const isFinalize = hash.startsWith("#/finalize");
   const isEditPodcast = hash.startsWith("#/edit-podcast");
@@ -154,7 +241,7 @@ export default function App() {
         ) : isFinalize ? (
           <FinalizePublish />
         ) : isPreview ? (
-          <Preview />
+          <Preview onTitleChange={handlePreviewTitleChange} />
         ) : (
           <>
             <HeroSection />

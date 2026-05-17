@@ -147,7 +147,7 @@ export default function WeCastAudioPlayer({
       const url = URL.createObjectURL(blob);
       triggerBrowserDownload(url);
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (_err) {
+    } catch {
       triggerBrowserDownload(target);
     }
   };

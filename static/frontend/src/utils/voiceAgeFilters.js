@@ -1,5 +1,7 @@
 const AGE_SPLIT = /[,;/|]/;
 
+export const VOICE_AGE_BUCKETS = ["young", "middle_aged", "old"];
+
 const splitAgeValues = (value) => {
   if (Array.isArray(value)) return value.flatMap(splitAgeValues);
   if (typeof value === "string") {
@@ -22,7 +24,23 @@ export const normalizeVoiceAgeValue = (value) => {
   if (!raw) return "";
   if (["young", "youth", "youthful", "young_adult"].includes(raw)) return "young";
   if (["middle_aged", "middle_age", "middle"].includes(raw)) return "middle_aged";
-  if (["old", "older", "senior", "elderly", "aged"].includes(raw)) return "old";
+  if (
+    [
+      "old",
+      "older",
+      "older_adult",
+      "old_adult",
+      "senior",
+      "senior_adult",
+      "senior_citizen",
+      "elder",
+      "elderly",
+      "elderly_adult",
+      "aged",
+      "aged_adult",
+      "mature",
+    ].includes(raw)
+  ) return "old";
   return raw;
 };
 
@@ -66,7 +84,7 @@ export const collectVoiceAgeOptions = (voices) => {
   for (const voice of voices || []) {
     for (const age of voiceAgeTokens(voice)) seen.add(age);
   }
-  const preferredOrder = ["young", "middle_aged", "old"];
+  const preferredOrder = VOICE_AGE_BUCKETS;
   return Array.from(seen).sort((a, b) => {
     const ai = preferredOrder.indexOf(a);
     const bi = preferredOrder.indexOf(b);
@@ -77,4 +95,22 @@ export const collectVoiceAgeOptions = (voices) => {
     }
     return formatVoiceAgeLabel(a).localeCompare(formatVoiceAgeLabel(b), undefined, { sensitivity: "base" });
   });
+};
+
+export const buildVoiceAgeDebugSummary = (voices, allAgesCount = null) => {
+  const counts = {};
+  for (const voice of voices || []) {
+    const tokens = voiceAgeTokens(voice);
+    if (!tokens.length) {
+      counts.unknown = (counts.unknown || 0) + 1;
+      continue;
+    }
+    for (const token of tokens) counts[token] = (counts[token] || 0) + 1;
+  }
+  return {
+    totalVoices: Array.isArray(voices) ? voices.length : 0,
+    normalizedAgeCounts: counts,
+    oldVoiceCount: counts.old || 0,
+    allAgesCount: allAgesCount ?? (Array.isArray(voices) ? voices.length : 0),
+  };
 };

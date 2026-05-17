@@ -2912,6 +2912,7 @@ def save_generated_podcast_to_firestore(user_id: str, title: str, script_style: 
             "gender": (s.get("gender") or "").strip(),
             "role": (s.get("role") or "").strip(),
             "providerVoiceId": (s.get("voiceId") or "").strip(),  
+            "voiceName": (s.get("voiceName") or s.get("voice_name") or "").strip(),
             "createdAt": now,
         })
 
@@ -4201,6 +4202,9 @@ def _serialize_edit_draft(doc):
         "bodyMusic": data.get("bodyMusic", ""),
         "outroMusic": data.get("outroMusic", ""),
         "category": data.get("category", ""),
+        "transitionMusic": data.get("transitionMusic", {}),
+        "musicSelections": data.get("musicSelections", {}),
+        "selectedMusic": data.get("selectedMusic", {}),
         "savedAt": _iso(data.get("savedAt")),
         "updatedAt": _iso(data.get("updatedAt")),
     }
@@ -4517,6 +4521,9 @@ def api_update_podcast(podcast_id):
         "bodyMusic": data.get("bodyMusic", ""),
         "outroMusic": data.get("outroMusic", ""),
         "category": data.get("category", ""),
+        "transitionMusic": data.get("transitionMusic", {}),
+        "musicSelections": data.get("musicSelections", {}),
+        "selectedMusic": data.get("selectedMusic", {}),
         "description": data.get("description", ""),
         "scriptStyle": data.get("scriptStyle", podcast_data.get("style", "")),
         "savedAt": firestore.SERVER_TIMESTAMP,
@@ -4548,6 +4555,9 @@ def api_update_podcast(podcast_id):
         "introMusic": payload["introMusic"],
         "bodyMusic": payload["bodyMusic"],
         "outroMusic": payload["outroMusic"],
+        "transitionMusic": payload["transitionMusic"],
+        "musicSelections": payload["musicSelections"],
+        "selectedMusic": payload["selectedMusic"],
     }
     
     if payload["description"]:
@@ -4588,6 +4598,7 @@ def api_update_podcast(podcast_id):
                 "gender": speaker.get("gender", "Male"),
                 "role": speaker.get("role", "host"),
                 "providerVoiceId": speaker.get("voiceId", ""),
+                "voiceName": speaker.get("voiceName", "") or speaker.get("voice_name", ""),
                 "updatedAt": firestore.SERVER_TIMESTAMP,
             })
         print(f"DEBUG: Speakers saved")
@@ -6125,6 +6136,7 @@ def api_get_podcast(podcast_id):
             "gender": speaker_data.get("gender", "Male"),
             "role": speaker_data.get("role", "host"),
             "voiceId": speaker_data.get("providerVoiceId", ""),
+            "voiceName": speaker_data.get("voiceName", "") or speaker_data.get("voice_name", ""),
         })
 
     # Get script from subcollection
@@ -6162,6 +6174,9 @@ def api_get_podcast(podcast_id):
         "bodyMusic": podcast_data.get("bodyMusic", ""),
         "outroMusic": podcast_data.get("outroMusic", ""),
         "category": podcast_data.get("category", ""),
+        "transitionMusic": podcast_data.get("transitionMusic", {}),
+        "musicSelections": podcast_data.get("musicSelections", {}),
+        "selectedMusic": podcast_data.get("selectedMusic", {}),
         "language": podcast_data.get("language", "en"),
         "audioUrl": resolved_podcast_data.get("audioUrl", podcast_data.get("audioUrl", "")),
         "audioKey": podcast_data.get("audioKey", ""),

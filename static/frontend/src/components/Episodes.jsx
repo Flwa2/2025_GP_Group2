@@ -206,7 +206,6 @@ export default function Episodes() {
   const [selectedEpisodeId, setSelectedEpisodeId] = useState("");
   const [pendingDeleteEpisode, setPendingDeleteEpisode] = useState(null);
   const [recycleBin, setRecycleBin] = useState(() => initialEpisodesCache?.recycleBin || []);
-  const [isEmptyingBin, setIsEmptyingBin] = useState(false);
   const [mobileLibraryOpen, setMobileLibraryOpen] = useState(false);
   const audioRef = useRef(null);
 
@@ -364,11 +363,6 @@ export default function Episodes() {
   }, [q, episodes, activeFilter, recycleBin]);
 
   const visibleEpisodes = filtered;
-  const selectedEpisode = useMemo(
-    () => [...episodes, ...recycleBin].find((e) => e.id === selectedEpisodeId) || null,
-    [episodes, recycleBin, selectedEpisodeId]
-  );
-
   useEffect(() => {
     if (!selectedEpisodeId) return;
     const exists = [...episodes, ...recycleBin].some((e) => e.id === selectedEpisodeId);
@@ -616,7 +610,9 @@ export default function Episodes() {
       }
       if (!res.ok) throw new Error(data?.error || "Failed to restore episode");
 
-      const { deletedAt, deleteAfter, ...restoredEpisode } = target;
+      const restoredEpisode = { ...target };
+      delete restoredEpisode.deletedAt;
+      delete restoredEpisode.deleteAfter;
       const nextBin = recycleBin.filter((ep) => ep.id !== id);
       const nextEpisodes = [restoredEpisode, ...episodes];
       setRecycleBin(nextBin);
@@ -652,45 +648,6 @@ export default function Episodes() {
     } catch {
       setActionError(t("episodes.deleteError"));
     }
-  };
-
-  const emptyRecycleBin = async () => {
-    if (!recycleBin.length || isEmptyingBin) return;
-    setIsEmptyingBin(true);
-    setActionInfo("");
-    setActionError("");
-
-    const failed = [];
-    for (const ep of recycleBin) {
-      try {
-        const res = await fetch(`${API_BASE}/api/episodes/${encodeURIComponent(ep.id)}/delete`, {
-          method: "POST",
-          headers: authHeaders,
-          credentials: "include",
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.status === 401) {
-          handleUnauthorized();
-          setIsEmptyingBin(false);
-          return;
-        }
-        if (!res.ok) throw new Error(data?.error || "Failed to delete episode");
-      } catch {
-        failed.push(ep);
-      }
-    }
-
-    if (failed.length) {
-      setRecycleBin(failed);
-      writeEpisodesCache(token, episodes, failed);
-      setActionError(t("episodes.recycle.emptyError", { count: failed.length }));
-    } else {
-      const removedCount = recycleBin.length;
-      setRecycleBin([]);
-      writeEpisodesCache(token, episodes, []);
-      setActionInfo(t("episodes.recycle.emptied", { count: removedCount }));
-    }
-    setIsEmptyingBin(false);
   };
 
   return (
@@ -1020,7 +977,7 @@ export default function Episodes() {
                                   e.stopPropagation();
                                   togglePlayEpisode(ep);
                                 }}
-                                disabled={!Boolean(ep.audioKey || resolveAudioUrl(ep.audioUrl))}
+                                disabled={!(ep.audioKey || resolveAudioUrl(ep.audioUrl))}
                                 className="inline-flex h-9 min-h-9 max-md:h-7 max-md:min-h-7 min-w-0 w-auto max-w-full shrink-0 grow-0 items-center justify-center gap-1.5 max-md:gap-0.5 rounded-lg max-md:rounded border border-black/10 px-3 max-md:px-1.5 text-sm max-md:text-[10px] max-md:leading-tight font-semibold hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/15 dark:hover:bg-white/10"
                                 title={activeAudioId === ep.id && isPlaying ? t("episodes.card.pause") : t("episodes.card.play")}
                               >
