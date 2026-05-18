@@ -1,8 +1,10 @@
 # 🎙️ WeCast
 
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=111827) ![Flask](https://img.shields.io/badge/Flask-Backend-000000?logo=flask&logoColor=white) ![OpenAI](https://img.shields.io/badge/OpenAI-AI-412991?logo=openai&logoColor=white) ![ElevenLabs](https://img.shields.io/badge/ElevenLabs-Voice-111827) ![Firebase](https://img.shields.io/badge/Firebase-Auth%20%26%20Firestore-FFCA28?logo=firebase&logoColor=111827) ![Render](https://img.shields.io/badge/Render-Deployment-46E3B7?logo=render&logoColor=111827) ![Academic Project](https://img.shields.io/badge/Academic%20Project-Graduation%20Project-6D28D9)
+
 ## Graduation Project Group 2
 
-WeCast is the final software package for Graduation Project Group 2. It is an AI-powered podcast generation platform that helps users convert written content into complete podcast episodes with generated scripts, realistic voices, cover art, transcripts, chapters, summaries, sharing, and download support.
+WeCast is an AI-powered podcast generation platform developed as the final software package for Graduation Project Group 2. It transforms written content into complete podcast episodes with generated scripts, realistic multi-speaker audio, transition music, cover art, transcripts, chapters, summaries, sharing, saved episodes, and download support.
 
 ## 📂 Software Package Structure
 
@@ -18,11 +20,7 @@ Submission Package
 
 - `GP2_WeCast_Software/`: complete source code folder for the WeCast application.
 - `GP2_WeCast_Executable`: packaged executable, startup script, or deployment entry used to launch the WeCast system.
-- `README.md`: documentation file containing setup, run, testing, repository, and notes.
-
-## 🚀 Project Overview
-
-WeCast is an AI-powered podcast generation platform that enables users to transform written content into complete podcast episodes. The system supports script generation, multi-speaker voice synthesis, transition music, cover art, transcripts, summaries, sharing, and download-ready audio output.
+- `README.md`: documentation file containing setup, run, testing, repository, and important notes.
 
 ## 🏗️ System Architecture
 
@@ -70,17 +68,20 @@ WeCast follows a client-server architecture:
 
 ![Cover Art Generation](docs/images/cover-art-generation.png)
 
+## 🌙 Dark Mode Preview
+
+No dedicated dark mode screenshots are currently available in the local screenshots folder.
+
 ## ✨ Key Features
 
-- AI script generation from user-provided content.
-- Multi-speaker voice generation.
-- Transition music between podcast sections.
-- Interactive transcript display.
-- Automatically generated chapters.
-- AI-generated episode summary.
-- Podcast cover art generation and upload.
-- Episode preview, sharing, and download features.
-- Saved podcast management for authenticated users.
+- AI script generation from user-provided content
+- Multi-speaker voice generation
+- Transition music between podcast sections
+- Interactive transcript display
+- Automatically generated chapters and summaries
+- Podcast cover art generation and upload
+- Episode preview, sharing, and download features
+- Saved podcast management for authenticated users
 
 ## 🛠️ Technologies Used
 
@@ -161,11 +162,6 @@ pip install -r requirements.txt
 ```bash
 cd static/frontend
 npm install
-```
-
-Return to the project root when needed:
-
-```bash
 cd ../..
 ```
 
@@ -173,66 +169,21 @@ cd ../..
 
 Create a `.env` file in the project root for backend configuration. Also configure frontend environment variables in `static/frontend/.env` when required by the deployment or local setup.
 
-Do not commit real API keys, service credentials, or secret files to GitHub.
-
-### 5. Run the Backend
-
-From the project root:
-
-```bash
-python app.py
-```
-
-The backend server runs by default at:
-
-```text
-http://127.0.0.1:5000
-```
-
-### 6. Run the Frontend
-
-From the project root:
-
-```bash
-npm run dev
-```
-
-Or from the frontend folder:
-
-```bash
-cd static/frontend
-npm run dev
-```
-
-The frontend development server runs by default at:
-
-```text
-http://localhost:5173
-```
-
 ## ▶️ Run Instructions
 
-To start WeCast locally, run the backend and frontend in two separate terminals.
-
-Terminal 1: backend
+Backend:
 
 ```bash
 python app.py
 ```
 
-Terminal 2: frontend
+Frontend:
 
 ```bash
 npm run dev
 ```
 
-Then open the application in a browser:
-
-```text
-http://localhost:5173
-```
-
-If the backend and frontend ports are changed, update the frontend API base URL and backend CORS/frontend-origin configuration accordingly.
+Open `http://localhost:5173`. By default, the backend runs at `http://127.0.0.1:5000`.
 
 ## 🔐 Environment Variables
 
@@ -281,24 +232,13 @@ Backend URL: [add deployed backend URL]
 
 Suggested testing checklist:
 
-- Create or log in to a test account.
-- Generate a podcast script from sample written content.
-- Generate multi-speaker audio using the available voice options.
-- Verify transition music is included where selected.
-- Review the podcast preview page.
-- Check transcript highlighting during playback.
-- Open and review generated chapters.
-- Open and review the generated summary.
-- Generate or upload cover art.
-- Save the podcast to the user account.
-- Test sharing from the public share page.
-- Download the generated audio file.
-
-AI features require valid API keys and may fail if the API quota, billing, or provider configuration is unavailable.
+- Generate script
+- Generate audio
+- Preview podcast
+- Share podcast
+- Download podcast
 
 ## 🔗 Official Repository
-
-Official Repository:
 
 ```text
 https://github.com/GhalaMus/2025_GP_Group2
@@ -310,13 +250,9 @@ https://github.com/GhalaMus/2025_GP_Group2
 - Audio generation performance may vary depending on internet connection and hardware resources.
 - Some advanced features require valid cloud service configuration.
 - Email delivery requires correct Resend or SMTP settings.
-- Local audio processing requires FFmpeg to be installed and available in the system path.
 
-## 📝 Notes
+## 📝 Important Notes
 
-- API keys are required for AI script generation, voice generation, summary generation, and cover art generation.
-- Firebase configuration is required for authentication, saved podcasts, Firestore data, and storage configuration.
-- FFmpeg must be installed locally and available in the system path if backend audio processing depends on it.
-- Email features require Resend or SMTP configuration.
-- Do not commit real API keys, `.env` files, Firebase service account files, or other secret credentials.
-- For deployment, configure all secrets through the hosting provider dashboard or secure environment settings.
+- Keep API keys, `.env` files, Firebase service account files, and provider credentials out of Git.
+- Configure production secrets through the hosting provider dashboard or secure environment settings.
+- If ports are changed, update the frontend API base URL and backend CORS/frontend-origin configuration accordingly.
