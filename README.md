@@ -235,15 +235,6 @@ If object storage is configured separately for generated media, add the relevant
 
 ## 🧪 Testing Information
 
-Use the following placeholder demo credentials for submission testing if final public credentials or URLs are not available:
-
-```text
-Email: test@example.com
-Password: Test@12345
-Frontend URL: [add deployed frontend URL]
-Backend URL: [add deployed backend URL]
-```
-
 Suggested testing checklist:
 
 - Generate script
