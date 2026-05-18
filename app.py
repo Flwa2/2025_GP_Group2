@@ -1355,11 +1355,8 @@ EMAIL_VERIFICATION_ACTION_TTL_SECONDS = int(
 RECENT_AUTH_MAX_AGE_SECONDS = int(
     os.getenv("WECAST_RECENT_AUTH_MAX_AGE_SECONDS", "900")
 )
-COVER_GENERATION_COOLDOWN_SECONDS = int(
-    os.getenv("WECAST_COVER_GENERATION_COOLDOWN_SECONDS", "60")
-)
-COVER_GENERATION_DAILY_LIMIT = int(
-    os.getenv("WECAST_COVER_GENERATION_DAILY_LIMIT", "10")
+COVER_GENERATION_MAX_PER_PODCAST = int(
+    os.getenv("WECAST_COVER_GENERATION_MAX_PER_PODCAST", "2")
 )
 
 
@@ -1427,47 +1424,27 @@ def _utc_now():
     return datetime.now(timezone.utc)
 
 
-def _coerce_utc_datetime(value):
-    if not value:
-        return None
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    if isinstance(value, str):
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-        except Exception:
-            return None
-    return None
-
-
 def _cover_generation_limit_status(podcast_data):
-    now = _utc_now()
-    last_at = _coerce_utc_datetime((podcast_data or {}).get("coverGenerationLastAt"))
-    if COVER_GENERATION_COOLDOWN_SECONDS > 0 and last_at:
-        elapsed = (now - last_at).total_seconds()
-        if elapsed < COVER_GENERATION_COOLDOWN_SECONDS:
-            retry_after = max(1, int(math.ceil(COVER_GENERATION_COOLDOWN_SECONDS - elapsed)))
-            return False, {
-                "error": "Please wait before generating another cover.",
-                "retryAfterSeconds": retry_after,
-            }
-
-    today = now.date().isoformat()
-    window = str((podcast_data or {}).get("coverGenerationWindow") or "")
-    count = int((podcast_data or {}).get("coverGenerationCount") or 0)
-    if window != today:
+    try:
+        count = int((podcast_data or {}).get("coverGenerationCount") or 0)
+    except (TypeError, ValueError):
         count = 0
+    limit = max(0, COVER_GENERATION_MAX_PER_PODCAST)
+    remaining = max(0, limit - count)
 
-    if COVER_GENERATION_DAILY_LIMIT > 0 and count >= COVER_GENERATION_DAILY_LIMIT:
+    if limit > 0 and count >= limit:
         return False, {
-            "error": "Daily cover generation limit reached for this episode.",
-            "limit": COVER_GENERATION_DAILY_LIMIT,
+            "error": "Cover art generation limit reached. You can upload your own cover image instead.",
+            "limit": limit,
+            "count": count,
+            "remaining": 0,
         }
 
     return True, {
-        "window": today,
+        "window": _utc_now().date().isoformat(),
         "count": count,
+        "limit": limit,
+        "remaining": remaining,
     }
 
 
@@ -4363,7 +4340,16 @@ def api_finalize_get(podcast_id):
     draft = _get_draft_for(podcast_id)
     cover_b64 = draft.get("coverArtBase64")
     cover_meta = draft.get("coverArtMeta") or {}
+    if not cover_b64 and pdata.get("coverThumbB64"):
+        cover_b64 = pdata.get("coverThumbB64")
+        cover_meta = {
+            "source": "Saved cover",
+            "mimeType": pdata.get("coverMimeType") or "image/jpeg",
+            "coverUrl": pdata.get("coverUrl") or "",
+            "storagePath": pdata.get("coverPath") or "",
+        }
     title = draft.get("title") or pdata.get("title") or "Untitled Episode"
+    _, cover_limit_state = _cover_generation_limit_status(pdata)
 
     return jsonify(
         ok=True,
@@ -4371,6 +4357,9 @@ def api_finalize_get(podcast_id):
         title=title,
         coverArtBase64=cover_b64,
         coverArtMeta=cover_meta,
+        coverGenerationCount=cover_limit_state.get("count", 0),
+        coverGenerationLimit=cover_limit_state.get("limit", COVER_GENERATION_MAX_PER_PODCAST),
+        coverGenerationRemaining=cover_limit_state.get("remaining", 0),
     )
 
 @app.post("/api/podcasts/<podcast_id>/cover/generate")
@@ -4428,6 +4417,7 @@ def api_cover_generate(podcast_id):
         return jsonify(error="Cover generated but failed to persist."), 500
 
     cover_generation_count = int(limit_state.get("count") or 0) + 1
+    cover_generation_limit = int(limit_state.get("limit") or COVER_GENERATION_MAX_PER_PODCAST)
     db.collection("podcasts").document(podcast_id).set(
         {
             "coverGenerationLastAt": firestore.SERVER_TIMESTAMP,
@@ -4467,6 +4457,9 @@ def api_cover_generate(podcast_id):
         coverArtBase64=b64,
         coverUrl=cover_url,
         coverThumbB64=thumb_b64,
+        coverGenerationCount=cover_generation_count,
+        coverGenerationLimit=cover_generation_limit,
+        coverGenerationRemaining=max(0, cover_generation_limit - cover_generation_count),
         warning=("Cover thumbnail saved; storage URL unavailable." if persist_error else ""),
     )
 

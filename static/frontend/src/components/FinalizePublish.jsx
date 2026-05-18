@@ -83,9 +83,13 @@ export default function FinalizePublish() {
   const [coverB64, setCoverB64] = useState(null);
   const [coverMime, setCoverMime] = useState("image/png");
   const [coverMeta, setCoverMeta] = useState({});
+  const [coverGenerationCount, setCoverGenerationCount] = useState(0);
+  const [coverGenerationLimit, setCoverGenerationLimit] = useState(2);
 
   const hasUnsavedTitle = title.trim() !== savedTitle.trim();
   const hasCover = !!coverB64;
+  const coverGenerationLimitReached =
+    coverGenerationLimit > 0 && coverGenerationCount >= coverGenerationLimit;
 
   const coverSrc = useMemo(() => {
     if (!coverB64) return null;
@@ -103,6 +107,8 @@ export default function FinalizePublish() {
       const meta = data.coverArtMeta || {};
       setCoverMeta(meta);
       setCoverMime(meta.mimeType || "image/png");
+      setCoverGenerationCount(Number(data.coverGenerationCount || 0));
+      setCoverGenerationLimit(Number(data.coverGenerationLimit || 2));
     } catch (e) {
       setNotice(e?.message || "Failed to load page.");
       setNoticeType("error");
@@ -149,6 +155,12 @@ export default function FinalizePublish() {
   }
 
   async function generateCover() {
+    if (coverGenerationLimitReached) {
+      setNotice("Cover art generation limit reached. You can upload your own cover image instead.");
+      setNoticeType("warn");
+      return;
+    }
+
     setBusy(true);
     setBusyText(hasCover ? "Regenerating cover art..." : "Generating cover art...");
     try {
@@ -161,6 +173,8 @@ export default function FinalizePublish() {
       setCoverB64(resp.coverArtBase64);
       setCoverMime("image/png");
       setCoverMeta({ source: "AI generated" });
+      setCoverGenerationCount(Number(resp.coverGenerationCount || coverGenerationCount + 1));
+      setCoverGenerationLimit(Number(resp.coverGenerationLimit || coverGenerationLimit));
 
       if (resp.warning) {
         setNotice(resp.warning);
@@ -382,8 +396,8 @@ export default function FinalizePublish() {
             <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
               <button
                 onClick={generateCover}
-                disabled={busy}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-purple-600 px-4 py-3 text-sm font-semibold text-white shadow-sm shadow-purple-500/20 transition hover:bg-purple-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/40 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={busy || coverGenerationLimitReached}
+                className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-2xl bg-purple-600 px-4 py-3 text-sm font-semibold text-white shadow-sm shadow-purple-500/20 transition hover:bg-purple-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/40 disabled:cursor-not-allowed disabled:bg-purple-600/45 disabled:text-white/75 disabled:shadow-none dark:disabled:bg-purple-500/25 dark:disabled:text-white/65"
               >
                 <Wand2 className="h-4 w-4" />
                 {coverSrc ? "Regenerate" : "Generate"}
@@ -393,7 +407,7 @@ export default function FinalizePublish() {
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={busy}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/35 bg-white/40 px-4 py-3 text-sm font-semibold text-neutral-800 backdrop-blur-sm transition hover:bg-white/55 disabled:cursor-not-allowed disabled:opacity-60 dark:border-transparent dark:bg-[#232334] dark:text-slate-200 dark:hover:bg-[#2b2b40]"
+                className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-2xl border border-white/35 bg-white/40 px-4 py-3 text-sm font-semibold text-neutral-800 backdrop-blur-sm transition hover:bg-white/55 disabled:cursor-not-allowed disabled:opacity-60 dark:border-transparent dark:bg-[#232334] dark:text-slate-200 dark:hover:bg-[#2b2b40]"
               >
                 <Upload className="h-4 w-4" />
                 Upload
@@ -402,7 +416,7 @@ export default function FinalizePublish() {
               <button
                 onClick={clearCover}
                 disabled={busy || !coverSrc}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/35 bg-white/40 px-4 py-3 text-sm font-semibold text-neutral-700 backdrop-blur-sm transition hover:bg-white/55 disabled:cursor-not-allowed disabled:opacity-50 dark:border-transparent dark:bg-[#232334] dark:text-slate-300 dark:hover:bg-[#2b2b40]"
+                className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-2xl border border-white/35 bg-white/40 px-4 py-3 text-sm font-semibold text-neutral-700 backdrop-blur-sm transition hover:bg-white/55 disabled:cursor-not-allowed disabled:opacity-50 dark:border-transparent dark:bg-[#232334] dark:text-slate-300 dark:hover:bg-[#2b2b40]"
               >
                 <Trash2 className="h-4 w-4" />
                 Clear
@@ -416,6 +430,11 @@ export default function FinalizePublish() {
                 hidden
               />
             </div>
+            {coverGenerationLimitReached && (
+              <p className="mt-3 rounded-2xl border border-red-200/70 bg-red-50/80 px-4 py-3 text-center text-xs font-semibold leading-5 text-red-700 dark:border-red-400/15 dark:bg-red-500/10 dark:text-red-200">
+                Cover art generation limit reached. You can upload your own cover image instead.
+              </p>
+            )}
           </section>
 
             <section className="rounded-[28px] border border-purple-300/35 bg-[rgba(255,255,255,0.36)] p-5 shadow-sm backdrop-blur-sm md:p-6 dark:rounded-[30px] dark:border-purple-400/20 dark:bg-[#171821] dark:shadow-[0_18px_46px_rgba(88,28,135,0.14)] dark:backdrop-blur-none">
