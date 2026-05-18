@@ -68,10 +68,6 @@ WeCast follows a client-server architecture:
 
 ![Cover Art Generation](docs/images/cover-art-generation.png)
 
-## 🌙 Dark Mode Preview
-
-No dedicated dark mode screenshots are currently available in the local screenshots folder.
-
 ## ✨ Key Features
 
 - AI script generation from user-provided content
