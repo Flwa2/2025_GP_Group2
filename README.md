@@ -68,6 +68,24 @@ WeCast follows a client-server architecture:
 
 ![Cover Art Generation](docs/images/cover-art-generation.png)
 
+## 🌙 Dark Mode Preview
+
+### Home Page (Dark Mode)
+
+![Dark Home](docs/images/dark-home-page.png)
+
+### Create Podcast (Dark Mode)
+
+![Dark Create](docs/images/dark-create-podcast.png)
+
+### Cast Studio Library (Dark Mode)
+
+![Dark Cast Studio](docs/images/dark-cast-studio-library.png)
+
+### Account Page (Dark Mode)
+
+![Dark Account](docs/images/dark-account-page.png)
+
 ## ✨ Key Features
 
 - AI script generation from user-provided content
