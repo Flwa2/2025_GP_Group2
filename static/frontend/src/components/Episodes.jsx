@@ -864,7 +864,7 @@ export default function Episodes() {
                     <div
                       key={ep.id}
                       onClick={() => setSelectedEpisodeId(ep.id)}
-                      className={`w-full min-h-[128px] min-w-0 max-w-full cursor-pointer overflow-x-clip overflow-hidden rounded-2xl border bg-white/95 p-3 transition hover:border-purple-500 hover:bg-purple-100/55 hover:shadow-md dark:bg-neutral-900/80 dark:hover:border-purple-400 dark:hover:bg-purple-900/25 max-md:min-h-0 md:p-4 ${
+                      className={`relative w-full min-h-[128px] min-w-0 max-w-full cursor-pointer overflow-x-clip overflow-hidden rounded-2xl border bg-white/95 p-3 transition hover:border-purple-500 hover:bg-purple-100/55 hover:shadow-md dark:bg-neutral-900/80 dark:hover:border-purple-400 dark:hover:bg-purple-900/25 max-md:min-h-0 md:p-4 ${
                         selectedEpisodeId === ep.id
                           ? "border-purple-500 ring-2 ring-purple-300/70 dark:ring-purple-500/45 bg-purple-50/45 dark:bg-purple-900/20"
                           : "border-black/10 dark:border-white/10"
@@ -876,17 +876,20 @@ export default function Episodes() {
                             <EpisodeCover title={ep.title} coverUrl={ep.coverUrl} coverThumbB64={ep.coverThumbB64} />
                           </div>
                           <div className="flex min-w-0 w-full max-w-none flex-1 flex-col justify-center overflow-hidden py-0.5 max-md:min-w-0 max-md:flex-1 max-md:py-0 md:min-h-0 md:min-w-0 md:flex-1 md:max-w-none md:self-stretch md:justify-center md:py-1">
-                            <div className="max-md:flex max-md:min-w-0 max-md:items-center max-md:justify-between max-md:gap-2 md:contents">
-                              <p className="shrink-0 text-[10px] font-semibold uppercase leading-none tracking-[0.2em] text-black/40 dark:text-white/45 md:text-[11px] md:tracking-[0.18em]">
-                                {t("episodes.itemLabel")}
-                              </p>
-                              {selectedEpisodeId === ep.id && (
-                                <span className="inline-flex max-w-[min(100%,8rem)] shrink-0 items-center gap-0.5 rounded-md border border-purple-200/80 bg-purple-50/80 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-purple-700 dark:border-purple-400/35 dark:bg-purple-900/30 dark:text-purple-200 md:hidden">
-                                  <Check className="size-3 shrink-0" aria-hidden />
-                                  <span className="min-w-0 truncate">{t("episodes.card.selected")}</span>
-                                </span>
-                              )}
+                            <div className="mb-1 flex min-h-[18px] min-w-0 items-center">
+                              <span
+                                className={`inline-flex max-w-[8rem] items-center gap-1 rounded-md border border-purple-200/80 bg-purple-50/90 px-2 py-1 text-[10px] font-semibold leading-none text-purple-700 shadow-sm dark:border-purple-400/35 dark:bg-purple-900/80 dark:text-purple-100 ${
+                                  selectedEpisodeId === ep.id ? "" : "invisible"
+                                }`}
+                                aria-hidden={selectedEpisodeId === ep.id ? undefined : true}
+                              >
+                                <Check className="size-3 shrink-0" aria-hidden />
+                                <span className="min-w-0 truncate">{t("episodes.card.selected")}</span>
+                              </span>
                             </div>
+                            <p className="shrink-0 text-[10px] font-semibold uppercase leading-none tracking-[0.2em] text-black/40 dark:text-white/45 md:text-[11px] md:tracking-[0.18em]">
+                              {t("episodes.itemLabel")}
+                            </p>
                             {ep.hasEditDraft && (
                               <div className="mt-1.5 inline-flex max-w-full items-center gap-2 self-start rounded-full border border-amber-300/70 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800 dark:border-amber-400/30 dark:bg-amber-900/15 dark:text-amber-200 max-md:mt-1 max-md:gap-1 max-md:px-2 max-md:py-0.5 max-md:text-[10px]">
                                 <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500 max-md:h-1.5 max-md:w-1.5" />
@@ -906,16 +909,6 @@ export default function Episodes() {
                         <div
                           className={`flex flex-nowrap content-center items-center justify-center gap-2.5 self-stretch border-t border-black/5 pt-3 max-md:w-full max-md:min-w-0 max-md:overflow-x-auto max-md:overscroll-x-contain max-md:pb-0.5 md:w-auto md:min-w-0 md:max-w-none md:shrink-0 md:grow-0 md:basis-auto md:content-start md:items-start md:justify-end md:gap-2 md:self-stretch md:overflow-x-auto md:overscroll-x-contain md:border-t-0 md:pt-0 md:[scrollbar-width:thin] lg:gap-2.5 ${isRTL ? "md:justify-start" : ""}`}
                         >
-                          {selectedEpisodeId === ep.id && (
-                            <span
-                              className={`hidden h-9 min-h-0 w-auto min-w-0 shrink-0 grow-0 items-center gap-1 rounded-lg border-0 bg-transparent px-1 py-0 text-xs font-semibold text-purple-600 justify-start dark:text-purple-200 md:inline-flex ${
-                                isRTL ? "order-5" : ""
-                              }`}
-                            >
-                              <Check className="size-4 shrink-0" />
-                              {t("episodes.card.selected")}
-                            </span>
-                          )}
                           {activeFilter === "deleted" ? (
                             <>
                               <button

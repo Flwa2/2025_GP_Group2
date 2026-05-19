@@ -25,8 +25,14 @@ import {
     ChevronDown,
 } from "lucide-react";
 import WeCastAudioPlayer from "./WeCastAudioPlayer";
-import VoiceFilterSelect from "./VoiceFilterSelect";
-import Modal from "../components/Modal";
+import VoiceFiltersModal from "./VoiceFiltersModal";
+import {
+    appliedFiltersToModalPatch,
+    DEFAULT_MODAL_VOICE_FILTERS,
+    filtersModalToApplied,
+    getSafeModalGenderFilter,
+    hasActiveModalVoiceFilters,
+} from "../utils/voiceFilterModal";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
 import { shouldAutoplayVoicePreview, shouldShowEditingNotifications } from "../utils/accountPreferences";
@@ -39,13 +45,18 @@ import {
 } from "../utils/voiceAgeFilters";
 import {
     PITCH_VALUES,
+    TONE_FILTER_VALUES,
     buildTonePitchDebugMatrix,
-    collectVoiceToneOptions,
     formatPitchLabel,
     formatToneLabel,
     voiceMatchesPitch,
     voiceMatchesTone,
 } from "../utils/voiceTonePitchFilters";
+import {
+    accentDisplaysForLanguageFromVoice,
+    accentTokensForLanguageFromVoice,
+    buildAccentOptionsForLanguage,
+} from "../utils/voiceAccentFilters";
 import {
     markEditNavigationFromCreate,
     markFinalizeNavigationFromCreate,
@@ -286,22 +297,6 @@ const languageMatchesAccentProfile = (language, profile) => {
     return languageFilterMatches(selected, [profileLang]);
 };
 
-const accentDisplaysForLanguageFromVoice = (v, language) => {
-    const profiles = collectLanguageAccentProfilesFromVoice(v);
-    const matchedProfiles = profiles.filter((profile) => languageMatchesAccentProfile(language, profile));
-    const matchedProfileAccents = matchedProfiles
-        .map((profile) => profile.accent)
-        .filter(Boolean);
-    if (matchedProfiles.length) return matchedProfileAccents;
-    if (profiles.length) return [];
-    return collectFacetDisplaysFromVoice(v, "accent", "Accent");
-};
-
-const accentTokensForLanguageFromVoice = (v, language) =>
-    accentDisplaysForLanguageFromVoice(v, language)
-        .map((x) => String(x).trim().toLowerCase())
-        .filter(Boolean);
-
 const voiceLanguageDebugValues = (v) => ({
     name: v?.name || "",
     id: v?.providerVoiceId || v?.id || v?.docId || "",
@@ -354,6 +349,104 @@ const uniqueSortedDisplay = (displays) =>
         a.localeCompare(b, undefined, { sensitivity: "base" })
     );
 
+const normalizeCategoryLabelKey = (value) =>
+    String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[\s-]+/g, "_")
+        .replace(/_+/g, "_");
+
+const VOICE_ROLE_CATEGORIES = [
+    {
+        value: "podcast_host",
+        label: "Podcast Host",
+        keywords: ["podcast", "podcaster", "host", "presenter", "broadcast"],
+    },
+    {
+        value: "narrator",
+        label: "Narrator",
+        keywords: ["narrator", "narration", "narrative", "storyteller", "storytelling", "voiceover"],
+    },
+    {
+        value: "teacher",
+        label: "Teacher",
+        keywords: ["teacher", "educator", "educational", "education", "explainer", "instructor", "tutorial"],
+    },
+    {
+        value: "news_reader",
+        label: "News Reader",
+        keywords: ["news", "journalist", "anchor", "announcer", "reporter", "headline"],
+    },
+    {
+        value: "interview_host",
+        label: "Interview Host",
+        keywords: ["interview", "interviewer", "conversation", "conversational", "talk show"],
+    },
+    {
+        value: "commercial_voice",
+        label: "Commercial Voice",
+        keywords: ["commercial", "advertisement", "advertising", "promo", "promotional", "marketing", "brand"],
+    },
+    {
+        value: "audiobook_voice",
+        label: "Audiobook Voice",
+        keywords: ["audiobook", "audio book", "book", "reading", "literary"],
+    },
+    {
+        value: "documentary_voice",
+        label: "Documentary Voice",
+        keywords: ["documentary", "docuseries", "documentarian"],
+    },
+];
+
+const VOICE_CATEGORY_LABELS = Object.fromEntries(
+    VOICE_ROLE_CATEGORIES.map((category) => [category.value, category.label])
+);
+
+const formatVoiceCategoryLabel = (value) => {
+    const key = normalizeCategoryLabelKey(value);
+    if (VOICE_CATEGORY_LABELS[key]) return VOICE_CATEGORY_LABELS[key];
+    return key
+        .split("_")
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ");
+};
+
+const voiceCategoryHaystack = (voice) => {
+    const labels = voice?.labels && typeof voice.labels === "object" ? voice.labels : {};
+    const parts = [
+        voice?.category,
+        voice?.use_case,
+        voice?.useCase,
+        voice?.description,
+        voice?.name,
+        labels.category,
+        labels.Category,
+        labels.use_case,
+        labels.useCase,
+        labels.usecase,
+        labels.description,
+        labels.Description,
+    ];
+    return parts
+        .flatMap((part) => (Array.isArray(part) ? part : [part]))
+        .map((part) => String(part || "").toLowerCase())
+        .join(" ");
+};
+
+const voiceMatchesRoleCategory = (voice, categoryValue) => {
+    const category = VOICE_ROLE_CATEGORIES.find((item) => item.value === categoryValue);
+    if (!category) return true;
+    const haystack = voiceCategoryHaystack(voice);
+    return category.keywords.some((keyword) => haystack.includes(keyword));
+};
+
+const roleCategoryOptionsForVoices = (voices) =>
+    VOICE_ROLE_CATEGORIES.filter((category) =>
+        (voices || []).some((voice) => voiceMatchesRoleCategory(voice, category.value))
+    );
+
 const VOICE_LIBRARY_PAGE_SIZE = 50;
 /** ElevenLabs shared-voices API only accepts these category filters; other values are applied client-side. */
 const SHARED_LIBRARY_CATEGORY_API = new Set(["professional", "famous", "high_quality"]);
@@ -372,28 +465,6 @@ const emptyAppliedVoiceFilters = () => ({
 const voiceFiltersForSpeakerGender = (speaker) => ({
     ...emptyAppliedVoiceFilters(),
     gender: normalizeGenderToken(speaker?.gender),
-});
-
-const filtersModalToApplied = (f) => ({
-    search: String(f.q || "").trim(),
-    gender: f.gender === "__all__" ? "" : normalizeGenderToken(f.gender || ""),
-    language: String(f.language || "").trim(),
-    accent: String(f.accent || "").trim(),
-    age: String(f.age || "").trim(),
-    category: String(f.category || "").trim(),
-    tone: String(f.tone || "").trim(),
-    pitch: String(f.pitch || "").trim(),
-});
-
-const appliedFiltersToModalPatch = (a) => ({
-    q: a.search || "",
-    gender: a.gender || "__all__",
-    language: a.language || "",
-    category: a.category || "",
-    tone: a.tone || "",
-    pitch: a.pitch || "",
-    accent: a.accent || "",
-    age: a.age || "",
 });
 
 const buildLibraryUrlSearchParams = (applied, page, pageSize = VOICE_LIBRARY_PAGE_SIZE) => {
@@ -429,7 +500,7 @@ const clientRefineLibraryVoices = (items, applied) => {
     const lang = normalizeLanguageFilterValue(applied.language);
     const accent = String(applied.accent || "").trim().toLowerCase();
     const age = String(applied.age || "").trim();
-    const c = String(applied.category || "").trim().toLowerCase();
+    const c = normalizeCategoryLabelKey(applied.category);
 
     if (q) {
         out = out.filter((v) => voiceSearchHaystack(v).includes(q));
@@ -446,8 +517,8 @@ const clientRefineLibraryVoices = (items, applied) => {
     if (age) {
         out = out.filter((v) => voiceMatchesAge(v, age));
     }
-    if (c && !SHARED_LIBRARY_CATEGORY_API.has(c)) {
-        out = out.filter((v) => String(v.category || "").toLowerCase() === c);
+    if (c) {
+        out = out.filter((v) => voiceMatchesRoleCategory(v, c));
     }
     return out;
 };
@@ -604,6 +675,7 @@ const [libraryFilterOptions, setLibraryFilterOptions] = useState({
     use_cases: [],
     categories: [],
 });
+const [voiceAccentOptionsByLanguage, setVoiceAccentOptionsByLanguage] = useState({});
 
 const [speakerVoiceLibrary, setSpeakerVoiceLibrary] = useState({});
 const [speakerVoiceAppliedFilters, setSpeakerVoiceAppliedFilters] = useState({});
@@ -682,6 +754,54 @@ const fetchLibraryItemsWithAgeCoverage = useCallback(async (applied, pageSize = 
         totalCount: Math.max(base.totalCount || 0, items.length),
     };
 }, [fetchLibraryItemsPage]);
+
+useEffect(() => {
+    if (!librarySeedVoices.length) return;
+    setVoiceAccentOptionsByLanguage((prev) => {
+        const next = { ...prev };
+        for (const language of VOICE_LANGUAGE_OPTIONS) {
+            const normalizedLanguage = normalizeLanguageFilterValue(language);
+            const options = buildAccentOptionsForLanguage(librarySeedVoices, normalizedLanguage);
+            if (options.length) next[normalizedLanguage] = options;
+        }
+        return next;
+    });
+}, [librarySeedVoices]);
+
+useEffect(() => {
+    if (elevenLabsAuthFailed) return undefined;
+    let cancelled = false;
+
+    (async () => {
+        const results = await Promise.allSettled(
+            VOICE_LANGUAGE_OPTIONS.map(async (language) => {
+                const normalizedLanguage = normalizeLanguageFilterValue(language);
+                const page = await fetchLibraryItemsPage(
+                    { ...emptyAppliedVoiceFilters(), language: normalizedLanguage, accent: "" },
+                    0,
+                    100
+                );
+                return [normalizedLanguage, buildAccentOptionsForLanguage(page.items, normalizedLanguage)];
+            })
+        );
+        if (cancelled) return;
+        setVoiceAccentOptionsByLanguage((prev) => {
+            const next = { ...prev };
+            for (const result of results) {
+                if (result.status !== "fulfilled") continue;
+                const [language, options] = result.value;
+                if (options.length) next[language] = options;
+            }
+            return next;
+        });
+    })().catch((error) => {
+        if (!cancelled) console.debug("[WeCast voice filters] Accent option prefetch skipped", error);
+    });
+
+    return () => {
+        cancelled = true;
+    };
+}, [elevenLabsAuthFailed, fetchLibraryItemsPage]);
 
 const applyVoiceLibraryForSpeaker = useCallback(
     async (speakerIndex, applied) => {
@@ -2458,11 +2578,7 @@ const exportScript = async (format = "pdf") => {
                                                                         accent: "",
                                                                         age: "",
                                                                     };
-                                                                    const safeGenderFilter = (() => {
-                                                                        const g = String(f.gender || "").trim().toLowerCase();
-                                                                        if (!g || g === "__all__" || isNeutralGenderValue(g)) return "__all__";
-                                                                        return normalizeGenderToken(f.gender) || "__all__";
-                                                                    })();
+                                                                    const safeGenderFilter = getSafeModalGenderFilter(f.gender);
 
                                                                     const setF = (patch) => {
                                                                         setSpeakerVoiceFilters((prev) => ({
@@ -2471,8 +2587,6 @@ const exportScript = async (format = "pdf") => {
                                                                         }));
                                                                     };
 
-                                                                    const languageOptions = uniqueLanguageOptions();
-                                                                    const pitchOptions = PITCH_VALUES;
                                                                     const selectedLanguage = normalizeLanguageFilterValue(f.language || DEFAULT_VOICE_LANGUAGE);
                                                                     const modalAccentItems = Array.isArray(modalLibraryPreview[i]?.accentItems)
                                                                         ? modalLibraryPreview[i].accentItems
@@ -2484,119 +2598,27 @@ const exportScript = async (format = "pdf") => {
                                                                                 .map((v, idx) => [getVoiceId(v) || `voice-${idx}`, v])
                                                                         ).values()
                                                                     );
-                                                                    const genderOptions = uniqueSortedDisplay(
-                                                                        accentSourceVoices
-                                                                            .map((v) => normalizeGenderToken(v.gender || v.labels?.gender))
-                                                                            .filter(Boolean)
-                                                                    ).map((g) => ({
-                                                                        value: g,
-                                                                        label: g === "female" ? "Female" : g === "male" ? "Male" : g,
-                                                                    }));
-                                                                    const accentOptions = uniqueSortedDisplay(
-                                                                        accentSourceVoices
-                                                                            .filter((v) => languageMatchesVoice(selectedLanguage, v))
-                                                                            .flatMap((v) => accentDisplaysForLanguageFromVoice(v, selectedLanguage))
+                                                                    const stableOptionVoices = Array.from(
+                                                                        new Map(
+                                                                            [...librarySeedVoices, ...rawPool, ...accentSourceVoices]
+                                                                                .filter(Boolean)
+                                                                                .map((v, idx) => [getVoiceId(v) || `voice-${idx}`, v])
+                                                                        ).values()
                                                                     );
-                                                                    const selectedAccentValid =
-                                                                        !f.accent ||
-                                                                        accentOptions.some(
-                                                                            (a) => String(a).trim().toLowerCase() === String(f.accent).trim().toLowerCase()
+                                                                    const accentOptionsForLanguage = (language) =>
+                                                                        buildAccentOptionsForLanguage(
+                                                                            stableOptionVoices,
+                                                                            language,
+                                                                            DEFAULT_VOICE_LANGUAGE
                                                                         );
-                                                                    const setLanguageFilter = (language) => {
-                                                                        const nextLanguage = normalizeLanguageFilterValue(language || DEFAULT_VOICE_LANGUAGE);
-                                                                        const nextAccentOptions = uniqueSortedDisplay(
-                                                                            accentSourceVoices
-                                                                                .filter((v) => languageMatchesVoice(nextLanguage, v))
-                                                                                .flatMap((v) => accentDisplaysForLanguageFromVoice(v, nextLanguage))
-                                                                        );
-                                                                        const keepAccent =
-                                                                            f.accent &&
-                                                                            nextAccentOptions.some(
-                                                                                (a) => String(a).trim().toLowerCase() === String(f.accent).trim().toLowerCase()
-                                                                            );
-                                                                        setF({
-                                                                            language: nextLanguage,
-                                                                            accent: keepAccent ? f.accent : "",
-                                                                            languageMenuOpen: false,
-                                                                        });
-                                                                    };
-
-                                                                    const ageOptions = collectVoiceAgeOptions(
-                                                                        accentSourceVoices.filter((v) => languageMatchesVoice(selectedLanguage, v))
-                                                                    );
-
-                                                                    const toneCandidateVoices = accentSourceVoices.filter((v) => {
-                                                                        const q = String(f.q || "").trim().toLowerCase();
-                                                                        const gender = normalizeGenderToken(f.gender);
-                                                                        const accent = String(f.accent || "").trim().toLowerCase();
-                                                                        const category = String(f.category || "").trim().toLowerCase();
-                                                                        if (q && !voiceSearchHaystack(v).includes(q)) return false;
-                                                                        if (gender && normalizeGenderToken(v.gender || v.labels?.gender || v.labels?.Gender) !== gender) return false;
-                                                                        if (selectedLanguage && !languageFilterMatches(selectedLanguage, languageMatchTokensForVoice(v))) return false;
-                                                                        if (accent && !accentTokensForLanguageFromVoice(v, selectedLanguage).includes(accent)) return false;
-                                                                        if (f.age && !voiceMatchesAge(v, f.age)) return false;
-                                                                        if (category && String(v.category || "").toLowerCase() !== category) return false;
-                                                                        if (!voiceMatchesPitch(v, f.pitch)) return false;
-                                                                        return true;
-                                                                    });
-                                                                    const toneOptions = collectVoiceToneOptions(toneCandidateVoices).filter((tone) =>
-                                                                        toneCandidateVoices.some((v) => voiceMatchesTone(v, tone))
-                                                                    );
-                                                                    const selectedToneValid =
-                                                                        !f.tone ||
-                                                                        toneOptions.some((tone) => String(tone).toLowerCase() === String(f.tone).toLowerCase());
-
-                                                                    const categoryOptions = uniqueSortedDisplay([
-                                                                        ...libraryFilterOptions.categories,
-                                                                        ...librarySeedVoices.map((v) => v.category).filter(Boolean),
+                                                                    const accentOptions = accentOptionsForLanguage(selectedLanguage);
+                                                                    const categoryOptions = roleCategoryOptionsForVoices(stableOptionVoices);
+                                                                    const ageOptions = collectVoiceAgeOptions([
+                                                                        ...VOICE_AGE_BUCKETS.map((age) => ({ age })),
+                                                                        ...libraryFilterOptions.ages.map((age) => ({ age })),
+                                                                        ...stableOptionVoices,
                                                                     ]);
-
-                                                                    const genderFilterActive = safeGenderFilter !== "__all__";
-                                                                    const hasActive =
-                                                                        !!String(f.q || "").trim() ||
-                                                                        genderFilterActive ||
-                                                                        !!f.language ||
-                                                                        !!f.category ||
-                                                                        !!f.tone ||
-                                                                        !!f.pitch ||
-                                                                        !!f.accent ||
-                                                                        !!f.age;
-                                                                    const activeFilterChips = [
-                                                                        String(f.q || "").trim()
-                                                                            ? { key: "q", label: `${t("create.speakers.search", "Search")}: ${String(f.q).trim()}` }
-                                                                            : null,
-                                                                        genderFilterActive
-                                                                            ? {
-                                                                                  key: "gender",
-                                                                                  label: `${t("create.speakers.gender", "Gender")}: ${safeGenderFilter}`,
-                                                                              }
-                                                                            : null,
-                                                                        f.language
-                                                                            ? {
-                                                                                  key: "language",
-                                                                                  label: (
-                                                                                      <>
-                                                                                          {t("create.speakers.language", "Language")}: <LanguageLabel value={f.language} />
-                                                                                      </>
-                                                                                  ),
-                                                                              }
-                                                                            : null,
-                                                                        f.category
-                                                                            ? { key: "category", label: `${t("create.speakers.category", "Category")}: ${f.category}` }
-                                                                            : null,
-                                                                        f.tone
-                                                                            ? { key: "tone", label: `${t("create.speakers.tone", "Tone")}: ${formatToneLabel(f.tone)}` }
-                                                                            : null,
-                                                                        f.pitch
-                                                                            ? { key: "pitch", label: `${t("create.speakers.pitch", "Pitch")}: ${formatPitchLabel(f.pitch)}` }
-                                                                            : null,
-                                                                        f.accent
-                                                                            ? { key: "accent", label: `${t("create.speakers.accent", "Accent")}: ${f.accent}` }
-                                                                            : null,
-                                                                        f.age
-                                                                            ? { key: "age", label: `${t("create.speakers.age", "Age")}: ${f.age}` }
-                                                                            : null,
-                                                                    ].filter(Boolean);
+                                                                    const hasActive = hasActiveModalVoiceFilters(f, safeGenderFilter);
 
                                                                     return (
                                                                         <>
@@ -2625,254 +2647,58 @@ const exportScript = async (format = "pdf") => {
                                                                     title={t("create.speakers.filters")}
                                                                     >
                                                                     <SlidersHorizontal className="w-5 h-5" />
-
-                                                                    {/* active dot */}
                                                                     {hasActive ? (
                                                                         <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-purple-600 ring-2 ring-white dark:ring-neutral-900" />
                                                                     ) : null}
                                                                     </button>
 
-
-                                                                        <Modal
+                                                                        <VoiceFiltersModal
                                                                             open={!!f.open && !isHostLocked}
-                                                                            title={t("create.speakers.filters")}
                                                                             onClose={() => setF({ open: false })}
+                                                                            filters={f}
+                                                                            onFiltersChange={(next) => setF(next)}
+                                                                            accentOptions={accentOptions}
+                                                                            ageOptions={ageOptions}
+                                                                            categoryOptions={categoryOptions}
                                                                             isRTL={isRTL}
-                                                                            dense
-                                                                            footer={
-                                                                            <>
-                                                                                <button
-                                                                                type="button"
-                                                                                onClick={() =>
-                                                                                (() => {
-                                                                                    const speakerGenderTok = normalizeGenderToken(speakers?.[i]?.gender);
-                                                                                    const patch = {
-                                                                                        q: "",
-                                                                                        gender: speakerGenderTok || "__all__",
-                                                                                        language: DEFAULT_VOICE_LANGUAGE,
-                                                                                        category: "",
-                                                                                        tone: "",
-                                                                                        pitch: "",
-                                                                                        accent: "",
-                                                                                        age: "",
-                                                                                    };
-                                                                                    setF(patch);
-                                                                                    applyVoiceLibraryForSpeaker(i, filtersModalToApplied(patch));
-                                                                                })()
-                                                                            }
-                                                                                className="px-4 h-10 min-h-10 rounded-xl border border-neutral-300 dark:border-neutral-700 text-sm font-semibold hover:bg-black/5 dark:hover:bg-white/5 transition"
-                                                                                >
-                                                                                {t("create.speakers.clearFilters")}
-                                                                                </button>
-
-                                                                                <button
-                                                                                type="button"
-                                                                                onClick={() => {
-                                                                            const modalFilters = {
-                                                                                ...f,
-                                                                                accent: selectedAccentValid ? f.accent : "",
-                                                                                tone: selectedToneValid ? f.tone : "",
-                                                                            };
-                                                                            const nextApplied = filtersModalToApplied(modalFilters);
-                                                                            const modalGenderTok = normalizeGenderToken(f.gender);
-                                                                            const modalGenderLabel =
-                                                                                modalGenderTok === "female"
-                                                                                    ? "Female"
-                                                                                    : modalGenderTok === "male"
-                                                                                        ? "Male"
-                                                                                        : "";
-                                                                            // Keep speaker card gender UI in sync with applied modal gender
-                                                                            if (modalGenderLabel) {
-                                                                                setSpeakers((arr) => {
-                                                                                    const next = [...arr];
-                                                                                    const prev = next[i] || {};
-                                                                                    const prevTok = normalizeGenderToken(prev.gender);
-                                                                                    const genderChanged = prevTok && modalGenderTok && prevTok !== modalGenderTok;
-                                                                                    next[i] = {
-                                                                                        ...prev,
-                                                                                        gender: modalGenderLabel,
-                                                                                        // If gender changed, clear selection so dropdown shows placeholder until a matching voice is chosen
-                                                                                        voiceId: genderChanged ? "" : (prev.voiceId || ""),
-                                                                                    };
-                                                                                    return next;
-                                                                                });
-                                                                            }
-                                                                                    setF({ open: false });
-                                                                                    applyVoiceLibraryForSpeaker(i, nextApplied);
-                                                                                }}
-                                                                                className="px-4 h-10 min-h-10 rounded-xl bg-purple-600 text-white text-sm font-semibold hover:opacity-95 transition"
-                                                                                >
-                                                                                {t("create.common.done")}
-                                                                                </button>
-                                                                            </>
-                                                                            }
-                                                                        >
-                                                                            <div className="grid grid-cols-1 gap-2.5">
-                                                                            {/* Search */}
-                                                                            <div>
-                                                                                <label className="form-label mb-1 block">{t("create.speakers.search")}</label>
-                                                                                <input
-                                                                                value={f.q}
-                                                                                onChange={(e) => setF({ q: e.target.value })}
-                                                                                placeholder={t("create.speakers.searchPlaceholder")}
-                                                                                className="form-input !px-3 !py-2 min-h-10 text-sm"
-                                                                                />
-                                                                            </div>
-
-                                                                            <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-x-3 md:gap-y-2.5">
-                                                                                {/* Gender */}
-                                                                                <div>
-                                                                                <label className="form-label mb-1 block">{t("create.speakers.gender")}</label>
-                                                                                <VoiceFilterSelect
-                                                                                    value={safeGenderFilter}
-                                                                                    onChange={(value) => setF({ gender: value })}
-                                                                                    options={[
-                                                                                        { value: "__all__", label: t("create.speakers.allGenders", "All Genders") },
-                                                                                        ...genderOptions,
-                                                                                    ]}
-                                                                                    isRTL={isRTL}
-                                                                                />
-                                                                                </div>
-
-                                                                                {/* Age */}
-                                                                                <div>
-                                                                                <label className="form-label mb-1 block">{t("create.speakers.age", "Age")}</label>
-                                                                                <VoiceFilterSelect
-                                                                                    value={f.age}
-                                                                                    onChange={(value) => setF({ age: value })}
-                                                                                    options={[
-                                                                                        { value: "", label: t("create.speakers.allAges", "All ages") },
-                                                                                        ...ageOptions.map((a) => ({ value: a, label: formatVoiceAgeLabel(a) })),
-                                                                                    ]}
-                                                                                    isRTL={isRTL}
-                                                                                />
-                                                                                </div>
-
-                                                                                {/* Language */}
-                                                                                <div>
-                                                                                <label className="form-label mb-1 block">{t("create.speakers.language")}</label>
-                                                                                <VoiceFilterSelect
-                                                                                    value={f.language || DEFAULT_VOICE_LANGUAGE}
-                                                                                    onChange={setLanguageFilter}
-                                                                                    options={languageOptions.map((lang) => ({
-                                                                                        value: lang,
-                                                                                        label: <LanguageLabel value={lang} />,
-                                                                                    }))}
-                                                                                    isRTL={isRTL}
-                                                                                />
-                                                                                </div>
-
-                                                                                {/* Accent */}
-                                                                                <div>
-                                                                                <label className="form-label mb-1 block">{t("create.speakers.accent", "Accent")}</label>
-                                                                                <VoiceFilterSelect
-                                                                                    value={selectedAccentValid ? f.accent : ""}
-                                                                                    onChange={(value) => setF({ accent: value })}
-                                                                                    options={[
-                                                                                        { value: "", label: t("create.speakers.allAccents", "All accents") },
-                                                                                        ...accentOptions.map((a) => ({ value: a, label: a })),
-                                                                                    ]}
-                                                                                    isRTL={isRTL}
-                                                                                />
-                                                                                </div>
-                                                                            </div>
-
-                                                                            <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-x-3 md:gap-y-2.5">
-                                                                                {/* Tone */}
-                                                                                <div>
-                                                                                    <label className="form-label mb-1 block">{t("create.speakers.tone")}</label>
-                                                                                    <VoiceFilterSelect
-                                                                                        value={selectedToneValid ? f.tone : ""}
-                                                                                        onChange={(value) => setF({ tone: value })}
-                                                                                        options={[
-                                                                                            { value: "", label: t("create.speakers.allTones") },
-                                                                                            ...toneOptions.map((tone) => ({ value: tone, label: formatToneLabel(tone) })),
-                                                                                        ]}
-                                                                                        isRTL={isRTL}
-                                                                                    />
-                                                                                </div>
-
-                                                                                {/* Pitch */}
-                                                                                <div>
-                                                                                    <label className="form-label mb-1 block">{t("create.speakers.pitch")}</label>
-                                                                                    <VoiceFilterSelect
-                                                                                        value={f.pitch}
-                                                                                        onChange={(value) => setF({ pitch: value })}
-                                                                                        options={[
-                                                                                            { value: "", label: t("create.speakers.allPitches") },
-                                                                                            ...pitchOptions.map((p) => ({ value: p, label: formatPitchLabel(p) })),
-                                                                                        ]}
-                                                                                        isRTL={isRTL}
-                                                                                    />
-                                                                                </div>
-                                                                            </div>
-
-                                                                            {categoryOptions.length > 0 ? (
-                                                                                <div>
-                                                                                    <label className="form-label mb-1 block">{t("create.speakers.category", "Category")}</label>
-                                                                                    <VoiceFilterSelect
-                                                                                        value={f.category}
-                                                                                        onChange={(value) => setF({ category: value })}
-                                                                                        options={[
-                                                                                            { value: "", label: t("create.speakers.allCategories", "All categories") },
-                                                                                            ...categoryOptions.map((c) => ({ value: c, label: c })),
-                                                                                        ]}
-                                                                                        isRTL={isRTL}
-                                                                                    />
-                                                                                </div>
-                                                                            ) : null}
-
-                                                                            {activeFilterChips.length > 0 && (
-                                                                                <div>
-                                                                                    <p className="mb-1 text-xs font-semibold text-black/60 dark:text-white/60">
-                                                                                        {t("create.speakers.activeFilters", "Active filters")}
-                                                                                    </p>
-                                                                                    <div className="flex flex-wrap gap-1.5">
-                                                                                        {activeFilterChips.map((chip) => (
-                                                                                            <button
-                                                                                                key={chip.key}
-                                                                                                type="button"
-                                                                                                onClick={() =>
-                                                                                                chip.key === "language"
-                                                                                                    ? setLanguageFilter(DEFAULT_VOICE_LANGUAGE)
-                                                                                                    : setF({
-                                                                                                          [chip.key]:
-                                                                                                              chip.key === "gender"
-                                                                                                                  ? "__all__"
-                                                                                                                  : "",
-                                                                                                      })
-                                                                                            }
-                                                                                                className="inline-flex items-center gap-1 rounded-full border border-purple-300/70 dark:border-purple-400/45 bg-purple-50 dark:bg-purple-900/25 px-2 py-0.5 text-xs text-purple-700 dark:text-purple-200"
-                                                                                                title={t("create.speakers.removeFilter", "Remove filter")}
-                                                                                            >
-                                                                                                <span>{chip.label}</span>
-                                                                                                <span>x</span>
-                                                                                            </button>
-                                                                                        ))}
-                                                                                    </div>
-                                                                                </div>
-                                                                            )}
-
-                                                                            {/* Preview count (debounced server query while modal open) */}
-                                                                            <p className="text-xs leading-snug text-black/60 dark:text-white/60">
-                                                                                {(() => {
-                                                                                    const mp = modalLibraryPreview[i];
-                                                                                    if (mp?.loading) {
-                                                                                        return t("create.speakers.searchingVoices", {
-                                                                                            defaultValue: "Searching…",
-                                                                                        });
-                                                                                    }
-                                                                                    if (mp?.refinedCount != null) {
-                                                                                        return t("create.speakers.filteredCount", {
-                                                                                            count: mp.refinedCount,
-                                                                                            defaultValue: "{{count}} voices match current filters",
-                                                                                        });
-                                                                                    }
-                                                                                    return "";
-                                                                                })()}
-                                                                            </p>
-                                                                            </div>
-                                                                        </Modal>
+                                                                            normalizeCategoryLabelKey={normalizeCategoryLabelKey}
+                                                                            formatVoiceCategoryLabel={formatVoiceCategoryLabel}
+                                                                            onClear={() => {
+                                                                                const speakerGenderTok = normalizeGenderToken(speakers?.[i]?.gender);
+                                                                                const patch = {
+                                                                                    ...DEFAULT_MODAL_VOICE_FILTERS,
+                                                                                    gender: speakerGenderTok || "__all__",
+                                                                                };
+                                                                                setF(patch);
+                                                                                applyVoiceLibraryForSpeaker(i, filtersModalToApplied(patch));
+                                                                            }}
+                                                                            onDone={(sanitized) => {
+                                                                                const modalGenderTok = normalizeGenderToken(sanitized.gender);
+                                                                                const modalGenderLabel =
+                                                                                    modalGenderTok === "female"
+                                                                                        ? "Female"
+                                                                                        : modalGenderTok === "male"
+                                                                                            ? "Male"
+                                                                                            : "";
+                                                                                if (modalGenderLabel) {
+                                                                                    setSpeakers((arr) => {
+                                                                                        const next = [...arr];
+                                                                                        const prev = next[i] || {};
+                                                                                        const prevTok = normalizeGenderToken(prev.gender);
+                                                                                        const genderChanged = prevTok && modalGenderTok && prevTok !== modalGenderTok;
+                                                                                        next[i] = {
+                                                                                            ...prev,
+                                                                                            gender: modalGenderLabel,
+                                                                                            voiceId: genderChanged ? "" : (prev.voiceId || ""),
+                                                                                        };
+                                                                                        return next;
+                                                                                    });
+                                                                                }
+                                                                                setF({ ...sanitized, open: false });
+                                                                                applyVoiceLibraryForSpeaker(i, filtersModalToApplied(sanitized));
+                                                                            }}
+                                                                            preview={modalLibraryPreview[i]}
+                                                                        />
                                                                         </>
                                                                     );
                                                                     })()}

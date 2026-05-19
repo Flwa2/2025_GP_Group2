@@ -41,6 +41,8 @@ const TONE_SORT_ORDER = [
   "educational",
 ];
 
+export const TONE_FILTER_VALUES = TONE_SORT_ORDER;
+
 const PITCH_ALIASES = {
   low: "low",
   deep: "low",
