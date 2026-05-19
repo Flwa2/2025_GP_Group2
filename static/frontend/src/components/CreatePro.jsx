@@ -62,26 +62,15 @@ import {
     markFinalizeNavigationFromCreate,
     syncCreateDraftLease,
 } from "../utils/createDraftSession";
+import { normalizeGenderToken, isNeutralGenderValue } from "../utils/voiceGender";
+import { clientRefineLibraryVoices } from "../utils/voiceLibraryRefine";
+import { ensureVoiceLibraryCatalog, getCachedVoiceCatalog } from "../utils/voiceLibraryCache";
 
 const API_BASE = import.meta.env.PROD
     ? "https://wecast.onrender.com"
     : "http://localhost:5000";
 
 const FACET_SPLIT = /[,;/|]/;
-
-const isNeutralGenderValue = (value) => {
-    const g = String(value || "").trim().toLowerCase();
-    return g.includes("neutral") || g.includes("netural");
-};
-
-/** Normalize gender for filter matching (ElevenLabs uses male/female). */
-const normalizeGenderToken = (value) => {
-    const s = String(value || "").trim().toLowerCase();
-    if (!s || s === "__all__" || isNeutralGenderValue(s)) return "";
-    if (s === "m" || s === "male" || s === "man" || s === "masculine") return "male";
-    if (s === "f" || s === "female" || s === "woman" || s === "feminine") return "female";
-    return s;
-};
 
 const pushFacetTokens = (raw, bucket) => {
     if (raw == null) return;
@@ -493,36 +482,6 @@ const clientRefineVoicesByTonePitch = (items, tone, pitch) => {
     });
 };
 
-const clientRefineLibraryVoices = (items, applied) => {
-    let out = clientRefineVoicesByTonePitch(items, applied.tone, applied.pitch);
-    const q = String(applied.search || "").trim().toLowerCase();
-    const g = normalizeGenderToken(applied.gender);
-    const lang = normalizeLanguageFilterValue(applied.language);
-    const accent = String(applied.accent || "").trim().toLowerCase();
-    const age = String(applied.age || "").trim();
-    const c = normalizeCategoryLabelKey(applied.category);
-
-    if (q) {
-        out = out.filter((v) => voiceSearchHaystack(v).includes(q));
-    }
-    if (g) {
-        out = out.filter((v) => normalizeGenderToken(v.gender || v.labels?.gender || v.labels?.Gender) === g);
-    }
-    if (lang) {
-        out = out.filter((v) => languageFilterMatches(lang, languageMatchTokensForVoice(v)));
-    }
-    if (accent) {
-        out = out.filter((v) => accentTokensForLanguageFromVoice(v, lang).includes(accent));
-    }
-    if (age) {
-        out = out.filter((v) => voiceMatchesAge(v, age));
-    }
-    if (c) {
-        out = out.filter((v) => voiceMatchesRoleCategory(v, c));
-    }
-    return out;
-};
-
 const STYLE_LIMITS = {
     Interview: [2, 3],
     Storytelling: [1, 2, 3],
@@ -691,6 +650,7 @@ const [speakerVoiceFilters, setSpeakerVoiceFilters] = useState({});
 const speakerLibInitRef = useRef(new Set());
 const speakerVoiceLibraryRef = useRef({});
 const speakerVoiceAppliedFiltersRef = useRef({});
+const speakerRefinedVoicesRef = useRef({});
 
 const getVoiceId = (v) => v?.providerVoiceId || v?.id || v?.docId || "";
 
@@ -726,34 +686,23 @@ const fetchLibraryItemsPage = useCallback(async (applied, page, pageSize = VOICE
     };
 }, [elevenLabsAuthFailed]);
 
-const fetchLibraryItemsWithAgeCoverage = useCallback(async (applied, pageSize = VOICE_LIBRARY_PAGE_SIZE) => {
-    const baseApplied = { ...applied };
-    if (baseApplied.age) return fetchLibraryItemsPage(baseApplied, 0, pageSize);
-
-    const base = await fetchLibraryItemsPage(baseApplied, 0, pageSize);
-    const ageResults = await Promise.allSettled(
-        VOICE_AGE_BUCKETS.map((age) => fetchLibraryItemsPage({ ...baseApplied, age }, 0, pageSize))
-    );
-    const agePages = ageResults
-        .filter((result) => result.status === "fulfilled")
-        .map((result) => result.value);
-    const byId = new Map();
-    [base.items, ...agePages.map((page) => page.items)].flat().filter(Boolean).forEach((voice, idx) => {
-        const id = getVoiceId(voice) || `voice-${idx}`;
-        if (!byId.has(id)) byId.set(id, voice);
+const loadSharedVoiceCatalog = useCallback(async () => {
+    return ensureVoiceLibraryCatalog({
+        fetchSeedPage: () => fetchLibraryItemsPage(emptyAppliedVoiceFilters(), 0, 100),
+        fetchPageForAgeBuckets: (filters) =>
+            fetchLibraryItemsPage(filters, 0, 100).then((page) => ({ items: page.items })),
+        fetchAccountVoices: async () => {
+            const params = new URLSearchParams();
+            params.set("provider", "ElevenLabs");
+            params.set("limit", "300");
+            const res = await fetch(`${API_BASE}/api/voices?${params.toString()}`, { credentials: "include" });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return [];
+            return Array.isArray(data?.items) ? data.items : [];
+        },
+        fetchFallbackVoices: fetchFallbackVoices,
     });
-    const items = Array.from(byId.values());
-
-    if (typeof window !== "undefined" && window.localStorage?.getItem("wecastVoiceFilterDebug") === "1") {
-        console.debug("[WeCast voice filters] Create age summary", buildVoiceAgeDebugSummary(items));
-    }
-
-    return {
-        items,
-        hasMore: base.hasMore,
-        totalCount: Math.max(base.totalCount || 0, items.length),
-    };
-}, [fetchLibraryItemsPage]);
+}, [fetchFallbackVoices, fetchLibraryItemsPage]);
 
 useEffect(() => {
     if (!librarySeedVoices.length) return;
@@ -768,41 +717,6 @@ useEffect(() => {
     });
 }, [librarySeedVoices]);
 
-useEffect(() => {
-    if (elevenLabsAuthFailed) return undefined;
-    let cancelled = false;
-
-    (async () => {
-        const results = await Promise.allSettled(
-            VOICE_LANGUAGE_OPTIONS.map(async (language) => {
-                const normalizedLanguage = normalizeLanguageFilterValue(language);
-                const page = await fetchLibraryItemsPage(
-                    { ...emptyAppliedVoiceFilters(), language: normalizedLanguage, accent: "" },
-                    0,
-                    100
-                );
-                return [normalizedLanguage, buildAccentOptionsForLanguage(page.items, normalizedLanguage)];
-            })
-        );
-        if (cancelled) return;
-        setVoiceAccentOptionsByLanguage((prev) => {
-            const next = { ...prev };
-            for (const result of results) {
-                if (result.status !== "fulfilled") continue;
-                const [language, options] = result.value;
-                if (options.length) next[language] = options;
-            }
-            return next;
-        });
-    })().catch((error) => {
-        if (!cancelled) console.debug("[WeCast voice filters] Accent option prefetch skipped", error);
-    });
-
-    return () => {
-        cancelled = true;
-    };
-}, [elevenLabsAuthFailed, fetchLibraryItemsPage]);
-
 const applyVoiceLibraryForSpeaker = useCallback(
     async (speakerIndex, applied) => {
         setSpeakerVoiceAppliedFilters((prev) => ({ ...prev, [speakerIndex]: { ...applied } }));
@@ -815,19 +729,25 @@ const applyVoiceLibraryForSpeaker = useCallback(
                 loading: true,
                 nextPage: null,
                 error: null,
+                preFiltered: false,
             },
         }));
         try {
-            const r = await fetchLibraryItemsWithAgeCoverage(applied);
+            const catalog = await loadSharedVoiceCatalog();
+            const refined = clientRefineLibraryVoices(catalog, applied);
+            speakerRefinedVoicesRef.current[speakerIndex] = refined;
+            const pageSize = VOICE_LIBRARY_PAGE_SIZE;
+            const firstPage = refined.slice(0, pageSize);
             setSpeakerVoiceLibrary((prev) => ({
                 ...prev,
                 [speakerIndex]: {
-                    rawItems: r.items,
-                    hasMore: r.hasMore,
-                    totalCount: r.totalCount,
+                    rawItems: firstPage,
+                    hasMore: refined.length > pageSize,
+                    totalCount: refined.length,
                     loading: false,
-                    nextPage: r.hasMore ? 1 : null,
+                    nextPage: refined.length > pageSize ? 1 : null,
                     error: null,
+                    preFiltered: true,
                 },
             }));
         } catch (e) {
@@ -842,62 +762,45 @@ const applyVoiceLibraryForSpeaker = useCallback(
                 setElevenLabsAuthFailed(true);
             }
             setVoiceLibraryWarning("Unable to load ElevenLabs voices. Showing default voices.");
+            speakerRefinedVoicesRef.current[speakerIndex] = fallbackItems;
             setSpeakerVoiceLibrary((prev) => ({
                 ...prev,
                 [speakerIndex]: {
-                    rawItems: fallbackItems,
-                    hasMore: false,
+                    rawItems: fallbackItems.slice(0, VOICE_LIBRARY_PAGE_SIZE),
+                    hasMore: fallbackItems.length > VOICE_LIBRARY_PAGE_SIZE,
                     totalCount: fallbackItems.length,
                     loading: false,
-                    nextPage: null,
+                    nextPage: fallbackItems.length > VOICE_LIBRARY_PAGE_SIZE ? 1 : null,
                     error: fallbackItems.length ? null : (e.message || String(e)),
+                    preFiltered: true,
                 },
             }));
         }
     },
-    [fetchFallbackVoices, fetchLibraryItemsWithAgeCoverage]
+    [fetchFallbackVoices, loadSharedVoiceCatalog]
 );
 
-const appendVoiceLibraryPageForSpeaker = useCallback(
-    async (speakerIndex) => {
-        const st = speakerVoiceLibraryRef.current[speakerIndex];
-        const applied = speakerVoiceAppliedFiltersRef.current[speakerIndex] || emptyAppliedVoiceFilters();
-        if (!st?.hasMore || st.nextPage == null || st.loading) return;
-        const page = st.nextPage;
-        setSpeakerVoiceLibrary((prev) => ({
-            ...prev,
-            [speakerIndex]: { ...(prev[speakerIndex] || {}), loading: true, error: null },
-        }));
-        try {
-            const r = await fetchLibraryItemsPage(applied, page);
-            setSpeakerVoiceLibrary((prev) => {
-                const cur = prev[speakerIndex] || {};
-                return {
-                    ...prev,
-                    [speakerIndex]: {
-                        rawItems: [...(cur.rawItems || []), ...r.items],
-                        hasMore: r.hasMore,
-                        totalCount: r.totalCount,
-                        loading: false,
-                        nextPage: r.hasMore ? page + 1 : null,
-                        error: null,
-                    },
-                };
-            });
-        } catch (e) {
-            console.error(e);
-            setSpeakerVoiceLibrary((prev) => ({
-                ...prev,
-                [speakerIndex]: {
-                    ...(prev[speakerIndex] || {}),
-                    loading: false,
-                    error: e.message || String(e),
-                },
-            }));
-        }
-    },
-    [fetchLibraryItemsPage]
-);
+const appendVoiceLibraryPageForSpeaker = useCallback((speakerIndex) => {
+    const st = speakerVoiceLibraryRef.current[speakerIndex];
+    if (!st?.hasMore || st.nextPage == null || st.loading) return;
+    const refined = speakerRefinedVoicesRef.current[speakerIndex] || [];
+    const page = st.nextPage;
+    const pageSize = VOICE_LIBRARY_PAGE_SIZE;
+    const end = (page + 1) * pageSize;
+    setSpeakerVoiceLibrary((prev) => ({
+        ...prev,
+        [speakerIndex]: {
+            ...(prev[speakerIndex] || {}),
+            rawItems: refined.slice(0, end),
+            hasMore: refined.length > end,
+            totalCount: refined.length,
+            loading: false,
+            nextPage: refined.length > end ? page + 1 : null,
+            error: null,
+            preFiltered: true,
+        },
+    }));
+}, []);
 
 useEffect(() => {
     speakerVoiceLibraryRef.current = speakerVoiceLibrary;
@@ -911,22 +814,16 @@ useEffect(() => {
     let cancelled = false;
     (async () => {
         try {
-            const params = buildLibraryUrlSearchParams(emptyAppliedVoiceFilters(), 0, 100);
-            const res = await fetch(`${API_BASE}/api/voices/elevenlabs?${params.toString()}`, { credentials: "include" });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data?.error || `Seed voices ${res.status}`);
-            if (!cancelled) setLibrarySeedVoices(Array.isArray(data.items) ? data.items : []);
-        } catch (e) {
-            console.error("library seed", e);
-            try {
-                const fallback = await fetchFallbackVoices();
-                if (!cancelled) {
-                    setLibrarySeedVoices(fallback);
+            const items = await loadSharedVoiceCatalog();
+            if (!cancelled) {
+                setLibrarySeedVoices(items);
+                if (!items.length) {
                     setVoiceLibraryWarning("Unable to load ElevenLabs voices. Showing default voices.");
                 }
-            } catch {
-                if (!cancelled) setLibrarySeedVoices([]);
             }
+        } catch (e) {
+            console.error("library seed", e);
+            if (!cancelled) setLibrarySeedVoices([]);
         } finally {
             if (!cancelled) setLoadingLibrarySeed(false);
         }
@@ -934,7 +831,7 @@ useEffect(() => {
     return () => {
         cancelled = true;
     };
-}, [fetchFallbackVoices]);
+}, [loadSharedVoiceCatalog]);
 
 useEffect(() => {
     (async () => {
@@ -986,46 +883,40 @@ const openFilterDraftKey = useMemo(() => {
 useEffect(() => {
     if (openFilterSpeakerIdx < 0) return;
     const i = openFilterSpeakerIdx;
-    const t = setTimeout(async () => {
+    const t = setTimeout(() => {
         const f = speakerVoiceFilters[i];
         if (!f?.open) return;
         const applied = filtersModalToApplied(f);
-        setModalLibraryPreview((p) => ({ ...p, [i]: { ...(p[i] || {}), loading: true } }));
-        try {
-            const accentApplied = { ...applied, accent: "" };
-            const r = await fetchLibraryItemsWithAgeCoverage(accentApplied);
-            const refined = clientRefineLibraryVoices(r.items, applied);
-            if (normalizeLanguageFilterValue(accentApplied.language) === "ar") {
-                const accentValues = uniqueSortedDisplay(
-                    r.items
-                        .filter((v) => languageMatchesVoice("ar", v))
-                        .flatMap((v) => accentDisplaysForLanguageFromVoice(v, "ar"))
-                );
-                const debugKey = `${i}:${JSON.stringify(accentApplied)}:${r.items.length}:${accentValues.join("|")}`;
-                if (!accentValues.length && !arabicAccentDebugRef.current.has(debugKey)) {
-                    arabicAccentDebugRef.current.add(debugKey);
-                    debugArabicAccentMetadata(r.items, "Create/Add Speaker modal language preview");
-                }
-                if (typeof window !== "undefined" && window.localStorage?.getItem("wecastVoiceFilterDebug") === "1") {
-                    console.debug("[WeCast voice filters] Create Arabic summary", voiceAccentDebugSummary(r.items, "ar"));
-                }
-            }
-            if (typeof window !== "undefined" && window.localStorage?.getItem("wecastVoiceFilterDebug") === "1") {
-                console.debug("[WeCast voice filters] Create tone/pitch summary", buildTonePitchDebugMatrix(r.items));
-            }
+        const catalog = getCachedVoiceCatalog() || librarySeedVoices;
+        if (!catalog.length) {
             setModalLibraryPreview((p) => ({
                 ...p,
-                [i]: { totalCount: r.totalCount, refinedCount: refined.length, loading: false, accentItems: r.items },
+                [i]: { totalCount: null, refinedCount: null, loading: true },
             }));
-        } catch {
-            setModalLibraryPreview((p) => ({
-                ...p,
-                [i]: { totalCount: null, refinedCount: null, loading: false },
-            }));
+            return;
         }
-    }, 400);
+        const accentApplied = { ...applied, accent: "" };
+        const accentPool = clientRefineLibraryVoices(catalog, accentApplied);
+        const refined = clientRefineLibraryVoices(catalog, applied);
+        if (normalizeLanguageFilterValue(accentApplied.language) === "ar") {
+            const accentValues = uniqueSortedDisplay(
+                accentPool
+                    .filter((v) => languageMatchesVoice("ar", v))
+                    .flatMap((v) => accentDisplaysForLanguageFromVoice(v, "ar"))
+            );
+            const debugKey = `${i}:${JSON.stringify(accentApplied)}:${accentPool.length}:${accentValues.join("|")}`;
+            if (!accentValues.length && !arabicAccentDebugRef.current.has(debugKey)) {
+                arabicAccentDebugRef.current.add(debugKey);
+                debugArabicAccentMetadata(accentPool, "Create/Add Speaker modal language preview");
+            }
+        }
+        setModalLibraryPreview((p) => ({
+            ...p,
+            [i]: { totalCount: catalog.length, refinedCount: refined.length, loading: false, accentItems: accentPool },
+        }));
+    }, 150);
     return () => clearTimeout(t);
-}, [openFilterDraftKey, openFilterSpeakerIdx, fetchLibraryItemsWithAgeCoverage]);
+}, [openFilterDraftKey, openFilterSpeakerIdx, librarySeedVoices, speakerVoiceFilters]);
 
 // Ensure each speaker has filter modal state
 useEffect(() => {
@@ -1056,47 +947,10 @@ useEffect(() => {
     });
 }, [speakers]);
 
-// Group seed voices by gender (default voice assignment)
-const voiceGroups = useMemo(() => {
-    const groups = { male: [], female: [], other: [] };
-
-    librarySeedVoices.forEach((v) => {
-        const g = normalizeGenderToken(v.gender || v.labels?.gender || v.labels?.Gender);
-        if (g === "male") groups.male.push(v);
-        else if (g === "female") groups.female.push(v);
-        else groups.other.push(v);
-    });
-
-    return groups;
-}, [librarySeedVoices]);
-
-const defaultVoiceForGender = useCallback(
-    (gender = "Male", usedIds = new Set()) => {
-        const isFemale = String(gender || "").toLowerCase() === "female";
-        const key = isFemale ? "female" : "male";
-
-        const pool = voiceGroups[key].length ? voiceGroups[key] : librarySeedVoices;
-        if (!pool.length) return "";
-
-        const unusedInPool = pool.find((v) => {
-            const id = getVoiceId(v);
-            return id && !usedIds.has(id);
-        });
-        if (unusedInPool) return getVoiceId(unusedInPool);
-
-        const unusedAny = librarySeedVoices.find((v) => {
-            const id = getVoiceId(v);
-            return id && !usedIds.has(id);
-        });
-        if (unusedAny) return getVoiceId(unusedAny);
-
-        return getVoiceId(pool[0]) || getVoiceId(librarySeedVoices[0]) || "";
-    },
-    [voiceGroups, librarySeedVoices]
-);
-
     const [description, setDescription] = useState("");
     const [errors, setErrors] = useState({});
+    /** Per-speaker voice validation messages (step 2). */
+    const [speakerVoiceErrors, setSpeakerVoiceErrors] = useState({});
     const [submitting, setSubmitting] = useState(false);
     const [toast, setToast] = useState(null);
     const [showExportMenu, setShowExportMenu] = useState(false);
@@ -1678,28 +1532,6 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
 
 
     useEffect(() => {
-        if (loadingLibrarySeed || !librarySeedVoices.length || !speakers.length) return;
-
-        setSpeakers((prev) => {
-            const usedIds = new Set(
-                prev.map((s) => s.voiceId).filter(Boolean)
-            );
-
-            const next = prev.map((s) => {
-                if (s.voiceId) return s;
-
-                const voiceId = defaultVoiceForGender(s.gender, usedIds);
-                if (voiceId) usedIds.add(voiceId);
-
-                return { ...s, voiceId };
-            });
-
-            return next;
-        });
-    }, [loadingLibrarySeed, librarySeedVoices.length, speakers.length, defaultVoiceForGender]);
-
-
-    useEffect(() => {
         if (!scriptStyle || !speakersCount) return;
         const count = Number(speakersCount);
         const limits = STYLE_LIMITS[scriptStyle] || [];
@@ -1806,6 +1638,19 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
             errs.speaker_names = t("create.errors.duplicateSpeakerNames");
         }
 
+        const voiceErrs = {};
+        speakers.forEach((speaker, index) => {
+            if (!String(speaker?.voiceId || "").trim()) {
+                voiceErrs[index] = t("create.errors.missingSpeakerVoice");
+            }
+        });
+        if (Object.keys(voiceErrs).length > 0) {
+            setSpeakerVoiceErrors(voiceErrs);
+            errs.speaker_voices = t("create.errors.missingSpeakerVoices");
+        } else {
+            setSpeakerVoiceErrors({});
+        }
+
         setErrors(errs);
         if (Object.keys(errs).length === 0) {
             const editData = {
@@ -1821,9 +1666,30 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
             setToast({ type: "success", message: t("create.toasts.speakersSet") });
             setTimeout(() => setToast(null), 2400);
         } else {
-            setToast({ type: "error", message: Object.values(errs)[0] });
+            const toastMessage =
+                errs.speaker_voices ||
+                errs.speaker_names ||
+                errs.speakers ||
+                errs.script_style ||
+                Object.values(errs)[0];
+            setToast({ type: "error", message: toastMessage });
             setTimeout(() => setToast(null), 2800);
         }
+    };
+
+    const clearSpeakerVoiceError = (speakerIndex) => {
+        setSpeakerVoiceErrors((prev) => {
+            if (!prev[speakerIndex]) return prev;
+            const next = { ...prev };
+            delete next[speakerIndex];
+            return next;
+        });
+        setErrors((prev) => {
+            if (!prev.speaker_voices) return prev;
+            const next = { ...prev };
+            delete next.speaker_voices;
+            return next;
+        });
     };
 
     const handleGenerate = async () => {
@@ -2539,7 +2405,9 @@ const exportScript = async (format = "pdf") => {
                                                                 error: null,
                                                             };
                                                             const rawPool = libr.rawItems || [];
-                                                            const pool = clientRefineLibraryVoices(rawPool, applied);
+                                                            const pool = libr.preFiltered
+                                                                ? rawPool
+                                                                : clientRefineLibraryVoices(rawPool, applied);
                                                             const poolIds = new Set(pool.map(getVoiceId));
                                                             const currentId = sp.voiceId || "";
                                                             const safeValue = poolIds.has(currentId) ? currentId : "";
@@ -2705,7 +2573,12 @@ const exportScript = async (format = "pdf") => {
                                                                     <select
                                                                         dir={isRTL ? "rtl" : "ltr"}
                                                                         disabled={isHostLocked}
-                                                                        className={`form-input select-input flex-1 [color-scheme:light] dark:[color-scheme:dark] text-start ${isHostLocked ? "opacity-70 cursor-not-allowed" : ""}`}
+                                                                        aria-invalid={Boolean(speakerVoiceErrors[i])}
+                                                                        className={`form-input select-input flex-1 [color-scheme:light] dark:[color-scheme:dark] text-start ${
+                                                                            speakerVoiceErrors[i]
+                                                                                ? "border-rose-500 ring-1 ring-rose-500/40 dark:border-rose-400 dark:ring-rose-400/35"
+                                                                                : ""
+                                                                        } ${isHostLocked ? "opacity-70 cursor-not-allowed" : ""}`}
                                                                         style={{
                                                                             backgroundPosition: isRTL ? "left 0.75rem center" : "right 1rem center",
                                                                             paddingLeft: isRTL ? "2.25rem" : undefined,
@@ -2731,6 +2604,7 @@ const exportScript = async (format = "pdf") => {
                                                                                 n[i] = { ...n[i], voiceId: newVoice };
                                                                                 return n;
                                                                             });
+                                                                            if (newVoice) clearSpeakerVoiceError(i);
 
                                                                             if (newVoice && shouldAutoplayVoicePreview()) {
                                                                                 const selected = pool.find(
@@ -2784,9 +2658,16 @@ const exportScript = async (format = "pdf") => {
                                                                 </div>
                                                             );
                                                         })()}
-                                                        <p className="form-help text-xs mt-1">
-                                                            {t("create.speakers.voiceHelp")}
-                                                        </p>
+                                                        {speakerVoiceErrors[i] ? (
+                                                            <p className="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-rose-600 dark:text-rose-400">
+                                                                <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                                                                {speakerVoiceErrors[i]}
+                                                            </p>
+                                                        ) : (
+                                                            <p className="form-help text-xs mt-1">
+                                                                {t("create.speakers.voiceHelp")}
+                                                            </p>
+                                                        )}
                                                     </div>
                                                 </div>
                                             </div>
@@ -2794,7 +2675,12 @@ const exportScript = async (format = "pdf") => {
                                     })}
                                 </div>
                             )}
-                            {(errors.speaker_names || errors.speakers) && <p className="text-rose-500 mt-4 text-center flex items-center gap-2 justify-center"><AlertCircle className="w-4 h-4" /> {errors.speaker_names || errors.speakers}</p>}
+                            {(errors.speaker_names || errors.speakers || errors.speaker_voices) && (
+                                <p className="text-rose-500 mt-4 text-center flex items-center gap-2 justify-center">
+                                    <AlertCircle className="w-4 h-4" />{" "}
+                                    {errors.speaker_names || errors.speaker_voices || errors.speakers}
+                                </p>
+                            )}
                             <div className="mt-6 flex justify-between">
                                 <button onClick={() => setStep(1)} className="px-4 py-2 border rounded-xl">{t("create.common.back")}</button>
                                 <button onClick={onContinueFromSpeakers} className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold">

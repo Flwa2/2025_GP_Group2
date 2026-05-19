@@ -292,6 +292,8 @@
   "create.errors.minWords": "على الأقل {{min}} كلمة.",
   "create.errors.missingPodcastId": "معرّف البودكاست مفقود. أعد إنشاء النص.",
   "create.errors.missingSpeakerNames": "يرجى إدخال اسم لكل متحدث قبل المتابعة.",
+  "create.errors.missingSpeakerVoice": "يرجى اختيار صوت لهذا المتحدث.",
+  "create.errors.missingSpeakerVoices": "يرجى اختيار صوت لكل متحدث قبل المتابعة.",
   "create.guidelines.title": "إرشادات النمط",
   "create.guidelines.tone": "النبرة",
   "create.guidelines.flow": "التسلسل",

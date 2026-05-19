@@ -1,0 +1,137 @@
+import { VOICE_AGE_BUCKETS } from "./voiceAgeFilters";
+
+const CACHE_STORAGE_KEY = "wecast:voiceCatalog:v1";
+const CACHE_TTL_MS = 30 * 60 * 1000;
+
+let memoryCatalog = null;
+let loadPromise = null;
+
+const getVoiceId = (voice, index = 0) =>
+  voice?.providerVoiceId || voice?.id || voice?.docId || `voice-${index}`;
+
+export const mergeVoicesById = (...voiceLists) => {
+  const out = new Map();
+  voiceLists.flat().filter(Boolean).forEach((voice, idx) => {
+    const id = getVoiceId(voice, idx);
+    if (!out.has(id)) out.set(id, voice);
+  });
+  return Array.from(out.values());
+};
+
+function readStorageCache() {
+  if (typeof sessionStorage === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(CACHE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.t !== "number" || !Array.isArray(parsed.items)) return null;
+    if (Date.now() - parsed.t > CACHE_TTL_MS) return null;
+    return parsed.items;
+  } catch {
+    return null;
+  }
+}
+
+function writeStorageCache(items) {
+  if (typeof sessionStorage === "undefined") return;
+  try {
+    sessionStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify({ t: Date.now(), items }));
+  } catch {
+    /* quota */
+  }
+}
+
+export function getCachedVoiceCatalog() {
+  return memoryCatalog;
+}
+
+export function clearVoiceLibraryCache() {
+  memoryCatalog = null;
+  loadPromise = null;
+  try {
+    sessionStorage.removeItem(CACHE_STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+async function expandCatalogWithAgeBuckets(fetchPage, baseApplied = {}) {
+  if (!fetchPage) return [];
+  const base = await fetchPage({ ...baseApplied, age: "" });
+  const baseItems = Array.isArray(base?.items) ? base.items : Array.isArray(base) ? base : [];
+  const ageResults = await Promise.allSettled(
+    VOICE_AGE_BUCKETS.map((age) => fetchPage({ ...baseApplied, age }))
+  );
+  const agePages = ageResults
+    .filter((result) => result.status === "fulfilled")
+    .map((result) => {
+      const value = result.value;
+      return Array.isArray(value?.items) ? value.items : Array.isArray(value) ? value : [];
+    });
+  return mergeVoicesById(baseItems, ...agePages);
+}
+
+/**
+ * Load the shared voice catalog once per session (memory + sessionStorage).
+ * @param {object} loaders
+ * @param {() => Promise<{items: Array}>} loaders.fetchSeedPage - single ElevenLabs page (e.g. page 0, size 100)
+ * @param {(applied: object) => Promise<{items: Array}|Array>} [loaders.fetchPageForAgeBuckets] - optional; merges age-bucket pages once
+ * @param {() => Promise<Array>} [loaders.fetchAccountVoices]
+ * @param {() => Promise<Array>} [loaders.fetchFallbackVoices]
+ */
+export async function ensureVoiceLibraryCatalog(loaders) {
+  if (memoryCatalog?.length) return memoryCatalog;
+
+  const stored = readStorageCache();
+  if (stored?.length) {
+    memoryCatalog = stored;
+    return memoryCatalog;
+  }
+
+  if (loadPromise) return loadPromise;
+
+  loadPromise = (async () => {
+    try {
+      let seedItems = [];
+      if (loaders.fetchPageForAgeBuckets) {
+        seedItems = await expandCatalogWithAgeBuckets(loaders.fetchPageForAgeBuckets, {});
+      } else {
+        const seedPage = await loaders.fetchSeedPage();
+        seedItems = Array.isArray(seedPage?.items) ? seedPage.items : [];
+      }
+      let accountItems = [];
+      if (loaders.fetchAccountVoices) {
+        try {
+          accountItems = await loaders.fetchAccountVoices();
+        } catch {
+          accountItems = [];
+        }
+      }
+      const merged = mergeVoicesById(seedItems, accountItems);
+      if (merged.length) {
+        memoryCatalog = merged;
+        writeStorageCache(merged);
+        return merged;
+      }
+      throw new Error("Empty voice catalog");
+    } catch (primaryError) {
+      if (loaders.fetchFallbackVoices) {
+        try {
+          const fallback = await loaders.fetchFallbackVoices();
+          memoryCatalog = Array.isArray(fallback) ? fallback : [];
+          if (memoryCatalog.length) writeStorageCache(memoryCatalog);
+          return memoryCatalog;
+        } catch {
+          /* fall through */
+        }
+      }
+      console.error("[WeCast] voice catalog load failed", primaryError);
+      memoryCatalog = [];
+      return memoryCatalog;
+    } finally {
+      loadPromise = null;
+    }
+  })();
+
+  return loadPromise;
+}

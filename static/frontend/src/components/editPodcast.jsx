@@ -58,6 +58,7 @@ import {
   accentTokensForLanguageFromVoice,
   buildAccentOptionsForLanguage,
 } from "../utils/voiceAccentFilters";
+import { ensureVoiceLibraryCatalog } from "../utils/voiceLibraryCache";
 
 const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
@@ -585,27 +586,6 @@ const buildLibraryUrlSearchParams = (applied, page, pageSize = VOICE_LIBRARY_PAG
   return p;
 };
 
-const mergeVoicesById = (...voiceLists) => {
-  const out = new Map();
-  voiceLists.flat().filter(Boolean).forEach((voice, idx) => {
-    const id = getVoiceCatalogId(voice) || `voice-${idx}`;
-    if (!out.has(id)) out.set(id, voice);
-  });
-  return Array.from(out.values());
-};
-
-const fetchLibraryPagesWithAgeCoverage = async (fetchLibraryPage, applied) => {
-  if (applied.age) return fetchLibraryPage(applied);
-  const baseVoices = await fetchLibraryPage(applied);
-  const ageResults = await Promise.allSettled(
-    VOICE_AGE_BUCKETS.map((age) => fetchLibraryPage({ ...applied, age }))
-  );
-  const ageVoices = ageResults
-    .filter((result) => result.status === "fulfilled")
-    .map((result) => result.value);
-  return mergeVoicesById(baseVoices, ...ageVoices);
-};
-
 const voiceAccentDebugSummary = (voicesList, language = "ar") => {
   const matchingVoices = voicesList.filter((voice) => {
     const tokens = [
@@ -998,8 +978,10 @@ useEffect(() => {
   }
 }, [speakers, script, originalSpeakers]);
 
-  // Load voices from the same ElevenLabs shared-library source used by CreatePro.
+  // Load voices once per session from shared catalog cache (same source as CreatePro).
   useEffect(() => {
+    let cancelled = false;
+
     async function loadVoices() {
       try {
         setLoadingVoices(true);
@@ -1012,35 +994,39 @@ useEffect(() => {
           });
           const data = await parseJsonResponse(res);
           if (!res.ok) throw new Error(data?.error || `Failed to load voices (${res.status})`);
-          return Array.isArray(data?.items) ? data.items : [];
+          return { items: Array.isArray(data?.items) ? data.items : [] };
         };
 
-        const baseFilters = emptyAppliedVoiceFilters();
-        const [baseVoices, englishVoices, arabicVoices] = await Promise.all([
-          fetchLibraryPagesWithAgeCoverage(fetchLibraryPage, baseFilters),
-          fetchLibraryPagesWithAgeCoverage(fetchLibraryPage, { ...baseFilters, language: "en" }),
-          fetchLibraryPagesWithAgeCoverage(fetchLibraryPage, { ...baseFilters, language: "ar" }),
-        ]);
-        let accountVoices = [];
-        try {
-          const params = new URLSearchParams();
-          params.set("provider", "ElevenLabs");
-          params.set("limit", "500");
-          const res = await fetch(`${API_BASE}/api/voices?${params.toString()}`, {
-            credentials: "include",
-            headers: authHeaders(),
-          });
-          const data = await parseJsonResponse(res);
-          if (res.ok) {
-            accountVoices = Array.isArray(data?.items) ? data.items : Array.isArray(data?.voices) ? data.voices : [];
-          } else {
-            console.warn("Failed to load account voices for Edit labels", data?.error || res.status);
-          }
-        } catch (accountErr) {
-          console.warn("Failed to load account voices for Edit labels", accountErr);
-        }
+        const raw = await ensureVoiceLibraryCatalog({
+          fetchSeedPage: () => fetchLibraryPage(emptyAppliedVoiceFilters()),
+          fetchPageForAgeBuckets: fetchLibraryPage,
+          fetchAccountVoices: async () => {
+            const params = new URLSearchParams();
+            params.set("provider", "ElevenLabs");
+            params.set("limit", "500");
+            const res = await fetch(`${API_BASE}/api/voices?${params.toString()}`, {
+              credentials: "include",
+              headers: authHeaders(),
+            });
+            const data = await parseJsonResponse(res);
+            if (!res.ok) return [];
+            return Array.isArray(data?.items) ? data.items : Array.isArray(data?.voices) ? data.voices : [];
+          },
+          fetchFallbackVoices: async () => {
+            const params = new URLSearchParams();
+            params.set("provider", "ElevenLabs");
+            params.set("limit", "500");
+            const res = await fetch(`${API_BASE}/api/voices?${params.toString()}`, {
+              credentials: "include",
+              headers: authHeaders(),
+            });
+            const data = await parseJsonResponse(res);
+            if (!res.ok) throw new Error(data?.error || `Fallback voices failed (${res.status})`);
+            return Array.isArray(data?.items) ? data.items : Array.isArray(data?.voices) ? data.voices : [];
+          },
+        });
 
-        const raw = mergeVoicesById(baseVoices, englishVoices, arabicVoices, accountVoices);
+        if (cancelled) return;
 
         if (typeof window !== "undefined" && window.localStorage?.getItem("wecastVoiceFilterDebug") === "1") {
           console.debug("[WeCast voice filters] Edit Arabic summary", voiceAccentDebugSummary(raw, "ar"));
@@ -1051,28 +1037,16 @@ useEffect(() => {
         setVoices(raw);
       } catch (e) {
         console.error("Failed to load voices", e);
-        try {
-          const params = new URLSearchParams();
-          params.set("provider", "ElevenLabs");
-          params.set("limit", "500");
-          const res = await fetch(`${API_BASE}/api/voices?${params.toString()}`, {
-            credentials: "include",
-            headers: authHeaders(),
-          });
-          const data = await parseJsonResponse(res);
-          if (!res.ok) throw new Error(data?.error || `Fallback voices failed (${res.status})`);
-          const fallback = Array.isArray(data?.items) ? data.items : Array.isArray(data?.voices) ? data.voices : [];
-          setVoices(fallback);
-        } catch (fallbackErr) {
-          console.error("Failed to load fallback voices", fallbackErr);
-          setVoices([]);
-        }
+        if (!cancelled) setVoices([]);
       } finally {
-        setLoadingVoices(false);
+        if (!cancelled) setLoadingVoices(false);
       }
     }
 
     loadVoices();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -1654,6 +1628,20 @@ const finalizeChanges = async () => {
 
     setGeneratingAudio(true);
     try {
+      try {
+        await fetch(`${API_BASE}/api/save-music`, {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            ...authHeaders(),
+          },
+          body: JSON.stringify({ introMusic, bodyMusic, outroMusic }),
+        });
+      } catch (musicErr) {
+        console.warn("Failed to sync music before audio generation", musicErr);
+      }
+
       const res = await fetch(`${API_BASE}/api/audio`, {
         method: "POST",
         credentials: "include",
@@ -1764,10 +1752,19 @@ const exportScript = async (format = "pdf") => {
     "max-w-full min-w-0 overflow-hidden rounded-[28px] border border-[#eadcf6] bg-white/78 shadow-[0_12px_36px_rgba(15,23,42,0.10)] backdrop-blur-md dark:border-[#6f5a86]/30 dark:bg-neutral-900/42";
   const studioFieldClass = "border border-neutral-300/80 dark:border-white/10 bg-white/88 dark:bg-neutral-800/90 text-gray-900 dark:text-gray-100 placeholder:text-black/35 dark:placeholder:text-white/35 caret-black dark:caret-white shadow-sm focus:ring-2 focus:ring-purple-500/35 focus:border-purple-400/50";
 
+  const initialLoadMessage = useMemo(() => {
+    try {
+      const editData = JSON.parse(sessionStorage.getItem("editData") || "{}");
+      return editData.podcastId ? "Restoring saved episode..." : "Loading podcast...";
+    } catch {
+      return "Loading podcast...";
+    }
+  }, []);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-cream dark:bg-[#0a0a1a] flex items-center justify-center">
-        <LoadingOverlay show={true} message="Loading podcast..." />
+        <LoadingOverlay show={true} message={initialLoadMessage} />
       </div>
     );
   }
@@ -1775,10 +1772,10 @@ const exportScript = async (format = "pdf") => {
  return (
     <div className="min-h-screen overflow-x-clip bg-white/35 dark:bg-neutral-900/20 text-black dark:text-white">
       {/* Header */}
-      <LoadingOverlay 
-  show={generatingAudio} 
-  message="Generating your podcast audio..." 
-/>
+      <LoadingOverlay
+        show={generatingAudio}
+        message="Generating audio..."
+      />
       <main className="w-full max-w-full border-b border-purple-200/90 dark:border-purple-400/30 bg-white/35 dark:bg-neutral-900/20">
       <div className="w-full border-b border-purple-200/90 dark:border-purple-400/30 bg-white/35 dark:bg-neutral-900/20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5">
@@ -2278,7 +2275,10 @@ const exportScript = async (format = "pdf") => {
                     <div>
                       <label className="block text-sm font-medium mb-2">Voice Selection</label>
                       {loadingVoices ? (
-                        <p className="text-sm text-black/55 dark:text-white/55">Loading voices...</p>
+                        <p className="flex items-center gap-2 text-sm text-black/55 dark:text-white/55">
+                          <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-purple-500 border-t-transparent" aria-hidden />
+                          Loading voices…
+                        </p>
                       ) : voices.length === 0 ? (
                         <p className="text-sm text-red-500">No voices found. Check ElevenLabs config.</p>
                       ) : (

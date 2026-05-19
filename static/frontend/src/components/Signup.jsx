@@ -13,26 +13,11 @@ import {
     completePendingSocialRedirect,
 } from "../utils/socialAuth";
 import {
-    clearAuthRedirectIntent,
-    getAuthRedirectIntent,
+    preserveRedirectQueryForRoute,
     readHashRedirectParams,
+    redirectAfterAuth,
     storeAuthRedirectIntent,
 } from "../utils/authRedirect";
-  
-function redirectAfterAuth() {
-    const { redirect, id, from } = getAuthRedirectIntent();
-    clearAuthRedirectIntent();
-    if (redirect === "edit") {
-        window.location.hash = "#/edit";
-    } else if (redirect === "create") {
-        window.location.hash = "#/create";
-    } else if (redirect === "preview") {
-        const fromSuffix = from ? `&from=${encodeURIComponent(from)}` : "";
-        window.location.hash = id ? `#/preview?id=${id}${fromSuffix}` : `#/preview${from ? `?from=${encodeURIComponent(from)}` : ""}`;
-    } else {
-        window.location.hash = "#/";
-    }
-}
 
 function normalizeEmail(value) {
     return String(value || "").trim().toLowerCase();
@@ -591,7 +576,7 @@ const pwLabel = strengthLabels[passwordScore];
 
                         <div className="flex flex-col gap-3">
                             <a
-                                href="#/login"
+                                href={preserveRedirectQueryForRoute("login")}
                                 className="btn-primary w-full justify-center text-center"
                             >
                                 Go to Login
@@ -774,7 +759,7 @@ const pwLabel = strengthLabels[passwordScore];
                     <p className="text-center text-sm text-neutral-600 dark:text-neutral-300">
                             {t("signup.AlreadyHaveAccount")}{" "}
                         <a
-                            href="#/login"
+                            href={preserveRedirectQueryForRoute("login")}
                             className="text-purple-medium dark:text-purple-400 underline-offset-2 hover:underline"
                         >
                             {t("signup.login")}

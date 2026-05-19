@@ -1,6 +1,7 @@
 ﻿import React from "react";
 import { createElement } from "react";
 import { useTranslation } from "react-i18next";
+import { navigateToCastStudio } from "../utils/authRedirect";
 import {
   Instagram,
   Linkedin,
@@ -37,7 +38,12 @@ export default function Footer() {
 
   const quickLinks = [
     { label: "Home", color: "bg-[#ef4444]", onClick: scrollToTop, type: "button" },
-    { label: "Cast Studio", color: "bg-[#22c55e]", href: "#/episodes", type: "link" },
+    {
+      label: "Cast Studio",
+      color: "bg-[#22c55e]",
+      type: "button",
+      onClick: () => navigateToCastStudio(),
+    },
     {
       label: "About Us",
       color: "bg-[#3b82f6]",

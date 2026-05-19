@@ -299,6 +299,8 @@
     "create.errors.minWords":  "At least {{min}} words.",
     "create.errors.missingPodcastId":  "Missing podcastId. Please regenerate the script.",
     "create.errors.missingSpeakerNames":  "Please enter a name for every speaker before continuing.",
+    "create.errors.missingSpeakerVoice":  "Please select a voice for this speaker.",
+    "create.errors.missingSpeakerVoices":  "Please select a voice for every speaker before continuing.",
     "create.guidelines.title":  "Style guidelines",
     "create.guidelines.tone":  "Tone",
     "create.guidelines.flow":  "Flow",

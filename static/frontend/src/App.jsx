@@ -20,6 +20,7 @@ import FinalizePublish from "./components/FinalizePublish";
 import EmailAction from "./components/EmailAction";
 import Share from "./components/Share";
 import { syncCreateDraftLease } from "./utils/createDraftSession";
+import { guardCastStudioRoute } from "./utils/authRedirect";
 
 
 const APP_TITLE = "WeCast";
@@ -237,7 +238,7 @@ export default function App() {
         ) : isEdit ? (
           <EditScript />
         ) : isEpisodes ? (
-          <Episodes />
+          guardCastStudioRoute() ? <Episodes /> : null
         ) : isFinalize ? (
           <FinalizePublish />
         ) : isPreview ? (

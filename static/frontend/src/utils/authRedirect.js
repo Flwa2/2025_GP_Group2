@@ -133,3 +133,60 @@ export function getPendingPreviewDraft() {
 export function clearPendingPreviewDraft() {
   removeStorageValue(PENDING_PREVIEW_DRAFT_KEY, true);
 }
+
+export function isUserAuthenticated() {
+  if (typeof window === "undefined") return false;
+  try {
+    return !!(localStorage.getItem("token") || sessionStorage.getItem("token"));
+  } catch {
+    return false;
+  }
+}
+
+/** Build login/signup hash preserving ?redirect=… query params from the current URL. */
+export function preserveRedirectQueryForRoute(route = "login") {
+  const { redirect, id, from } = readHashRedirectParams();
+  if (!redirect) return `#/${route}`;
+  const qs = new URLSearchParams({ redirect });
+  if (id) qs.set("id", id);
+  if (from) qs.set("from", from);
+  return `#/${route}?${qs.toString()}`;
+}
+
+export function resolvePostAuthRedirectHash({ redirect = "", id = "", from = "" } = {}) {
+  if (redirect === "edit") return "#/edit";
+  if (redirect === "create") return "#/create";
+  if (redirect === "episodes") return "#/episodes";
+  if (redirect === "preview") {
+    const fromSuffix = from ? `&from=${encodeURIComponent(from)}` : "";
+    if (id) return `#/preview?id=${encodeURIComponent(id)}${fromSuffix}`;
+    return from ? `#/preview?from=${encodeURIComponent(from)}` : "#/preview";
+  }
+  return "#/";
+}
+
+export function redirectAfterAuth() {
+  const intent = getAuthRedirectIntent();
+  clearAuthRedirectIntent();
+  window.location.hash = resolvePostAuthRedirectHash(intent);
+}
+
+/** Guest-safe navigation to Cast Studio (Episodes library). */
+export function navigateToCastStudio() {
+  if (isUserAuthenticated()) {
+    window.location.hash = "#/episodes";
+    return;
+  }
+  storeAuthRedirectIntent({ redirect: "episodes" });
+  window.location.hash = "#/login?redirect=episodes";
+}
+
+/**
+ * Returns true when Cast Studio may render; otherwise redirects guest to login.
+ */
+export function guardCastStudioRoute() {
+  if (isUserAuthenticated()) return true;
+  storeAuthRedirectIntent({ redirect: "episodes" });
+  window.location.hash = "#/login?redirect=episodes";
+  return false;
+}

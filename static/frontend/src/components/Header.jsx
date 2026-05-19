@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, ChevronDown, Globe2, Menu, X } from "lucide-react";
+import { navigateToCastStudio } from "../utils/authRedirect";
 
 export default function Header() {
   const [loggedIn, setLoggedIn] = useState(false);
@@ -84,7 +85,7 @@ export default function Header() {
   const mobileLinks = [
     { label: t("Home"), action: scrollToTop },
     ...(loggedIn
-      ? [{ label: t("episodes.sidebar.library"), href: "#/episodes" }]
+      ? [{ label: t("episodes.sidebar.library"), action: navigateToCastStudio }]
       : []),
     ...(loggedIn
       ? [{ label: t("Profile"), href: "#/account" }]
@@ -184,12 +185,13 @@ export default function Header() {
 
           {loggedIn && (
             <li>
-              <a
-                href="#/episodes"
+              <button
+                type="button"
+                onClick={navigateToCastStudio}
                 className="transition-colors duration-200 hover:text-purple-600"
               >
                 {t("episodes.sidebar.library")}
-              </a>
+              </button>
             </li>
           )}
 

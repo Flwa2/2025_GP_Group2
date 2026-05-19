@@ -2,8 +2,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, Mic2, Save } from "lucide-react";
-import WeCastAudioPlayer from "./WeCastAudioPlayer";
+import { Save } from "lucide-react";
+import EpisodePreviewView from "./EpisodePreviewView";
+import ViewportToast from "./ViewportToast";
 import {
   clearPendingPreviewDraft,
   clearPendingPreviewSave,
@@ -91,13 +92,6 @@ const generateSummary = async (words, podcastId, language, authHeaders = {}) => 
   }
 };
 
-function formatMMSS(sec) {
-  if (!Number.isFinite(sec)) return "00:00";
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
-
 /* -----------------------------
    Component
 ------------------------------ */
@@ -111,7 +105,6 @@ export default function Preview({ onTitleChange } = {}) {
   const [coverImageFailed, setCoverImageFailed] = useState(false);
   const [words, setWords] = useState([]);
   const [title, setTitle] = useState("");
-  const [currentTime, setCurrentTime] = useState(0);
   const [summary, setSummary] = useState("");
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
   const [chapters, setChapters] = useState([]);
@@ -135,14 +128,7 @@ export default function Preview({ onTitleChange } = {}) {
   const pendingSaveHandledRef = useRef(false);
   const previewNoticeKey = "wecast:previewSaveNotice";
 
-  const transcriptRef = useRef(null);
-  const activeWordRef = useRef(null);
-  const transcriptCardRef = useRef(null);
   const chaptersRecoveryAttemptedRef = useRef(false);
-
-  // user scroll control
-  const [userInteracting, setUserInteracting] = useState(false);
-  const interactionTimerRef = useRef(null);
 
   const params = new URLSearchParams(window.location.hash.split("?")[1] || "");
   const episodeId = params.get("id");
@@ -150,26 +136,6 @@ export default function Preview({ onTitleChange } = {}) {
   const isFromDashboardPreview = fromSource === "episodes";
   const isFromStudioCreatePreview = fromSource === "studio_create";
   const useDashboardGlassTone = isFromDashboardPreview || isFromStudioCreatePreview;
-  const dashboardShellClass =
-    "w-full min-w-0 max-w-full border-b border-black/10 bg-white/70 dark:bg-neutral-900/45 shadow-[0_10px_30px_rgba(0,0,0,0.08)] backdrop-blur-sm";
-  /** Dashboard route: shell only; main glass is previewPageGlassShellClass */
-  const dashboardContentClass =
-    "flex w-full min-w-0 max-w-none flex-1 flex-col px-0 pt-0 pb-8 sm:pb-10";
-  const dashboardCardClass =
-    "rounded-3xl border border-purple-300/40 dark:border-purple-400/30 bg-white/55 dark:bg-neutral-900/60 backdrop-blur-md shadow-sm";
-  const previewTitleCardClass =
-    "max-w-full min-w-0 overflow-hidden rounded-[28px] border border-purple-300/40 bg-white/78 shadow-[0_12px_36px_rgba(15,23,42,0.10)] backdrop-blur-md dark:border-[#6f5a86]/30 dark:bg-neutral-900/42";
-  const previewCardClass = dashboardCardClass;
-  /** Light: full-bleed glass over cream; dark: transparent so page/cards keep prior look */
-  const previewPageGlassShellClass = [
-    "flex w-full min-w-0 max-w-none flex-1 flex-col border-y border-white/30 bg-[rgba(255,255,255,0.7)] shadow-[0_14px_50px_-18px_rgba(15,23,42,0.1)] backdrop-blur-[14px]",
-    useDashboardGlassTone
-      ? "dark:border-white/10 dark:bg-neutral-900/45 dark:shadow-[0_8px_36px_rgba(0,0,0,0.42)] dark:backdrop-blur-xl"
-      : "dark:border-transparent dark:bg-transparent dark:shadow-none dark:backdrop-blur-none",
-  ].join(" ");
-  const previewPageInnerClass =
-    "mx-auto flex w-full min-w-0 max-w-[1400px] flex-1 flex-col space-y-6 px-5 pt-4 pb-6 sm:px-8 sm:pt-5 sm:pb-8 lg:px-10 lg:pt-6 lg:pb-10";
-  const [externalSeek, setExternalSeek] = useState(null);
   const displayTitle = title || t("episodes.untitledEpisode");
 
   useEffect(() => {
@@ -542,100 +508,6 @@ export default function Preview({ onTitleChange } = {}) {
     loadOrGenerate();
   }, [episodeId, words, podcastLanguage, authHeaders]);
 
-  // find active word
-  const activeIndex = useMemo(() => {
-    if (!words.length) return -1;
-    for (let i = 0; i < words.length; i++) {
-      const w = words[i];
-      if (currentTime >= w.start && currentTime < w.end) return i;
-    }
-    return -1;
-  }, [currentTime, words]);
-
-  const transcriptText = useMemo(
-    () => words.map((w) => String(w?.w || "")).join(" "),
-    [words]
-  );
-  const transcriptDir = useMemo(() => {
-    if (isLikelyArabic(transcriptText)) return "rtl";
-    if (podcastLanguage === "ar") return "rtl";
-    return "ltr";
-  }, [transcriptText, podcastLanguage]);
-
-  const hasSpeakerInfo = useMemo(
-    () => words.some((w) => typeof w.speaker === "string" && w.speaker.trim()),
-    [words]
-  );
-  const transcriptTokens = useMemo(() => {
-    if (!words.length) return [];
-    const tokens = [];
-    let lastSpeaker = null;
-
-    for (let i = 0; i < words.length; i++) {
-      const w = words[i];
-      const speaker =
-        typeof w.speaker === "string" ? w.speaker.trim() : "";
-
-      if (speaker && speaker !== lastSpeaker) {
-        tokens.push({
-          type: "speaker",
-          speaker,
-          start: w.start,
-          key: `sp-${i}-${w.start}`,
-        });
-        lastSpeaker = speaker;
-      }
-
-      tokens.push({
-        type: "word",
-        word: w,
-        index: i,
-        key: `w-${i}-${w.start}`,
-      });
-    }
-
-    return tokens;
-  }, [words]);
-
-  // Auto-scroll ONLY when user not interacting
-  useEffect(() => {
-    if (activeIndex < 0) return;
-    if (userInteracting) return;
-    if (!activeWordRef.current) return;
-    if (!transcriptRef.current) return;
-
-    const container = transcriptRef.current;
-    const target = activeWordRef.current;
-    const containerRect = container.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-
-    const above = targetRect.top < containerRect.top + 20;
-    const below = targetRect.bottom > containerRect.bottom - 20;
-
-    if (above || below) {
-      const offset =
-        target.offsetTop - container.offsetTop - container.clientHeight / 2;
-      container.scrollTo({
-        top: Math.max(0, offset),
-        behavior: "smooth",
-      });
-    }
-  }, [activeIndex, userInteracting]);
-
-  const markUserInteraction = () => {
-    setUserInteracting(true);
-    if (interactionTimerRef.current) clearTimeout(interactionTimerRef.current);
-
-    interactionTimerRef.current = setTimeout(() => {
-      setUserInteracting(false);
-    }, 5000);
-  };
-
-  const handleWordClick = (sec) => {
-    setUserInteracting(false);
-    setExternalSeek(sec);
-  };
-
   const handleSaveAll = async () => {
     if (!isAuthenticated) {
       setShowSaveAuthModal(true);
@@ -722,7 +594,6 @@ export default function Preview({ onTitleChange } = {}) {
       setSaveMessage(t("preview.saveFailed"));
     } finally {
       setIsSaving(false);
-      setTimeout(() => setSaveMessage(""), 3000);
     }
   };
 
@@ -769,6 +640,48 @@ export default function Preview({ onTitleChange } = {}) {
     window.location.hash = "#/create";
   };
 
+  const previewBadgeMeta = category ? "" : titleMeta;
+  const downloadUrl = episodeId
+    ? `${API_BASE}/api/audio/${encodeURIComponent(episodeId)}/download`
+    : "";
+
+  const footerActions =
+    showPreviewSaveAction || episodeId ? (
+      <>
+        {showPreviewSaveAction ? (
+          <button
+            type="button"
+            onClick={handleSaveAll}
+            disabled={isSaving}
+            title={t("preview.saveTooltip")}
+            className="inline-flex h-11 w-full min-w-0 shrink-0 items-center justify-center gap-2 rounded-2xl bg-black px-5 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[10.75rem] dark:bg-white dark:text-black"
+          >
+            <Save className="h-4 w-4 shrink-0" />
+            {isSaving ? t("preview.saving") : t("preview.save")}
+          </button>
+        ) : null}
+        {episodeId ? (
+          <button
+            type="button"
+            onClick={async () => {
+              const link = `${window.location.origin}/#/share/${encodeURIComponent(episodeId)}`;
+              try {
+                await navigator.clipboard.writeText(link);
+                setSaveMessage("Share link copied.");
+                setSaveMessageType("success");
+              } catch {
+                setSaveMessage(link);
+                setSaveMessageType("info");
+              }
+            }}
+            className="inline-flex h-11 w-full min-w-0 shrink-0 items-center justify-center rounded-2xl bg-purple-600 px-5 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 sm:w-auto sm:min-w-[10.75rem]"
+          >
+            Share Podcast
+          </button>
+        ) : null}
+      </>
+    ) : null;
+
   return (
     <div
       className={[
@@ -776,353 +689,32 @@ export default function Preview({ onTitleChange } = {}) {
         i18n.language === "ar" ? "text-right" : "text-left",
       ].join(" ")}
     >
-      <div
-        className={[
-          "flex min-h-0 w-full min-w-0 flex-1 flex-col",
-          useDashboardGlassTone ? dashboardShellClass : "",
-        ].join(" ")}
-      >
-      <div
-        className={useDashboardGlassTone ? dashboardContentClass : "flex w-full min-w-0 flex-1 flex-col px-0 py-0"}
-      >
-        {saveMessage && (
-          <div className="fixed left-4 right-4 top-20 z-50 sm:left-auto sm:right-6">
-            <div
-              className={[
-                "rounded-xl px-4 py-3 shadow-lg border text-sm font-medium",
-                saveMessageType === "success"
-                  ? "bg-emerald-50 text-emerald-900 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-100 dark:border-emerald-800/40"
-                  : saveMessageType === "error"
-                  ? "bg-rose-50 text-rose-900 border-rose-200 dark:bg-rose-900/20 dark:text-rose-100 dark:border-rose-800/40"
-                  : "bg-white text-black border-black/10 dark:bg-neutral-900 dark:text-white dark:border-white/10",
-              ].join(" ")}
-            >
-              {saveMessage}
-            </div>
-          </div>
-        )}
-
-        <div className={previewPageGlassShellClass}>
-          <div className={previewPageInnerClass}>
-            <div className="w-full min-w-0 max-w-7xl space-y-1">
-              <div className="flex min-w-0 items-center gap-3 sm:gap-4">
-                <button
-                  onClick={handleBack}
-                  className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition"
-                  aria-label={t("preview.back")}
-                  title={t("preview.back")}
-                >
-                  <ChevronLeft className={`w-5 h-5 ${i18n.language === "ar" ? "rotate-180" : ""}`} />
-                </button>
-                <div className="min-w-0 flex-1">
-                  <h1 className="text-xl font-bold [overflow-wrap:anywhere] text-black dark:text-white">
-                    {t("preview.title")}
-                  </h1>
-                  <p className="text-sm text-black/60 [overflow-wrap:anywhere] dark:text-white/60">
-                    {t("preview.subtitle")}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className={previewTitleCardClass}>
-              {resolvedCoverSrc ? (
-                <div className="flex min-w-0 flex-row items-stretch bg-white dark:bg-neutral-950 sm:items-start md:items-stretch">
-                  <div className="relative flex w-24 shrink-0 items-stretch justify-start self-stretch overflow-hidden border-r border-black/10 bg-neutral-100/30 p-0 dark:border-white/10 dark:bg-neutral-900/40 max-sm:rounded-s-[28px] max-[360px]:w-20 sm:h-auto sm:rounded-none sm:w-[7.5rem] sm:bg-white sm:p-2 md:h-auto md:w-24 md:rounded-none md:bg-white md:p-0 dark:sm:bg-neutral-950 dark:md:bg-neutral-950">
-                    <img
-                      src={resolvedCoverSrc}
-                      alt={`${displayTitle} cover`}
-                      className={[
-                        "block h-full w-full min-h-0 min-w-0",
-                        "object-cover object-center",
-                        "sm:object-contain sm:object-left",
-                        "md:object-cover md:object-center",
-                      ].join(" ")}
-                      onError={() => setCoverImageFailed(true)}
-                    />
-                  </div>
-
-                  <div className="flex min-w-0 flex-1 items-start sm:items-center bg-[linear-gradient(115deg,rgba(255,255,255,0.97)_0%,rgba(255,255,255,0.95)_48%,rgba(250,246,253,0.92)_76%,rgba(241,234,247,0.74)_100%)] p-4 max-sm:px-3 max-sm:py-3 sm:p-5 md:min-h-24 md:py-3 dark:bg-[linear-gradient(115deg,rgba(23,23,26,0.92)_0%,rgba(23,23,26,0.9)_46%,rgba(40,32,52,0.82)_76%,rgba(72,57,95,0.58)_100%)]">
-                    <div className="flex w-full min-w-0 flex-col gap-3 sm:gap-4 sm:flex-row sm:items-center sm:justify-between md:gap-3">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs uppercase tracking-wider text-black/55 dark:text-white/55">
-                          {t("preview.titleLabel")}
-                        </p>
-                        <h2
-                          dir={titleDir}
-                          className="mt-1.5 max-w-4xl break-words text-xl font-semibold leading-tight text-black dark:text-white"
-                        >
-                          {displayTitle}
-                        </h2>
-                      </div>
-
-                      {titleMeta && !category ? (
-                        <div className="flex w-full min-w-0 items-center sm:w-auto sm:justify-end">
-                          <span className="inline-flex max-w-full min-w-0 items-center rounded-full border border-black/5 bg-white/75 px-3 py-2 text-sm text-black/60 [overflow-wrap:anywhere] dark:border-white/10 dark:bg-white/10 dark:text-white/60 sm:px-4">
-                            {titleMeta}
-                          </span>
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="bg-[linear-gradient(115deg,rgba(255,255,255,0.97)_0%,rgba(255,255,255,0.95)_48%,rgba(250,246,253,0.92)_76%,rgba(241,234,247,0.74)_100%)] p-4 sm:p-6 dark:bg-[linear-gradient(115deg,rgba(23,23,26,0.92)_0%,rgba(23,23,26,0.9)_46%,rgba(40,32,52,0.82)_76%,rgba(72,57,95,0.58)_100%)]">
-                  <div className="flex min-w-0 items-center gap-3 sm:gap-4">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-black/5 bg-white/70 dark:border-white/10 dark:bg-purple-900/30">
-                      <Mic2 className="h-6 w-6 text-purple-600 dark:text-purple-400" />
-                    </div>
-
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs uppercase tracking-wider text-black/55 dark:text-white/55">
-                        {t("preview.titleLabel")}
-                      </p>
-                      <h2
-                        dir={titleDir}
-                        className="mt-1.5 max-w-4xl break-words text-xl font-semibold leading-tight text-black dark:text-white"
-                      >
-                        {displayTitle}
-                      </h2>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-        <div className="preview-layout-grid grid w-full min-w-0 max-w-full grid-cols-1 items-start gap-6 lg:grid-cols-12">
-          <div className="flex min-w-0 max-w-full flex-col gap-4 lg:col-span-7">
-            <div className={`${previewCardClass} relative w-full min-w-0 max-w-full overflow-hidden p-3 sm:p-4`}>
-              <WeCastAudioPlayer
-                src={audioUrl}
-                title={displayTitle}
-                downloadUrl={
-                  episodeId
-                    ? `${API_BASE}/api/audio/${encodeURIComponent(episodeId)}/download`
-                    : ""
-                }
-                onTimeUpdate={(sec) => setCurrentTime(sec)}
-                externalSeek={externalSeek}
-              />
-            </div>
-
-            {/* Transcript */}
-            <div
-              ref={transcriptCardRef}
-              className={`${previewCardClass} w-full min-h-[260px] min-w-0 max-w-full p-5`}
-            >
-              <div className="mb-3 flex min-w-0 items-center justify-between gap-2">
-                <div className="min-w-0 text-sm font-bold [overflow-wrap:anywhere]">
-                  {t("preview.liveTranscript")}
-                </div>
-                <div className="shrink-0 text-xs text-black/50 dark:text-white/50">
-                  {userInteracting ? t("preview.manualScroll") : t("preview.autoFollow")}
-                </div>
-              </div>
-
-              <div
-                ref={transcriptRef}
-                dir={transcriptDir}
-                onWheel={markUserInteraction}
-                onTouchStart={markUserInteraction}
-                onTouchMove={markUserInteraction}
-                onMouseDown={markUserInteraction}
-                className={[
-                  "preview-transcript-scroll min-w-0 max-w-full overflow-y-auto overflow-x-hidden text-[15px] leading-8 [overflow-wrap:anywhere]",
-                  transcriptDir === "rtl" ? "pl-2 text-right sm:pl-3" : "pr-2 text-left sm:pr-3",
-                ].join(" ")}
-              >
-                <div dir={transcriptDir} className="min-w-0 max-w-full text-[15px] leading-8 [overflow-wrap:anywhere]">
-                  {transcriptTokens.map((tok) => {
-                    if (tok.type === "speaker") {
-                      return (
-                        <React.Fragment key={tok.key}>
-                          <br />
-                          <button
-                            onClick={() => handleWordClick(tok.start)}
-                            className={[
-                              "font-extrabold text-black/80 dark:text-white/80 hover:underline",
-                              transcriptDir === "rtl" ? "ml-2" : "mr-2",
-                            ].join(" ")}
-                            title={t("preview.jumpToTime", { time: formatMMSS(tok.start) })}
-                          >
-                            {tok.speaker}:
-                          </button>
-                        </React.Fragment>
-                      );
-                    }
-
-                    const w = tok.word;
-                    const active = tok.index === activeIndex;
-
-                    return (
-                      <span
-                        key={tok.key}
-                        ref={active ? activeWordRef : null}
-                        onClick={() => handleWordClick(w.start)}
-                        title={t("preview.jumpToSeconds", { seconds: w.start.toFixed(2) })}
-                        className={[
-                          "cursor-pointer rounded px-1.5 py-0.5 transition-all duration-150",
-                          active
-                            ? "bg-yellow-300 text-black"
-                            : "hover:bg-black/5 dark:hover:bg-white/10",
-                        ].join(" ")}
-                      >
-                        {w.w}{" "}
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {!hasSpeakerInfo && words.length > 0 && (
-                <p className="mt-3 text-xs text-black/50 dark:text-white/40">
-                  {t("preview.noSpeakers")}
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="flex min-w-0 max-w-full flex-col gap-4 lg:col-span-5">
-            {/* Chapters card */}
-            <div className={`${previewCardClass} max-w-full min-w-0 overflow-hidden`}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsChaptersOpen((v) => {
-                      const next = !v;
-                      if (next) setIsSummaryOpen(false);
-                      return next;
-                    });
-                  }}
-                  className="flex w-full min-w-0 items-center justify-between gap-2 px-4 py-3.5 text-sm font-bold sm:px-5 sm:py-4"
-                >
-                  <span className="min-w-0 [overflow-wrap:anywhere]">{t("preview.chapters")}</span>
-                  <span className="text-black/50 dark:text-white/50">v</span>
-                </button>
-                {isChaptersOpen && (
-                  <div className="border-t border-black/5 px-4 pb-4 dark:border-white/10 sm:px-5 sm:pb-5">
-                    {!chapters || chapters.length === 0 ? (
-                      <p className="text-sm text-black/60 dark:text-white/60 italic">
-                        {t("preview.noChapters")}
-                      </p>
-                    ) : (
-                      <div className="space-y-2">
-                        {chapters.map((c, idx) => (
-                          <button
-                            key={idx}
-                            onClick={() => setExternalSeek(c.startSec)}
-                            className={[
-                              "w-full min-w-0 max-w-full rounded-xl px-2 py-2 transition hover:bg-black/5 dark:hover:bg-white/10 sm:px-3",
-                              i18n.language === "ar" ? "text-right" : "text-left",
-                            ].join(" ")}
-                          >
-                            <div className="flex min-w-0 items-center justify-between gap-2">
-                              <span className="min-w-0 flex-1 font-medium [overflow-wrap:anywhere]">
-                                {c.title}
-                              </span>
-                              <span className="shrink-0 tabular-nums text-xs text-black/50 dark:text-white/50">
-                                {formatMMSS(c.startSec)}
-                              </span>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-            </div>
-
-            {/* Summary card */}
-            <div className={`${previewCardClass} max-w-full min-w-0 overflow-hidden`}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsSummaryOpen((v) => {
-                      const next = !v;
-                      if (next) setIsChaptersOpen(false);
-                      return next;
-                    });
-                  }}
-                  className={[
-                    "flex w-full min-w-0 items-center justify-between gap-2 px-4 text-sm font-bold sm:px-5",
-                    isSummaryOpen ? "py-2.5 sm:py-3" : "py-3.5 sm:py-4",
-                  ].join(" ")}
-                >
-                  <span className="min-w-0 [overflow-wrap:anywhere]">{t("preview.summary")}</span>
-                  <span className="text-black/50 dark:text-white/50">v</span>
-                </button>
-                {isSummaryOpen && (
-                  <div className="border-t border-black/5 px-4 pb-4 pt-0 text-sm leading-relaxed text-black/60 [overflow-wrap:anywhere] dark:border-white/10 dark:text-white/60 sm:px-5 sm:pb-5">
-                    {isGeneratingSummary ? (
-                      <div className="flex items-center space-x-2">
-                        <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                        <span className="text-gray-500">
-                          {t("preview.creatingSummary")}
-                        </span>
-                      </div>
-                    ) : summary ? (
-                      <>
-                        <p>{summary}</p>
-                        <p className="text-xs mt-2 text-gray-500 dark:text-gray-400">
-                          {summary.split(/\s+/).length} {t("preview.words")}
-                        </p>
-                      </>
-                    ) : (
-                      <p className="italic text-gray-500">
-                        {t("preview.summaryPending")}
-                      </p>
-                    )}
-                    {isGeneratingSummary && (
-                      <div className="mt-2 text-xs text-blue-500 animate-pulse">
-                        {t("preview.generatingSummary")}
-                      </div>
-                    )}
-                  </div>
-                )}
-            </div>
-          </div>
-        </div>
-
-        {(showPreviewSaveAction || episodeId) ? (
-          <div className="flex w-full min-w-0 flex-col gap-3 pt-1 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-3">
-            {showPreviewSaveAction ? (
-              <button
-                type="button"
-                onClick={handleSaveAll}
-                disabled={isSaving}
-                title={t("preview.saveTooltip")}
-                className="inline-flex h-11 w-full min-w-0 shrink-0 items-center justify-center gap-2 rounded-2xl bg-black px-5 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[10.75rem] dark:bg-white dark:text-black"
-              >
-                <Save className="h-4 w-4 shrink-0" />
-                {isSaving ? t("preview.saving") : t("preview.save")}
-              </button>
-            ) : null}
-            {episodeId ? (
-              <button
-                type="button"
-                onClick={async () => {
-                  const link = `${window.location.origin}/#/share/${encodeURIComponent(episodeId)}`;
-                  try {
-                    await navigator.clipboard.writeText(link);
-                    setSaveMessage("Share link copied.");
-                    setSaveMessageType("success");
-                  } catch {
-                    setSaveMessage(link);
-                    setSaveMessageType("info");
-                  }
-                  setTimeout(() => setSaveMessage(""), 3000);
-                }}
-                className="inline-flex h-11 w-full min-w-0 shrink-0 items-center justify-center rounded-2xl bg-purple-600 px-5 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 sm:w-auto sm:min-w-[10.75rem]"
-              >
-                Share Podcast
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-          </div>
-        </div>
-      </div>
-      </div>
+      <ViewportToast
+        message={saveMessage}
+        type={saveMessageType}
+        onDismiss={() => setSaveMessage("")}
+      />
+      <EpisodePreviewView
+        t={t}
+        i18n={i18n}
+        displayTitle={displayTitle}
+        titleMeta={previewBadgeMeta}
+        titleDir={titleDir}
+        resolvedCoverSrc={resolvedCoverSrc}
+        onCoverError={() => setCoverImageFailed(true)}
+        audioUrl={audioUrl}
+        downloadUrl={downloadUrl}
+        words={words}
+        chapters={chapters}
+        summary={summary}
+        isGeneratingSummary={isGeneratingSummary}
+        podcastLanguage={podcastLanguage}
+        onBack={handleBack}
+        headerTitle={t("preview.title")}
+        headerSubtitle={t("preview.subtitle")}
+        useDashboardGlassTone={useDashboardGlassTone}
+        footerActions={footerActions}
+      />
       <SavePreviewAuthModal
         open={showSaveAuthModal}
         title={t("preview.saveAuthTitle")}

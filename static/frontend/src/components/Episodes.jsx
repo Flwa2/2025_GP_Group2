@@ -194,6 +194,7 @@ export default function Episodes() {
   const [q, setQ] = useState("");
   const [episodes, setEpisodes] = useState(() => initialEpisodesCache?.items || []);
   const [loading, setLoading] = useState(() => Boolean(token && !initialEpisodesCache));
+  const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
   const [actionInfo, setActionInfo] = useState("");
@@ -237,6 +238,7 @@ export default function Episodes() {
       setEpisodes(cached.items);
       setRecycleBin(cached.recycleBin);
       setLoading(false);
+      setRefreshing(true);
     } else if (token) {
       setLoading(true);
     } else {
@@ -247,6 +249,7 @@ export default function Episodes() {
       setEpisodes([]);
       setRecycleBin([]);
       setLoadError("");
+      setRefreshing(false);
       return () => {
         isMounted = false;
       };
@@ -271,7 +274,9 @@ export default function Episodes() {
         if (!cached) setLoadError(t("episodes.loadError"));
       })
       .finally(() => {
-        if (isMounted) setLoading(false);
+        if (!isMounted) return;
+        setLoading(false);
+        setRefreshing(false);
       });
 
     return () => {
@@ -841,13 +846,22 @@ export default function Episodes() {
               {playerError && (
                 <p className="mt-2 max-w-full break-words text-sm text-rose-600 dark:text-rose-300 md:mt-3">{playerError}</p>
               )}
+              {refreshing && !loading && (
+                <p className="mt-2 flex items-center gap-2 text-sm text-black/60 dark:text-white/60 md:mt-3">
+                  <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-purple-500 border-t-transparent" aria-hidden />
+                  {t("episodes.refreshing", "Updating library…")}
+                </p>
+              )}
 
               <div className="mt-5 flex min-h-0 w-full min-w-0 max-w-full flex-1 flex-col overflow-x-clip rounded-2xl border border-black/10 bg-white/45 p-3 dark:border-white/10 dark:bg-neutral-900/35 md:mt-6 md:p-4 lg:mt-7 lg:p-5">
                 <div className="episodes-scrollbar h-full min-h-0 w-full min-w-0 max-w-full flex-1 overflow-y-auto overflow-x-clip overscroll-contain px-0 pe-2 md:pe-3">
                   <div className="grid w-full min-w-0 max-w-full gap-3 md:gap-4">
                 {loading ? (
                   <div className="max-w-full break-words rounded-xl border border-black/10 bg-white/90 p-4 text-sm text-black/70 dark:border-white/10 dark:bg-neutral-900/70 dark:text-white/70 md:p-6">
-                    {t("episodes.loading")}
+                    <div className="flex items-center gap-3">
+                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-purple-500 border-t-transparent" aria-hidden />
+                      <span>{t("episodes.loading", "Loading podcast…")}</span>
+                    </div>
                   </div>
                 ) : loadError ? (
                   <div className="max-w-full break-words rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 md:p-6">{loadError}</div>
