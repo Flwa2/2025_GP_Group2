@@ -660,6 +660,24 @@ def _normalize_username(value):
     return _clean_username(value).lower()
 
 
+def _is_user_account_deleted(data):
+    if not data:
+        return False
+    if data.get("deleted") is True:
+        return True
+    if str(data.get("accountStatus") or "").strip().lower() == "deleted":
+        return True
+    if data.get("deletedAt"):
+        return True
+    return False
+
+
+def _user_doc_is_active(doc):
+    if not doc or not doc.exists:
+        return False
+    return not _is_user_account_deleted(doc.to_dict() or {})
+
+
 def _stored_username_display(data):
     return (
         data.get("username")
@@ -709,6 +727,79 @@ def _username_reservation_ref(username_lower):
     return db.collection(USERNAME_RESERVATIONS_COLLECTION).document(username_lower)
 
 
+def _reservation_points_to_active_user(reservation_data):
+    if not reservation_data:
+        return False
+    reserved_path = (reservation_data.get("userRef") or "").strip()
+    if not reserved_path:
+        return True
+    try:
+        reserved_doc = db.document(reserved_path).get()
+    except Exception:
+        return False
+    return _user_doc_is_active(reserved_doc)
+
+
+def _release_username_reservations_for_user(*, user_data, user_ref=None, email="", firebase_uid=""):
+    username_lower = _stored_username_lower(user_data or {})
+    if not username_lower:
+        return
+
+    reservation_ref = _username_reservation_ref(username_lower)
+    try:
+        reservation_doc = reservation_ref.get()
+        if reservation_doc.exists:
+            reservation_data = reservation_doc.to_dict() or {}
+            if _reservation_owned_by(
+                reservation_data,
+                email=email,
+                firebase_uid=firebase_uid,
+                user_ref=user_ref,
+            ):
+                reservation_ref.delete()
+    except Exception as reservation_error:
+        print(f"Username reservation release failed for {username_lower}: {reservation_error}")
+
+
+def _purge_firebase_auth_user(firebase_uid="", email=""):
+    from firebase_admin import auth as fb_auth
+
+    deleted = False
+    normalized_email = _normalize_email(email)
+    uid = (firebase_uid or "").strip()
+
+    if uid:
+        try:
+            fb_auth.revoke_refresh_tokens(uid)
+        except Exception as revoke_error:
+            print(f"Firebase token revoke skipped for uid {uid}: {revoke_error}")
+        try:
+            fb_auth.delete_user(uid)
+            deleted = True
+        except fb_auth.UserNotFoundError:
+            pass
+        except Exception as delete_error:
+            print(f"Firebase Auth delete failed for uid {uid}: {delete_error}")
+
+    if deleted or not normalized_email:
+        return deleted
+
+    try:
+        user_record = fb_auth.get_user_by_email(normalized_email)
+        try:
+            fb_auth.revoke_refresh_tokens(user_record.uid)
+        except Exception as revoke_error:
+            print(f"Firebase token revoke skipped for email {normalized_email}: {revoke_error}")
+        fb_auth.delete_user(user_record.uid)
+        deleted = True
+    except fb_auth.UserNotFoundError:
+        pass
+    except Exception as delete_error:
+        print(f"Firebase Auth delete failed for email {normalized_email}: {delete_error}")
+
+    return deleted
+
+
 def get_user_docs_by_username(username):
     normalized_username = _normalize_username(username)
     if not normalized_username:
@@ -732,17 +823,22 @@ def get_user_docs_by_username(username):
                     f"{reservation_error}"
                 )
                 reserved_doc = None
-            if reserved_doc and reserved_doc.exists:
+            if _user_doc_is_active(reserved_doc):
                 matches.append(reserved_doc)
                 seen_paths.add(reserved_doc.reference.path)
                 if len(matches) >= 2:
                     return matches[:2]
+            elif reservation_doc.exists:
+                try:
+                    reservation_doc.reference.delete()
+                except Exception:
+                    pass
 
         if reserved_email:
             reserved_doc = get_user_doc_by_candidates(reserved_email, email=reserved_email)
             if (
                 reserved_doc
-                and reserved_doc.exists
+                and _user_doc_is_active(reserved_doc)
                 and reserved_doc.reference.path not in seen_paths
             ):
                 matches.append(reserved_doc)
@@ -756,6 +852,8 @@ def get_user_docs_by_username(username):
     for doc in query_matches:
         if doc.reference.path in seen_paths:
             continue
+        if not _user_doc_is_active(doc):
+            continue
         matches.append(doc)
         seen_paths.add(doc.reference.path)
         if len(matches) >= 2:
@@ -765,6 +863,8 @@ def get_user_docs_by_username(username):
         if doc.reference.path in seen_paths:
             continue
         data = doc.to_dict() or {}
+        if _is_user_account_deleted(data):
+            continue
         if not (
             data.get("password_hash")
             or data.get("username")
@@ -876,7 +976,12 @@ def _username_is_taken(username_lower, *, email="", firebase_uid="", user_ref=No
             firebase_uid=firebase_uid,
             user_ref=user_ref,
         ):
-            return True
+            if _reservation_points_to_active_user(reservation_data):
+                return True
+            try:
+                reservation_doc.reference.delete()
+            except Exception:
+                pass
 
     for doc in get_user_docs_by_username(username_lower):
         if _user_doc_matches_identity(
@@ -1063,14 +1168,15 @@ def get_user_doc_by_firebase_uid(firebase_uid):
         return None
 
     direct_doc = db.collection("users").document(normalized_uid).get()
-    if direct_doc.exists:
+    if _user_doc_is_active(direct_doc):
         return direct_doc
 
     matches = list(
         db.collection("users").where("firebaseUid", "==", normalized_uid).limit(1).stream()
     )
-    if matches:
-        return matches[0]
+    for doc in matches:
+        if _user_doc_is_active(doc):
+            return doc
     return None
 
 
@@ -1092,7 +1198,7 @@ def get_user_doc_by_candidates(user_id=None, firebase_uid="", email=""):
             continue
         checked_direct_ids.add(candidate)
         doc = db.collection("users").document(candidate).get()
-        if doc.exists:
+        if _user_doc_is_active(doc):
             return doc
 
     query_emails = []
@@ -1105,8 +1211,9 @@ def get_user_doc_by_candidates(user_id=None, firebase_uid="", email=""):
         matches = list(
             db.collection("users").where("email", "==", normalized_email).limit(1).stream()
         )
-        if matches:
-            return matches[0]
+        for doc in matches:
+            if _user_doc_is_active(doc):
+                return doc
     return None
 
 
@@ -1114,6 +1221,10 @@ def get_current_user_identity():
     current_email = _normalize_email(session.get("user_id") or get_current_user_email())
     current_uid = (session.get("firebase_uid") or get_current_user_firebase_uid() or "").strip()
     doc = get_user_doc_by_candidates(current_email, firebase_uid=current_uid, email=current_email)
+    if doc and doc.exists and not _user_doc_is_active(doc):
+        session.clear()
+        session.modified = True
+        doc = None
     data = doc.to_dict() or {} if doc and doc.exists else {}
     resolved_email = _normalize_email(data.get("email") or current_email)
     resolved_uid = (data.get("firebaseUid") or current_uid).strip()
@@ -4810,6 +4921,8 @@ def api_profile_update():
 
     user_ref = existing_doc.reference
     existing_data = existing_doc.to_dict() or {}
+    if _is_user_account_deleted(existing_data):
+        return jsonify(error="User not found"), 404
     old_avatar_key = (existing_data.get("avatarKey") or "").strip()
 
     # Handle form data with possible file upload
@@ -4961,6 +5074,10 @@ def api_delete_account():
     data = identity.get("data") or {}
     if not user_id:
         return jsonify(error="Not logged in"), 401
+    if not doc or not doc.exists or _is_user_account_deleted(data):
+        session.clear()
+        session.modified = True
+        return jsonify(error="User not found"), 404
 
     def _purge_podcast_document(ref):
         snapshot = ref.get()
@@ -4975,6 +5092,19 @@ def api_delete_account():
         ref.delete()
 
     try:
+        user_ref_for_reservation = doc.reference if doc and doc.exists else None
+        _release_username_reservations_for_user(
+            user_data=data,
+            user_ref=user_ref_for_reservation,
+            email=user_id,
+            firebase_uid=firebase_uid,
+        )
+
+        firebase_deleted = _purge_firebase_auth_user(
+            firebase_uid=firebase_uid,
+            email=user_id,
+        )
+
         deleted_podcast_ids = set()
         podcast_candidates = [user_id]
         for previous_email in data.get("previousEmails") or []:
@@ -5023,6 +5153,7 @@ def api_delete_account():
             deletedAccount=user_id,
             deletedUserDocs=deleted_user_docs,
             deletedPodcasts=len(deleted_podcast_ids),
+            firebaseAuthDeleted=firebase_deleted,
         )
     except Exception as e:
         print(f"Account deletion error: {e}")

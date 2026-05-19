@@ -81,6 +81,10 @@ function looksLikeEmail(value) {
   return /\S+@\S+\.\S+/.test(String(value || "").trim());
 }
 
+function normalizeUsername(value) {
+  return String(value || "").trim();
+}
+
 function storedAccountEmail() {
   for (const storage of [localStorage, sessionStorage]) {
     try {
@@ -124,6 +128,7 @@ export default function Account() {
   const [newEmail, setNewEmail] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [authProvider, setAuthProvider] = useState("unknown");
+  const [usernameFieldError, setUsernameFieldError] = useState("");
   
   const [profile, setProfile] = useState({
     displayName: "WeCast User",
@@ -151,6 +156,28 @@ export default function Account() {
       setToastMsg("");
       setToastType("success");
     }, 3000);
+  };
+
+  const checkUsernameAvailability = async (username) => {
+    const res = await fetch(`${API_BASE}/api/username-availability`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ username }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const message =
+        data?.message ||
+        data?.error ||
+        (data?.code === "username_taken"
+          ? "This username is already taken."
+          : "We couldn't validate that username right now. Please try again.");
+      const err = new Error(message);
+      err.code = data?.code || "";
+      throw err;
+    }
+    return data;
   };
 
   const hasUnsavedChanges = JSON.stringify(profile) !== JSON.stringify(originalProfile) || avatarFile !== null;
@@ -323,8 +350,29 @@ export default function Account() {
     }
 
     setSaving(true);
+    setUsernameFieldError("");
     try {
       const token = localStorage.getItem("token") || sessionStorage.getItem("token");
+
+      const nextUsername = normalizeUsername(profile.displayName);
+      const previousUsername = normalizeUsername(originalProfile.displayName);
+      if (
+        nextUsername &&
+        nextUsername.toLowerCase() !== previousUsername.toLowerCase()
+      ) {
+        try {
+          await checkUsernameAvailability(nextUsername);
+        } catch (usernameError) {
+          const message =
+            usernameError?.code === "username_taken" || usernameError?.message
+              ? usernameError.message
+              : "This username is already taken.";
+          setUsernameFieldError(message);
+          showToast(message, "error");
+          setSaving(false);
+          return;
+        }
+      }
       
       // If not authenticated, save to localStorage only
       if (!token) {
@@ -372,6 +420,9 @@ export default function Account() {
         );
         serverError.code = errorData.code || "";
         serverError.serverRejected = true;
+        if (serverError.code === "username_taken") {
+          setUsernameFieldError(serverError.message);
+        }
         throw serverError;
       }
 
@@ -758,15 +809,23 @@ export default function Account() {
             </div>
 
             <div className="col-span-2 grid min-w-0 grid-cols-1 gap-4 min-[520px]:grid-cols-2 md:col-start-2 md:grid-cols-2">
-              <Field label={t("account.username")} hint={t("account.usernameHint")}>
+              <Field label={t("account.username")} hint={usernameFieldError ? "" : t("account.usernameHint")}>
                 <input
-                  className="form-input"
+                  className={`form-input ${usernameFieldError ? "border-rose-500 ring-1 ring-rose-500/40 dark:border-rose-400 dark:ring-rose-400/35" : ""}`}
                   placeholder="Enter your name"
                   value={profile.displayName}
-                  onChange={(e) =>
-                    setProfile({ ...profile, displayName: e.target.value })
-                  }
+                  aria-invalid={Boolean(usernameFieldError)}
+                  onChange={(e) => {
+                    setUsernameFieldError("");
+                    setProfile({ ...profile, displayName: e.target.value });
+                  }}
                 />
+                {usernameFieldError ? (
+                  <p className="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-rose-600 dark:text-rose-400">
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                    {usernameFieldError}
+                  </p>
+                ) : null}
               </Field>
 
               {profile.email && (
