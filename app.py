@@ -24,6 +24,7 @@ import math
 import numbers
 import secrets
 from firebase_admin import firestore
+from werkzeug.exceptions import HTTPException
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta, timezone
 import jwt
@@ -203,8 +204,10 @@ def _configured_frontend_origins():
     ]
     configured = []
 
-    raw_env = (os.getenv("FRONTEND_ORIGINS") or "").strip()
-    if raw_env:
+    for env_name in ("CORS_ORIGINS", "FRONTEND_ORIGINS"):
+        raw_env = (os.getenv(env_name) or "").strip()
+        if not raw_env:
+            continue
         for value in raw_env.split(","):
             candidate = value.strip().rstrip("/")
             if candidate and candidate not in configured:
@@ -225,14 +228,12 @@ def _configured_frontend_origins():
 
 app = Flask(__name__)
 FRONTEND_ORIGINS = _configured_frontend_origins()
+CORS_ALLOW_HEADERS = ["Content-Type", "Authorization", "X-Requested-With"]
+CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 
 
 def _cors_origin_specs():
-    """
-    Origins allowed for credentialed cross-origin requests (JWT + cookies).
-    Keep this explicit because credentials are enabled; never pair credentials
-    with a wildcard origin.
-    """
+    """Origins allowed for credentialed cross-origin requests (JWT + cookies)."""
     return list(FRONTEND_ORIGINS)
 
 
@@ -247,27 +248,58 @@ def _is_allowed_cors_origin(origin):
     return False
 
 
+def _apply_cors_headers(response):
+    """Attach CORS headers for allowed production/dev frontend origins."""
+    if not has_request_context():
+        return response
+
+    origin = (request.headers.get("Origin") or "").strip().rstrip("/")
+    if not _is_allowed_cors_origin(origin):
+        return response
+
+    response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Vary"] = "Origin"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Allow-Methods"] = ", ".join(CORS_ALLOW_METHODS)
+    response.headers["Access-Control-Allow-Headers"] = ", ".join(CORS_ALLOW_HEADERS)
+    response.headers["Access-Control-Max-Age"] = "86400"
+    return response
+
+
 CORS(
     app,
-    resources={r"/*": {"origins": _cors_origin_specs()}},
-    supports_credentials=True,
-    allow_headers=["Content-Type", "Authorization"],
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    resources={
+        r"/api/*": {
+            "origins": _cors_origin_specs(),
+            "supports_credentials": True,
+            "allow_headers": CORS_ALLOW_HEADERS,
+            "methods": CORS_ALLOW_METHODS,
+            "expose_headers": ["Content-Type"],
+            "max_age": 86400,
+        }
+    },
+    intercept_exceptions=True,
+    automatic_options=True,
 )
 
 
 @app.after_request
 def add_cors_headers(response):
-    origin = (request.headers.get("Origin") or "").strip().rstrip("/")
-    if _is_allowed_cors_origin(origin):
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Vary"] = "Origin"
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers["Access-Control-Allow-Methods"] = (
-            "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-        )
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-    return response
+    return _apply_cors_headers(response)
+
+
+@app.errorhandler(HTTPException)
+def handle_http_exception(error):
+    if request.path.startswith("/api/"):
+        payload = {
+            "ok": False,
+            "error": error.description or error.name,
+            "code": f"http_{error.code}",
+        }
+        response = jsonify(payload)
+        response.status_code = error.code
+        return _apply_cors_headers(response)
+    return error
 
 
 @app.errorhandler(500)
@@ -275,14 +307,35 @@ def handle_internal_server_error(error):
     if request.path.startswith("/api/"):
         print("API 500 error:", error, flush=True)
         traceback.print_exc()
-        return _api_json_response(
+        return _apply_cors_headers(
+            _api_json_response(
+                {
+                    "error": "Internal server error.",
+                    "code": "server_error",
+                },
+                status=500,
+            )
+        )
+    raise error
+
+
+@app.errorhandler(Exception)
+def handle_unhandled_exception(error):
+    if not request.path.startswith("/api/"):
+        raise error
+    if isinstance(error, HTTPException):
+        raise error
+    print("API unhandled error:", error, flush=True)
+    traceback.print_exc()
+    return _apply_cors_headers(
+        _api_json_response(
             {
                 "error": "Internal server error.",
                 "code": "server_error",
             },
             status=500,
         )
-    raise error
+    )
 
 
 # Server-side sessions (JWT is primary; cookies are supplementary for /api/me)
@@ -7283,89 +7336,118 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
 
 @app.post("/api/audio")
 def api_audio():
-    
-    payload = request.get_json(silent=True) or {}
-    script = (payload.get("scriptText") or request.form.get("scriptText") or "").strip()
-    podcast_id = (payload.get("podcastId") or "").strip()
-    ui_language = (payload.get("language") or "").strip().lower()
+    try:
+        payload = request.get_json(silent=True) or {}
+        script = (payload.get("scriptText") or request.form.get("scriptText") or "").strip()
+        podcast_id = (payload.get("podcastId") or "").strip()
+        ui_language = (payload.get("language") or "").strip().lower()
 
-    print("DEBUG /api/audio script length:", len(script))
-    print("DEBUG /api/audio first 200 chars:", script[:200])
-    print("DEBUG /api/audio podcastId:", podcast_id)
-    incoming_speakers_info = payload.get("speakers_info")
-    if isinstance(incoming_speakers_info, list) and incoming_speakers_info:
-        draft = session.get("create_draft") or {}
-        draft["speakers_info"] = incoming_speakers_info
-        session["create_draft"] = draft
+        print("DEBUG /api/audio script length:", len(script))
+        print("DEBUG /api/audio first 200 chars:", script[:200])
+        print("DEBUG /api/audio podcastId:", podcast_id)
+        incoming_speakers_info = payload.get("speakers_info")
+        if isinstance(incoming_speakers_info, list) and incoming_speakers_info:
+            draft = session.get("create_draft") or {}
+            draft["speakers_info"] = incoming_speakers_info
+            session["create_draft"] = draft
+            session.modified = True
+
+        if not podcast_id:
+            return _apply_cors_headers(
+                _api_json_response(
+                    {"error": "Missing podcastId", "code": "missing_podcast_id"},
+                    status=400,
+                )
+            )
+
+        ok, result = synthesize_audio_from_script(script, podcast_id)
+        if not ok:
+            return _apply_cors_headers(
+                _api_json_response(
+                    {
+                        "error": result if isinstance(result, str) else "Audio generation failed.",
+                        "code": "audio_generation_failed",
+                    },
+                    status=400,
+                )
+            )
+
+        session["last_audio_url"] = result["url"]
+        session["last_audio_key"] = result.get("audioKey", "")
         session.modified = True
 
-    if not podcast_id:
-        return jsonify(error="Missing podcastId"), 400
+        user_id = get_current_podcast_owner_id()
+        if user_id and podcast_id:
+            podcast_ref = db.collection("podcasts").document(podcast_id)
+            doc = podcast_ref.get()
 
-    ok, result = synthesize_audio_from_script(script, podcast_id)
-    if not ok:
-        return jsonify(error=result), 400
+            if doc.exists:
+                pdata = doc.to_dict() or {}
+                if _podcast_owned_by_user(pdata, user_id):
+                    words = result.get("words") or []
+                    transcript_text = build_transcript_text_with_speakers(words)
+                    old_audio_key = (pdata.get("audioKey") or "").strip()
+                    new_audio_key = (result.get("audioKey") or "").strip()
 
-    # keep audio in session 
-    session["last_audio_url"] = result["url"]
-    session["last_audio_key"] = result.get("audioKey", "")
-    session.modified = True
+                    if ui_language in ("en", "ar"):
+                        podcast_ref.set({"language": ui_language}, merge=True)
 
-    # NEW: save live transcript (word timeline) to Firestore
-    user_id = get_current_podcast_owner_id()
-    if user_id and podcast_id:
-        podcast_ref = db.collection("podcasts").document(podcast_id)
-        doc = podcast_ref.get()
+                    podcast_ref.set(
+                        {
+                            "transcriptText": transcript_text,
+                            "transcriptUpdatedAt": firestore.SERVER_TIMESTAMP,
+                            "audioUrl": result["url"],
+                            "audioKey": new_audio_key,
+                            "audioUpdatedAt": firestore.SERVER_TIMESTAMP,
+                        },
+                        merge=True,
+                    )
 
-        if doc.exists:
-            pdata = doc.to_dict() or {}
-            if _podcast_owned_by_user(pdata, user_id):
-                words = result.get("words") or []
-                transcript_text = build_transcript_text_with_speakers(words)
-                old_audio_key = (pdata.get("audioKey") or "").strip()
-                new_audio_key = (result.get("audioKey") or "").strip()
+                    if old_audio_key and new_audio_key and old_audio_key != new_audio_key:
+                        delete_from_r2_quietly(old_audio_key, label="Audio replace")
 
-                if ui_language in ("en", "ar"):
-                    podcast_ref.set({
-                        "language": ui_language,
-                    }, merge=True)
+                    podcast_ref.collection("transcripts").document("main").set(
+                        {
+                            "words": words,
+                            "updatedAt": firestore.SERVER_TIMESTAMP,
+                        },
+                        merge=True,
+                    )
 
-                # Save transcript text in main podcast doc (small)
-                podcast_ref.set({
-                    "transcriptText": transcript_text,
-                    "transcriptUpdatedAt": firestore.SERVER_TIMESTAMP,
-                    "audioUrl": result["url"],
-                    "audioKey": new_audio_key,
-                    "audioUpdatedAt": firestore.SERVER_TIMESTAMP,
-                }, merge=True)
-
-                if old_audio_key and new_audio_key and old_audio_key != new_audio_key:
-                    delete_from_r2_quietly(old_audio_key, label="Audio replace")
-
-                # Save full word timeline in a subcollection doc
-                podcast_ref.collection("transcripts").document("main").set({
-                    "words": words,
-                    "updatedAt": firestore.SERVER_TIMESTAMP,
-                }, merge=True)
-                
-                # Generate & save chapters
-                language = ui_language or pdata.get("language") or "en"
-                chapters = build_chapters(words, transcript_text, language=language)
-
-                podcast_ref.set({
-                    "chapters": chapters,
-                    "chaptersUpdatedAt": firestore.SERVER_TIMESTAMP,
-                }, merge=True)
+                    language = ui_language or pdata.get("language") or "en"
+                    chapters = build_chapters(words, transcript_text, language=language)
+                    podcast_ref.set(
+                        {
+                            "chapters": chapters,
+                            "chaptersUpdatedAt": firestore.SERVER_TIMESTAMP,
+                        },
+                        merge=True,
+                    )
+                else:
+                    print("WARN: user does not own this podcast. Not saving transcript.")
             else:
-                print("WARN: user does not own this podcast. Not saving transcript.")
-        else:
-            print("WARN: podcastId not found. Not saving transcript.")
+                print("WARN: podcastId not found. Not saving transcript.")
 
-    return jsonify(
-        url=result["url"],
-        audioKey=result.get("audioKey", ""),
-        words=result["words"]
-    )
+        return _apply_cors_headers(
+            jsonify(
+                ok=True,
+                url=result["url"],
+                audioKey=result.get("audioKey", ""),
+                words=result["words"],
+            )
+        )
+    except Exception as audio_error:
+        print("API /api/audio failed:", audio_error, flush=True)
+        traceback.print_exc()
+        return _apply_cors_headers(
+            _api_json_response(
+                {
+                    "error": "Audio generation failed on the server. Please try again.",
+                    "code": "audio_server_error",
+                },
+                status=500,
+            )
+        )
 
 @app.get("/api/audio/<podcast_id>")
 def get_audio(podcast_id):

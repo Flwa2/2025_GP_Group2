@@ -3,7 +3,7 @@ services:
     name: wecast
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: gunicorn app:app --timeout 300 --graceful-timeout 60
     envVars:
       - key: OPENAI_API_KEY
         sync: false
@@ -40,6 +40,8 @@ services:
       - key: FLASK_ENV
         value: production
       - key: FRONTEND_ORIGINS
+        value: https://wecastsa.com,https://www.wecastsa.com,http://localhost:5173,http://127.0.0.1:5173
+      - key: CORS_ORIGINS
         value: https://wecastsa.com,https://www.wecastsa.com,http://localhost:5173,http://127.0.0.1:5173
   - type: static
     name: wecast-frontend
