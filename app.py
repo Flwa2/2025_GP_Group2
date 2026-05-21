@@ -14,6 +14,10 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from pydub import AudioSegment
 from shutil import which
+import gc
+import shutil
+import subprocess
+import tempfile
 from io import BytesIO
 from elevenlabs.client import ElevenLabs
 import os
@@ -466,6 +470,22 @@ def upload_bytes_to_r2(file_bytes: bytes, object_key: str, content_type: str):
         Key=object_key,
         Body=file_bytes,
         ContentType=content_type,
+    )
+    return object_key
+
+
+def upload_file_to_r2(file_path: str, object_key: str, content_type: str):
+    """Stream upload from disk to avoid loading large audio files into RAM."""
+    if not r2_client:
+        raise RuntimeError("R2 client is not configured.")
+    if not file_path or not os.path.isfile(file_path):
+        raise RuntimeError("Upload file path is missing or invalid.")
+
+    r2_client.upload_file(
+        file_path,
+        R2_BUCKET_NAME,
+        object_key,
+        ExtraArgs={"ContentType": content_type},
     )
     return object_key
 
@@ -7218,7 +7238,139 @@ def parse_script_into_segments(script: str):
 
     return segments
 
+
+def _audio_memory_log(stage, **details):
+    """Lightweight RSS logging for Render OOM diagnosis."""
+    parts = [f"stage={stage}"]
+    try:
+        import psutil
+
+        rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
+        parts.append(f"rss_mb={rss_mb:.1f}")
+    except Exception:
+        pass
+    for key, value in details.items():
+        if value is not None:
+            parts.append(f"{key}={value}")
+    print("Audio memory:", " ".join(parts), flush=True)
+
+
+def _resolve_ffmpeg_executable():
+    configured = (getattr(AudioSegment, "converter", None) or os.getenv("FFMPEG_PATH") or "").strip()
+    if configured and os.path.isfile(configured):
+        return configured
+    return which("ffmpeg") or "ffmpeg"
+
+
+def _resolve_ffprobe_executable():
+    configured = (getattr(AudioSegment, "ffprobe", None) or os.getenv("FFPROBE_PATH") or "").strip()
+    if configured and os.path.isfile(configured):
+        return configured
+    return which("ffprobe") or "ffprobe"
+
+
+def _ffprobe_duration_seconds(path):
+    ffprobe = _resolve_ffprobe_executable()
+    cmd = [
+        ffprobe,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ffprobe failed for {path}: {(result.stderr or result.stdout or '').strip()[:200]}"
+        )
+    return max(0.0, float(result.stdout.strip()))
+
+
+def _ffmpeg_create_silence_mp3(output_path, duration_ms=500):
+    ffmpeg = _resolve_ffmpeg_executable()
+    duration_sec = max(0.05, duration_ms / 1000.0)
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=r=44100:cl=mono",
+        "-t",
+        str(duration_sec),
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "128k",
+        "-ar",
+        "44100",
+        "-ac",
+        "1",
+        output_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ffmpeg silence failed: {(result.stderr or result.stdout or '').strip()[:300]}"
+        )
+
+
+def _ffmpeg_concat_mp3_files(segment_paths, output_path):
+    """Concatenate MP3 files on disk without loading all segments into RAM."""
+    if not segment_paths:
+        raise RuntimeError("No audio segments to concatenate.")
+
+    ffmpeg = _resolve_ffmpeg_executable()
+    work_dir = os.path.dirname(output_path) or "."
+    list_path = os.path.join(work_dir, "concat_list.txt")
+
+    def _escape(path):
+        return path.replace("'", "'\\''")
+
+    with open(list_path, "w", encoding="utf-8") as list_file:
+        for segment_path in segment_paths:
+            list_file.write(f"file '{_escape(os.path.abspath(segment_path))}'\n")
+
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        list_path,
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "128k",
+        "-ar",
+        "44100",
+        "-ac",
+        "1",
+        output_path,
+    ]
+    _audio_memory_log("ffmpeg_concat_start", segment_count=len(segment_paths))
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    try:
+        os.remove(list_path)
+    except OSError:
+        pass
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ffmpeg concat failed: {(result.stderr or result.stdout or '').strip()[:400]}"
+        )
+    _audio_memory_log("ffmpeg_concat_done", output_path=output_path)
+
+
 def synthesize_audio_from_script(script: str, podcast_id: str = ""):
+    """
+    Disk-streamed synthesis: one segment file at a time, ffmpeg concat at the end.
+    Avoids holding every TTS/music clip in RAM (prevents Render worker SIGKILL/OOM).
+    """
     music_index = 0
     script = (script or "").strip()
     if not script:
@@ -7229,104 +7381,152 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
         return False, "Nothing to read after cleaning script."
 
     speaker_to_voice, default_voice = build_speaker_voice_map()
-
-    audio_parts = []
     word_timeline = []
-    timeline_offset = 0.0  # seconds
+    timeline_offset = 0.0
+    lead_silence_sec = 0.5
 
-    for speaker, text in segments:
-
-        # ----------------------
-        # MUSIC SEGMENT
-        # ----------------------
-        if speaker.strip().lower() == "__music__":
-            intro = session.get("introMusic", "")
-            body = session.get("bodyMusic", "")
-            outro = session.get("outroMusic", "")
-
-            if music_index == 0:
-                selected_music = intro
-            elif music_index in (1, 2):
-                selected_music = body
-            else:
-                selected_music = outro
-
-            music_index += 1
-
-            if selected_music:
-                music_path = os.path.join("static", "music", selected_music)
-                if os.path.exists(music_path):
-                    music_clip = AudioSegment.from_mp3(music_path)
-                    audio_parts.append(music_clip)
-
-                    # advance offset
-                    timeline_offset += (len(music_clip) / 1000.0)
-
-            continue
-
-        # ----------------------
-        # SPEECH SEGMENT
-        # ----------------------
-        if is_arabic(text):
-            tts_text = text.strip()
-        else:
-            tts_text = clean_script_for_tts(text)
-
-        if not tts_text.strip():
-            continue
-
-        voice_id = speaker_to_voice.get(speaker, default_voice)
-
-        try:
-            audio_bytes, segment_words = eleven_tts_with_timestamps(
-                text=tts_text,
-                voice_id=voice_id,
-                model_id="eleven_multilingual_v2",
-            )
-        except Exception as e:
-            return False, str(e)
-
-        speech_segment = AudioSegment.from_file(BytesIO(audio_bytes), format="mp3")
-        audio_parts.append(speech_segment)
-
-        # shift segment words to global timeline
-        for w in segment_words:
-            word_timeline.append({
-                "w": w["w"],
-                "start": w["start"] + timeline_offset,
-                "end": w["end"] + timeline_offset,
-                "speaker": speaker,
-            })
-
-        # advance offset by this speech duration
-        timeline_offset += (len(speech_segment) / 1000.0)
-
-    if not audio_parts:
-        return False, "No audio data generated."
-
-    final_audio = AudioSegment.silent(duration=500)
-    timeline_offset_final = 0.5  # because we added 500ms silence
-
-    for w in word_timeline:
-        w["start"] += timeline_offset_final
-        w["end"] += timeline_offset_final
-
-    for item in audio_parts:
-        final_audio += item
-
-    safe_id = re.sub(r"[^A-Za-z0-9_-]", "", podcast_id or "")
-    if not safe_id:
-        safe_id = "output"
-
+    safe_id = re.sub(r"[^A-Za-z0-9_-]", "", podcast_id or "") or "output"
     local_filename = f"output_{safe_id}.mp3"
-    buffer = BytesIO()
-    final_audio.export(buffer, format="mp3")
-    mp3_bytes = buffer.getvalue()
-
-    # Upload to R2
     object_key = f"episodes/{safe_id}/{local_filename}"
-    upload_bytes_to_r2(mp3_bytes, object_key, "audio/mpeg")
+
+    _audio_memory_log("synthesis_start", podcast_id=safe_id, segment_count=len(segments))
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="wecast_audio_") as temp_dir:
+            segment_paths = []
+            silence_path = os.path.join(temp_dir, "lead_silence.mp3")
+            _audio_memory_log("lead_silence_create")
+            _ffmpeg_create_silence_mp3(silence_path, duration_ms=500)
+            segment_paths.append(silence_path)
+            gc.collect()
+
+            for index, (speaker, text) in enumerate(segments):
+                if speaker.strip().lower() == "__music__":
+                    intro = session.get("introMusic", "")
+                    body = session.get("bodyMusic", "")
+                    outro = session.get("outroMusic", "")
+
+                    if music_index == 0:
+                        selected_music = intro
+                    elif music_index in (1, 2):
+                        selected_music = body
+                    else:
+                        selected_music = outro
+
+                    music_index += 1
+                    if not selected_music:
+                        continue
+
+                    music_path = os.path.join("static", "music", selected_music)
+                    if not os.path.exists(music_path):
+                        continue
+
+                    segment_paths.append(os.path.abspath(music_path))
+                    _audio_memory_log(
+                        "music_segment_added",
+                        index=index,
+                        music=selected_music,
+                        segment_count=len(segment_paths),
+                    )
+                    try:
+                        timeline_offset += _ffprobe_duration_seconds(music_path)
+                    except Exception as duration_error:
+                        print(f"WARN music duration probe failed: {duration_error}")
+                    gc.collect()
+                    continue
+
+                if is_arabic(text):
+                    tts_text = text.strip()
+                else:
+                    tts_text = clean_script_for_tts(text)
+
+                if not tts_text.strip():
+                    continue
+
+                voice_id = speaker_to_voice.get(speaker, default_voice)
+                segment_path = os.path.join(temp_dir, f"speech_{index:04d}.mp3")
+
+                _audio_memory_log(
+                    "tts_request_start",
+                    index=index,
+                    speaker=speaker,
+                    chars=len(tts_text),
+                )
+                try:
+                    audio_bytes, segment_words = eleven_tts_with_timestamps(
+                        text=tts_text,
+                        voice_id=voice_id,
+                        model_id="eleven_multilingual_v2",
+                    )
+                except Exception as exc:
+                    return False, str(exc)
+
+                _audio_memory_log(
+                    "tts_request_done",
+                    index=index,
+                    bytes=len(audio_bytes or b""),
+                )
+
+                with open(segment_path, "wb") as segment_file:
+                    segment_file.write(audio_bytes)
+                del audio_bytes
+                gc.collect()
+
+                segment_paths.append(segment_path)
+                segment_duration = 0.0
+                if segment_words:
+                    segment_duration = max(
+                        float(w.get("end") or 0.0) for w in segment_words
+                    )
+                else:
+                    try:
+                        segment_duration = _ffprobe_duration_seconds(segment_path)
+                    except Exception as duration_error:
+                        print(f"WARN speech duration probe failed: {duration_error}")
+
+                for w in segment_words:
+                    word_timeline.append(
+                        {
+                            "w": w["w"],
+                            "start": float(w["start"]) + timeline_offset,
+                            "end": float(w["end"]) + timeline_offset,
+                            "speaker": speaker,
+                        }
+                    )
+
+                timeline_offset += segment_duration
+                _audio_memory_log(
+                    "speech_segment_saved",
+                    index=index,
+                    path=segment_path,
+                    duration_sec=round(segment_duration, 2),
+                    segment_count=len(segment_paths),
+                )
+                gc.collect()
+
+            if len(segment_paths) <= 1:
+                return False, "No audio data generated."
+
+            output_path = os.path.join(temp_dir, local_filename)
+            _audio_memory_log("merge_start", segment_count=len(segment_paths))
+            _ffmpeg_concat_mp3_files(segment_paths, output_path)
+            gc.collect()
+
+            for w in word_timeline:
+                w["start"] += lead_silence_sec
+                w["end"] += lead_silence_sec
+
+            _audio_memory_log("upload_start", output_path=output_path)
+            upload_file_to_r2(output_path, object_key, "audio/mpeg")
+            gc.collect()
+
+    except Exception as synthesis_error:
+        print("Audio synthesis failed:", synthesis_error, flush=True)
+        traceback.print_exc()
+        return False, f"Audio synthesis failed: {synthesis_error}"
+
     signed_url = build_r2_asset_url(object_key, expires_in=3600)
+    _audio_memory_log("synthesis_complete", object_key=object_key)
 
     return True, {
         "url": signed_url,
