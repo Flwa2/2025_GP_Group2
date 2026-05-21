@@ -64,6 +64,7 @@ services:
         source: /*
         destination: /index.html
     envVars:
+      # MUST be the Flask backend — NOT https://wecastsa.com (static host returns empty/HTML for /api/*)
       - key: VITE_API_BASE_URL
         value: https://wecast.onrender.com
       - key: VITE_FIREBASE_API_KEY
