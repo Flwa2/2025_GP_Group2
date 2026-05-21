@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { API_BASE } from "../utils/api";
+import { API_BASE, getAuthHeaders } from "../utils/api";
 
 const EPISODES_CACHE_PREFIX = "wecast:episodesList:";
 const EPISODES_CACHE_TTL_MS = 5 * 60 * 1000;

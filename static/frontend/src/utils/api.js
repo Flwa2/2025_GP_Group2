@@ -45,3 +45,60 @@ function resolveApiBaseUrl() {
 }
 
 export const API_BASE = resolveApiBaseUrl();
+
+/** App JWT from email/social login (required for cross-origin API on wecast.onrender.com). */
+export function getStoredAuthToken() {
+  if (typeof window === "undefined") return "";
+  return (
+    window.localStorage.getItem("token") ||
+    window.sessionStorage.getItem("token") ||
+    ""
+  ).trim();
+}
+
+/** Merge Authorization Bearer + any extra headers (skip Content-Type for FormData). */
+export function getAuthHeaders(extraHeaders = {}) {
+  const headers = { ...(extraHeaders || {}) };
+  const token = getStoredAuthToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+/**
+ * Authenticated fetch: credentials (session cookie) + Bearer JWT (cross-origin).
+ */
+export async function apiFetch(path, options = {}) {
+  const { headers: optionHeaders, body, ...rest } = options;
+  const isFormData =
+    typeof FormData !== "undefined" && body instanceof FormData;
+  const headers = getAuthHeaders(optionHeaders || {});
+
+  if (isFormData) {
+    delete headers["Content-Type"];
+  }
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
+    ...rest,
+    body,
+    headers,
+  });
+
+  const contentType = res.headers.get("content-type") || "";
+  const data = contentType.includes("application/json")
+    ? await res.json()
+    : await res.text();
+
+  if (!res.ok) {
+    const msg =
+      (data && data.error) ||
+      (typeof data === "string" && !data.trim().startsWith("<")
+        ? data
+        : "Request failed");
+    throw new Error(msg);
+  }
+
+  return data;
+}

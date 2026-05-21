@@ -354,6 +354,8 @@ app.config.update(
     SESSION_PERMANENT=False,
     SESSION_COOKIE_SAMESITE=_session_cookie_samesite,
     SESSION_COOKIE_SECURE=_session_cookie_secure,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_PATH="/",
 )
 Session(app)
 
@@ -4571,10 +4573,36 @@ def api_voice_preview():
         details=r.text[:800],
     ), 502
 
+def _log_api_auth_context(route_name: str):
+    """Temporary cross-origin auth diagnostics (Render + wecastsa.com)."""
+    token_payload = _decode_request_token() or {}
+    origin = (request.headers.get("Origin") or "").strip()
+    cookie_names = sorted(request.cookies.keys())
+    owner_id = get_current_podcast_owner_id() or ""
+    email = get_current_user_email() or session.get("user_id") or ""
+    print(
+        "API auth",
+        f"route={route_name}",
+        f"origin={origin or '<none>'}",
+        f"jwt={'yes' if token_payload else 'no'}",
+        f"session_user={'yes' if session.get('user_id') else 'no'}",
+        f"session_uid={'yes' if session.get('firebase_uid') else 'no'}",
+        f"cookies={cookie_names}",
+        f"owner_id={owner_id[:48] if owner_id else '<none>'}",
+        f"email={_mask_email(email) if email else '<none>'}",
+        flush=True,
+    )
+
+
 def _require_login_user():
     user_id = get_current_podcast_owner_id()
     if not user_id:
-        return None, (jsonify(error="Not logged in"), 401)
+        return None, (
+            _apply_cors_headers(
+                jsonify(ok=False, error="Not logged in", code="not_logged_in")
+            ),
+            401,
+        )
     return user_id, None
 
 
@@ -4788,6 +4816,7 @@ def _persist_cover_to_storage_and_doc(podcast_id: str, cover_b64: str, mime_type
 
 @app.get("/api/podcasts/<podcast_id>/finalize")
 def api_finalize_get(podcast_id):
+    _log_api_auth_context("finalize_get")
     user_id, err = _require_login_user()
     if err:
         return err
@@ -4823,6 +4852,7 @@ def api_finalize_get(podcast_id):
 
 @app.post("/api/podcasts/<podcast_id>/cover/generate")
 def api_cover_generate(podcast_id):
+    _log_api_auth_context("cover_generate")
     user_id, err = _require_login_user()
     if err:
         return err
@@ -5074,6 +5104,7 @@ def api_update_podcast(podcast_id):
 
 @app.post("/api/podcasts/<podcast_id>/cover/upload")
 def api_cover_upload(podcast_id):
+    _log_api_auth_context("cover_upload")
     user_id, err = _require_login_user()
     if err:
         return err

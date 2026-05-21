@@ -13,31 +13,7 @@ import {
   PencilLine,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { API_BASE } from "../utils/api";
-
-async function apiFetch(path, options = {}) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    credentials: "include",
-    ...options,
-    headers: {
-      ...(options.headers || {}),
-    },
-  });
-
-  const contentType = res.headers.get("content-type") || "";
-  const data = contentType.includes("application/json")
-    ? await res.json()
-    : await res.text();
-
-  if (!res.ok) {
-    const msg =
-      (data && data.error) ||
-      (typeof data === "string" && !data.trim().startsWith("<") ? data : "Request failed");
-    throw new Error(msg);
-  }
-
-  return data;
-}
+import { apiFetch } from "../utils/api";
 
 function Notice({ notice, noticeType }) {
   if (!notice) return null;

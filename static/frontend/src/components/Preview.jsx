@@ -15,7 +15,7 @@ import {
   storePendingPreviewDraft,
 } from "../utils/authRedirect";
 
-import { API_BASE } from "../utils/api";
+import { API_BASE, getAuthHeaders } from "../utils/api";
 
 const getPortalTarget = () => {
   if (typeof document === "undefined") return null;
@@ -118,10 +118,7 @@ export default function Preview({ onTitleChange } = {}) {
   const [summaryLoadedFromDb, setSummaryLoadedFromDb] = useState(false);
   const [showSaveAuthModal, setShowSaveAuthModal] = useState(false);
   const authToken = localStorage.getItem("token") || sessionStorage.getItem("token") || "";
-  const authHeaders = useMemo(
-    () => (authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-    [authToken]
-  );
+  const authHeaders = useMemo(() => getAuthHeaders(), [authToken]);
   const isAuthenticated = !!authToken;
   const pendingSaveHandledRef = useRef(false);
   const previewNoticeKey = "wecast:previewSaveNotice";
@@ -237,7 +234,10 @@ export default function Preview({ onTitleChange } = {}) {
         if (p?.language) setPodcastLanguage(p.language);
         if (p?.category) setCategory(p.category);
         if (p?.audioKey) {
-          fetch(`${API_BASE}/api/audio/last`, { credentials: "include" })
+          fetch(`${API_BASE}/api/audio/last`, {
+            credentials: "include",
+            headers: getAuthHeaders(),
+          })
             .then((r) => r.json())
             .then((d) => {
               if (d?.url) setAudioUrl(d.url);
@@ -263,7 +263,10 @@ export default function Preview({ onTitleChange } = {}) {
           // Keep preview usable if the last-audio fallback is unavailable.
         });
 
-      fetch(`${API_BASE}/api/transcript/last`, { credentials: "include" })
+      fetch(`${API_BASE}/api/transcript/last`, {
+        credentials: "include",
+        headers: getAuthHeaders(),
+      })
         .then((r) => r.json())
         .then((d) => {
           if (Array.isArray(d?.words)) setWords(d.words);

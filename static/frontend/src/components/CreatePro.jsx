@@ -66,7 +66,7 @@ import { normalizeGenderToken, isNeutralGenderValue } from "../utils/voiceGender
 import { clientRefineLibraryVoices } from "../utils/voiceLibraryRefine";
 import { ensureVoiceLibraryCatalog, getCachedVoiceCatalog } from "../utils/voiceLibraryCache";
 
-import { API_BASE } from "../utils/api";
+import { API_BASE, getAuthHeaders } from "../utils/api";
 
 const DEFAULT_VOICE_LANGUAGE = "en";
 const LANGUAGE_LABELS = {
@@ -540,7 +540,10 @@ const getVoiceId = (v) => v?.providerVoiceId || v?.id || v?.docId || "";
 const fetchFallbackVoices = useCallback(async () => {
     const params = new URLSearchParams();
     params.set("limit", "300");
-    const res = await fetch(`${API_BASE}/api/voices?${params.toString()}`, { credentials: "include" });
+    const res = await fetch(`${API_BASE}/api/voices?${params.toString()}`, {
+      credentials: "include",
+      headers: getAuthHeaders(),
+    });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || `Fallback voices failed (${res.status})`);
     return Array.isArray(data?.items) ? data.items : [];
@@ -552,7 +555,7 @@ const fetchLibraryItemsPage = useCallback(async (applied, page, pageSize = VOICE
     }
     const params = buildLibraryUrlSearchParams(applied, page, pageSize);
     const url = `${API_BASE}/api/voices/elevenlabs?${params.toString()}`;
-    const res = await fetch(url, { credentials: "include" });
+    const res = await fetch(url, { credentials: "include", headers: getAuthHeaders() });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
         const msg = data?.error || `Failed to load voices (${res.status})`;
@@ -578,7 +581,10 @@ const loadSharedVoiceCatalog = useCallback(async () => {
             const params = new URLSearchParams();
             params.set("provider", "ElevenLabs");
             params.set("limit", "300");
-            const res = await fetch(`${API_BASE}/api/voices?${params.toString()}`, { credentials: "include" });
+            const res = await fetch(`${API_BASE}/api/voices?${params.toString()}`, {
+      credentials: "include",
+      headers: getAuthHeaders(),
+    });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) return [];
             return Array.isArray(data?.items) ? data.items : [];
@@ -719,7 +725,10 @@ useEffect(() => {
 useEffect(() => {
     (async () => {
         try {
-            const res = await fetch(`${API_BASE}/api/voices/library-options`, { credentials: "include" });
+            const res = await fetch(`${API_BASE}/api/voices/library-options`, {
+              credentials: "include",
+              headers: getAuthHeaders(),
+            });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) return;
             setLibraryFilterOptions({
@@ -895,10 +904,9 @@ useEffect(() => {
             const res = await fetch(`${API_BASE}/api/voices/preview`, {
                 method: "POST",
                 credentials: "include",
-                headers: {
+                headers: getAuthHeaders({
                     "Content-Type": "application/json",
-                    Authorization: `Bearer ${localStorage.getItem("token") || sessionStorage.getItem("token")}`,
-                },
+                }),
                 body: JSON.stringify({
                     voiceId,
                     text: "Hi, this is a WeCast sample.",
@@ -1597,7 +1605,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
             const res = await fetch(`${API_BASE}/api/generate`, {
                 method: "POST",
                 credentials: "include",
-                headers: { "Content-Type": "application/json" },
+                headers: getAuthHeaders({ "Content-Type": "application/json" }),
                 body: JSON.stringify({
                     script_style: scriptStyle,
                     speakers: Number(speakersCount),
@@ -1674,6 +1682,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
             try {
                 const draftRes = await fetch(`${API_BASE}/api/draft`, {
                     credentials: "include",
+                    headers: getAuthHeaders(),
                 });
                 if (draftRes.ok) {
                     const draft = await draftRes.json();
@@ -1706,7 +1715,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
             const response = await fetch(`${API_BASE}/api/audio`, {
             method: "POST",
             credentials: "include",
-            headers: { "Content-Type": "application/json" },
+            headers: getAuthHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({
                 scriptText: generatedScript,
                 podcastId,          // ✅ IMPORTANT
@@ -2979,7 +2988,7 @@ const exportScript = async (format = "pdf") => {
                                                 await fetch(`${API_BASE}/api/save-music`, {
                                                     method: "POST",
                                                     credentials: "include",
-                                                    headers: { "Content-Type": "application/json" },
+                                                    headers: getAuthHeaders({ "Content-Type": "application/json" }),
                                                     body: JSON.stringify({
                                                         introMusic: null,
                                                         bodyMusic: null,
@@ -3012,7 +3021,7 @@ const exportScript = async (format = "pdf") => {
                                             await fetch(`${API_BASE}/api/save-music`, {
                                                 method: "POST",
                                                 credentials: "include",
-                                                headers: { "Content-Type": "application/json" },
+                                                headers: getAuthHeaders({ "Content-Type": "application/json" }),
                                                 body: JSON.stringify({ introMusic, bodyMusic, outroMusic }),
                                             });
                                             setStep(6);

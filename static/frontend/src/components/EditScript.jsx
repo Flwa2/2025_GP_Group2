@@ -5,7 +5,7 @@ import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
 import { useTranslation } from "react-i18next";
 
-import { API_BASE } from "../utils/api";
+import { API_BASE, getAuthHeaders } from "../utils/api";
 
 const getPortalTarget = () => {
   if (typeof document === "undefined") return null;
@@ -18,12 +18,6 @@ function readEditData() {
   } catch {
     return {};
   }
-}
-
-function authHeaders() {
-  const token = localStorage.getItem("token") || sessionStorage.getItem("token");
-  if (!token) return {};
-  return { Authorization: `Bearer ${token}` };
 }
 
 function formatDraftSavedTime(date = new Date()) {
@@ -53,7 +47,7 @@ async function syncEditScriptDraftToServer(content, showTitle) {
       credentials: "include",
       headers: {
         "Content-Type": "application/json",
-        ...authHeaders(),
+        ...getAuthHeaders(),
       },
       body: JSON.stringify({
         mode: "draft",
