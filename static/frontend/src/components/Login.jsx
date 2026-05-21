@@ -195,12 +195,12 @@ export default function Login() {
     }
 
     if (data.token) {
+      // Cross-origin API (wecast.onrender.com) requires Bearer; keep token in localStorage.
+      localStorage.setItem("token", data.token);
       if (rememberMe) {
-        localStorage.setItem("token", data.token);
         sessionStorage.removeItem("token");
       } else {
         sessionStorage.setItem("token", data.token);
-        localStorage.removeItem("token");
       }
     }
 

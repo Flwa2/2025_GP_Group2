@@ -13,7 +13,7 @@ import {
   PencilLine,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { apiFetch } from "../utils/api";
+import { apiFetch, ensureAuthTokenForApi } from "../utils/api";
 
 function Notice({ notice, noticeType }) {
   if (!notice) return null;
@@ -76,10 +76,9 @@ export default function FinalizePublish() {
   async function loadFinalize() {
     setLoading(true);
     try {
+      await ensureAuthTokenForApi();
       const data = await apiFetch(`/api/podcasts/${podcastId}/finalize`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "load_finalize" }),
+        method: "GET",
       });
       setTitle(data.title || "");
       setSavedTitle(data.title || "");
@@ -100,7 +99,14 @@ export default function FinalizePublish() {
 
   useEffect(() => {
     if (!podcastId) return;
-    loadFinalize();
+    (async () => {
+      try {
+        await ensureAuthTokenForApi();
+      } catch {
+        // loadFinalize surfaces auth errors
+      }
+      loadFinalize();
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [podcastId]);
 
@@ -145,6 +151,7 @@ export default function FinalizePublish() {
     setBusy(true);
     setBusyText(hasCover ? "Regenerating cover art..." : "Generating cover art...");
     try {
+      await ensureAuthTokenForApi();
       const resp = await apiFetch(`/api/podcasts/${podcastId}/cover/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -201,6 +208,7 @@ export default function FinalizePublish() {
     setBusy(true);
     setBusyText("Uploading cover art...");
     try {
+      await ensureAuthTokenForApi();
       const fd = new FormData();
       fd.append("file", file);
 

@@ -19,6 +19,7 @@ function storeAuthSession({ token, user, remember = true }) {
   const tokenStorage = remember ? localStorage : sessionStorage;
   const otherTokenStorage = remember ? sessionStorage : localStorage;
 
+  localStorage.setItem("token", token);
   tokenStorage.setItem("token", token);
   otherTokenStorage.removeItem("token");
 

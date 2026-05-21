@@ -11,6 +11,9 @@ const STATIC_FRONTEND_HOSTS = new Set([
   "wecast-frontend.onrender.com",
 ]);
 
+/** Must match Login.jsx / socialAuth.js storage key. */
+const AUTH_TOKEN_KEYS = ["token", "wecastToken", "authToken", "appToken"];
+
 function normalizeApiBaseUrl(value) {
   return String(value || "").trim().replace(/\/$/, "");
 }
@@ -49,7 +52,6 @@ function resolveApiBaseUrl() {
 
 export const API_BASE = resolveApiBaseUrl();
 
-const AUTH_TOKEN_KEYS = ["token", "wecastToken", "authToken", "appToken"];
 let authTokenBootstrapPromise = null;
 
 /** App JWT from email/social login (required for cross-origin API on wecast.onrender.com). */
@@ -66,67 +68,16 @@ export function getStoredAuthToken() {
   return "";
 }
 
-function storeAuthToken(token) {
+/** Persist app JWT where apiFetch can always read it (cross-origin Render API). */
+export function storeAuthToken(token) {
   const value = String(token || "").trim();
   if (!value || typeof window === "undefined") return "";
   window.localStorage.setItem("token", value);
-  window.sessionStorage.removeItem("token");
+  window.sessionStorage.setItem("token", value);
+  window.dispatchEvent(
+    new StorageEvent("storage", { key: "token", newValue: value })
+  );
   return value;
-}
-
-async function bootstrapAuthTokenFromSession() {
-  if (typeof window === "undefined") return "";
-
-  const existing = getStoredAuthToken();
-  if (existing) return existing;
-
-  if (!authTokenBootstrapPromise) {
-    authTokenBootstrapPromise = fetch(`${API_BASE}/api/auth/session-token`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source: "apiFetch" }),
-    })
-      .then(async (res) => {
-        const contentType = res.headers.get("content-type") || "";
-        const data = contentType.includes("application/json")
-          ? await res.json()
-          : {};
-        if (!res.ok || !data?.token) return bootstrapAuthTokenFromFirebase();
-        return storeAuthToken(data.token);
-      })
-      .catch(() => bootstrapAuthTokenFromFirebase())
-      .finally(() => {
-        authTokenBootstrapPromise = null;
-      });
-  }
-
-  return authTokenBootstrapPromise;
-}
-
-async function bootstrapAuthTokenFromFirebase() {
-  try {
-    const firebaseUser = await getFirebaseUserForAuthBootstrap();
-    if (!firebaseUser?.getIdToken) return "";
-
-    const idToken = await firebaseUser.getIdToken(true);
-    if (!idToken) return "";
-
-    const res = await fetch(`${API_BASE}/api/firebase-email-login`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ idToken }),
-    });
-    const contentType = res.headers.get("content-type") || "";
-    const data = contentType.includes("application/json")
-      ? await res.json()
-      : {};
-    if (!res.ok || !data?.token) return "";
-    return storeAuthToken(data.token);
-  } catch {
-    return "";
-  }
 }
 
 function getFirebaseUserForAuthBootstrap() {
@@ -152,8 +103,83 @@ function getFirebaseUserForAuthBootstrap() {
     window.setTimeout(() => {
       unsubscribe();
       finish(auth?.currentUser || null);
-    }, 1500);
+    }, 2500);
   });
+}
+
+async function getFirebaseIdTokenForBootstrap() {
+  try {
+    const firebaseUser = await getFirebaseUserForAuthBootstrap();
+    if (!firebaseUser?.getIdToken) return "";
+    return (await firebaseUser.getIdToken(true)) || "";
+  } catch {
+    return "";
+  }
+}
+
+async function bootstrapAuthTokenFromSession(force = false) {
+  if (typeof window === "undefined") return "";
+
+  const existing = getStoredAuthToken();
+  if (existing && !force) return existing;
+
+  if (!authTokenBootstrapPromise || force) {
+    authTokenBootstrapPromise = (async () => {
+      const firebaseIdToken = await getFirebaseIdTokenForBootstrap();
+      const res = await fetch(`${API_BASE}/api/auth/session-token`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: "apiFetch",
+          idToken: firebaseIdToken || undefined,
+        }),
+      });
+      const contentType = res.headers.get("content-type") || "";
+      const data = contentType.includes("application/json")
+        ? await res.json()
+        : {};
+      if (res.ok && data?.token) {
+        return storeAuthToken(data.token);
+      }
+      return bootstrapAuthTokenFromFirebase();
+    })().finally(() => {
+      authTokenBootstrapPromise = null;
+    });
+  }
+
+  return authTokenBootstrapPromise;
+}
+
+async function bootstrapAuthTokenFromFirebase() {
+  try {
+    const idToken = await getFirebaseIdTokenForBootstrap();
+    if (!idToken) return "";
+
+    const res = await fetch(`${API_BASE}/api/firebase-email-login`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idToken }),
+    });
+    const contentType = res.headers.get("content-type") || "";
+    const data = contentType.includes("application/json")
+      ? await res.json()
+      : {};
+    if (!res.ok || !data?.token) return "";
+    return storeAuthToken(data.token);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Ensure a Bearer token exists before cover/finalize/account API calls.
+ */
+export async function ensureAuthTokenForApi(force = false) {
+  const existing = getStoredAuthToken();
+  if (existing && !force) return existing;
+  return bootstrapAuthTokenFromSession(force);
 }
 
 /** Merge Authorization Bearer + any extra headers (skip Content-Type for FormData). */
@@ -177,10 +203,28 @@ async function getAuthHeadersForRequest(extraHeaders = {}) {
   return headers;
 }
 
+function logApiFetchAuth(url, token) {
+  if (typeof console === "undefined") return;
+  console.log("[apiFetch auth]", {
+    url,
+    hasToken: Boolean(token),
+    tokenPreview: token ? token.slice(0, 12) : null,
+  });
+}
+
+function isAuthIdentityMissingError(data, status) {
+  if (status !== 401) return false;
+  if (!data || typeof data !== "object") return false;
+  return (
+    data.code === "auth_identity_missing" ||
+    String(data.error || "").toLowerCase().includes("log in again")
+  );
+}
+
 /**
  * Authenticated fetch: credentials (session cookie) + Bearer JWT (cross-origin).
  */
-export async function apiFetch(path, options = {}) {
+export async function apiFetch(path, options = {}, attempt = 0) {
   const { headers: optionHeaders, body, ...rest } = options;
   const isFormData =
     typeof FormData !== "undefined" && body instanceof FormData;
@@ -192,13 +236,7 @@ export async function apiFetch(path, options = {}) {
     delete headers["Content-Type"];
   }
 
-  if (import.meta.env.DEV && typeof console !== "undefined") {
-    console.log("[apiFetch auth]", {
-      url,
-      hasToken: Boolean(token),
-      tokenPreview: token ? token.slice(0, 12) : null,
-    });
-  }
+  logApiFetchAuth(url, token);
 
   const res = await fetch(url, {
     credentials: "include",
@@ -211,6 +249,17 @@ export async function apiFetch(path, options = {}) {
   const data = contentType.includes("application/json")
     ? await res.json()
     : await res.text();
+
+  if (
+    !res.ok &&
+    attempt === 0 &&
+    isAuthIdentityMissingError(data, res.status)
+  ) {
+    const refreshed = await bootstrapAuthTokenFromSession(true);
+    if (refreshed) {
+      return apiFetch(path, options, attempt + 1);
+    }
+  }
 
   if (!res.ok) {
     const msg =

@@ -1451,6 +1451,63 @@ def _jwt_auth_payload():
     return _decode_request_token() or {}
 
 
+def _resolve_identity_from_firebase_id_token(id_token: str):
+    """Mint session + identity from a verified Firebase ID token (cover/finalize bootstrap)."""
+    from firebase_admin import auth as fb_auth
+
+    if not id_token or not _looks_like_firebase_jwt(id_token):
+        return None
+
+    try:
+        decoded = fb_auth.verify_id_token(id_token)
+    except Exception as exc:
+        print(f"Firebase idToken verify failed: {exc}", flush=True)
+        return None
+
+    email = _normalize_email(decoded.get("email") or "")
+    firebase_uid = (decoded.get("uid") or "").strip()
+    if not email and not firebase_uid:
+        return None
+
+    name = (decoded.get("name") or "").strip()
+    sign_in_provider = decoded.get("firebase", {}).get("sign_in_provider", "oauth")
+    mapped_provider = _map_firebase_sign_in_provider(sign_in_provider)
+
+    if email:
+        try:
+            _upsert_firebase_user_profile(
+                email=email,
+                display_name=name,
+                auth_provider=mapped_provider,
+                email_verified=bool(decoded.get("email_verified")),
+                firebase_uid=firebase_uid,
+                mark_login=False,
+            )
+        except Exception as exc:
+            print(f"Firebase profile upsert during token refresh failed: {exc}", flush=True)
+
+    if email:
+        session["user_id"] = email
+    if firebase_uid:
+        session["firebase_uid"] = firebase_uid
+    session.modified = True
+
+    doc = get_user_doc_by_candidates(email, firebase_uid=firebase_uid, email=email)
+    if doc and doc.exists and not _user_doc_is_active(doc):
+        session.clear()
+        session.modified = True
+        doc = None
+    data = doc.to_dict() or {} if doc and doc.exists else {}
+    resolved_email = _normalize_email(data.get("email") or email)
+    resolved_uid = (data.get("firebaseUid") or firebase_uid).strip()
+    return {
+        "email": resolved_email,
+        "firebaseUid": resolved_uid,
+        "doc": doc,
+        "data": data,
+    }
+
+
 def _sync_session_from_jwt(payload=None):
     """Restore session from app JWT when Render lost filesystem session store."""
     payload = payload if payload is not None else _jwt_auth_payload()
@@ -4697,9 +4754,20 @@ def _auth_identity_missing_response():
 @app.post("/api/auth/session-token")
 def api_auth_session_token():
     _log_api_auth_context("auth_session_token")
+    body = request.get_json(silent=True) or {}
+    firebase_id_token = (body.get("idToken") or "").strip()
+
     identity = get_current_user_identity()
     email = _normalize_email(identity.get("email") or "")
     firebase_uid = (identity.get("firebaseUid") or "").strip()
+
+    if not email and not firebase_uid and firebase_id_token:
+        refreshed = _resolve_identity_from_firebase_id_token(firebase_id_token)
+        if refreshed:
+            identity = refreshed
+            email = _normalize_email(identity.get("email") or "")
+            firebase_uid = (identity.get("firebaseUid") or "").strip()
+
     if not email and not firebase_uid:
         _log_api_auth_context("auth_session_token", failure_reason="auth_identity_missing")
         return _auth_identity_missing_response()
