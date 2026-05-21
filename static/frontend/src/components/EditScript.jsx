@@ -3,6 +3,7 @@ import { CheckCircle2, ChevronRight, Mic2, Download, ChevronDown } from "lucide-
 import { createPortal } from "react-dom";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
+import { useTranslation } from "react-i18next";
 
 const API_BASE = import.meta.env.PROD
   ? "https://wecast.onrender.com"
@@ -45,7 +46,7 @@ async function syncEditScriptDraftToServer(content, showTitle) {
   const title =
     String(showTitle || "").trim() ||
     String(editData.showTitle || editData.episodeTitle || "").trim() ||
-    "Podcast Show";
+    t("editScript.defaultTitle");
 
   const r = await fetch(
     `${API_BASE}/api/podcast/${encodeURIComponent(podcastId)}/update`,
@@ -86,7 +87,7 @@ function resolveEditorDraft(source = {}) {
     String(source.showTitle || "").trim() ||
     String(source.episodeTitle || "").trim() ||
     String(source.title || "").trim() ||
-    "Podcast Show";
+    t("editScript.defaultTitle");
 
   const directScript =
     String(source.currentScript || "").trim() ||
@@ -125,11 +126,11 @@ function LoadingOverlay({ show, logoSrc = "/logo.png" }) {
           />
           <div>
             <p className="font-extrabold text-black dark:text-white">
-              Exporting your script…
+              {t("editScript.exportingTitle")}
             </p>
             <p className="text-sm text-neutral-600 dark:text-neutral-400">
-              Your PDF is being generated. Please wait a moment.
-            </p>
+              {t("editScript.exportingDesc")}    
+        </p>
           </div>
         </div>
         <div className="mt-5 h-2 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
@@ -170,10 +171,11 @@ const StepLine = ({ on }) => (
 );
 
 export default function EditScript() {
+  const { t } = useTranslation();
   const [script, setScript] = useState("");
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [saveMsg, setSaveMsg] = useState("No changes saved yet");
+  const [saveMsg, setSaveMsg] = useState(t("editScript.noChanges"));
   const [loadingDraft, setLoadingDraft] = useState(true);
   const [scriptTemplate, setScriptTemplate] = useState("");
   const [showTitle, setShowTitle] = useState("");
@@ -207,14 +209,15 @@ export default function EditScript() {
   }, [script, lastSavedScript, showTitle, lastSavedTitle]);
 
   const markDraftSaved = () => {
-    setSaveMsg(`Saved at ${formatDraftSavedTime()}`);
-  };
+  setSaveMsg(t("editScript.savedAt", {
+    time: formatDraftSavedTime(),
+  }));  };
 
   const exportScript = async (format = "pdf") => {
     try {
       // Check for unsaved changes first
       if (hasUnsavedChanges) {
-        setToastMsg("Please save your changes before exporting");
+        setToastMsg(t("editScript.saveBeforeExport"));
         setTimeout(() => setToastMsg(""), 3000);
         return;
       }
@@ -222,7 +225,7 @@ export default function EditScript() {
       setExporting(true);
       
       let scriptContent = script.trim();
-      let title = showTitle || "Podcast Script";
+      let title = showTitle || t("editScript.defaultExportTitle");
       
       // Only try to fetch from API if authenticated AND we don't have content
       if (isAuthenticated() && !scriptContent) {
@@ -244,7 +247,7 @@ export default function EditScript() {
       }
       
       if (!scriptContent) {
-        setToastMsg("No script content to export!");
+        setToastMsg(t("editScript.noContent"));
         setTimeout(() => setToastMsg(""), 3000);
         setExporting(false);
         return;
@@ -259,12 +262,14 @@ export default function EditScript() {
         fileNameBase: title,
       });
       
-      setToastMsg(`Script exported as ${format.toUpperCase()} successfully!`);
+      setToastMsg(t("editScript.exportSuccess", {
+        format: format.toUpperCase(),
+      }));
       setTimeout(() => setToastMsg(""), 3000);
       
     } catch (error) {
       console.error("Error exporting script:", error);
-      setToastMsg("Failed to export script. Please try again.");
+      setToastMsg(t("editScript.exportFailed"));
       setTimeout(() => setToastMsg(""), 3000);
     } finally {
       setExporting(false);
@@ -286,14 +291,14 @@ export default function EditScript() {
 
     if (next === "" && script.trim() !== "") {
       setScript(lastValidRef.current);
-      setToastMsg("You cannot clear the entire script!");
+      setToastMsg(t("editScript.cannotClear"));
       setTimeout(() => setToastMsg(""), 3000);
       return;
     }
 
     if (next.trim() === "") {
       setScript(lastValidRef.current);
-      setSaveMsg("You can't clear the entire script.");
+      setSaveMsg(t("editScript.cannotClear"));
       return;
     }
 
@@ -315,12 +320,12 @@ export default function EditScript() {
   };
 
   const startEditTitle = () => {
-    setDraftTitle(showTitle || "Podcast Show");
+    setDraftTitle(showTitle || t("editScript.defaultTitle"));
     setIsEditingTitle(true);
   };
 
   const cancelEditTitle = () => {
-    setDraftTitle(showTitle || "Podcast Show");
+    setDraftTitle(showTitle || t("editScript.defaultTitle"));
     setIsEditingTitle(false);
   };
 
@@ -403,7 +408,7 @@ export default function EditScript() {
 
     }
     if (!isAuthenticated()) {
-      setShowTitle((prev) => prev || "Podcast Show");
+      setShowTitle((prev) => prev || t("editScript.defaultTitle"));
       setLoadingDraft(false);
       return;
     }
@@ -412,16 +417,16 @@ export default function EditScript() {
       .then((r) => r.json())
       .then((d) => {
         if (!loadFromSource({ ...d, showTitle: d.show_title })) {
-          setShowTitle("Podcast Show");
+          setShowTitle(t("editScript.defaultTitle"));
           setScript("");
           setLastSavedScript("");
-          setLastSavedTitle("Podcast Show");
+          setLastSavedTitle(t("editScript.defaultTitle"));
           lastValidRef.current = "";
         }
       })
       .catch(() => {
-        setShowTitle("Podcast Show");
-        setSaveMsg("No saved draft was found. Return to Review and try Edit in Editor again.");
+        setShowTitle(t("editScript.defaultTitle"));
+        setSaveMsg(t("editScript.noDraft"));
       })
       .finally(() => setLoadingDraft(false));
 
@@ -468,7 +473,7 @@ export default function EditScript() {
 
     if ((e.key === "Delete" || e.key === "Backspace") && start === 0 && end === val.length) {
       e.preventDefault();
-      setToastMsg("You cannot delete the entire script!");
+      setToastMsg(t("editScript.cannotDelete"));
       setTimeout(() => setToastMsg(""), 3000);
       return;
     }
@@ -523,7 +528,7 @@ export default function EditScript() {
 
   const persistEditorDraft = (content = script.trim()) => {
     const editData = readEditData();
-    const resolvedTitle = showTitle || editData.showTitle || editData.episodeTitle || "Podcast Show";
+    const resolvedTitle = showTitle || editData.showTitle || editData.episodeTitle || t("editScript.defaultTitle");
     const updatedEditData = {
       ...editData,
       currentScript: content,
@@ -546,13 +551,13 @@ export default function EditScript() {
     const content = script.trim();
 
     if (!content) {
-      setSaveMsg("Script is empty.");
+      setSaveMsg(t("editScript.empty"));
       return;
     }
 
     const badLine = findEmptySpeakerLine(script);
     if (badLine !== -1) {
-      setSaveMsg("Each speaker line must include text after the colon.");
+      setSaveMsg(t("editScript.lineError"));
       focusEmptySpeakerLine(script);
       return;
     }
@@ -565,30 +570,30 @@ export default function EditScript() {
     if (!isAuthenticated()) {
       sessionStorage.setItem("guestEditDraft", content);
       markDraftSaved();
-      setToastMsg("Script saved in this draft.");
+      setToastMsg(t("editScript.savedDraft"));
       setTimeout(() => setToastMsg(""), 3000);
       return;
     }
 
     setSaving(true);
-    setSaveMsg("Saving...");
+    setSaveMsg(t("editScript.saving"));
     try {
       const result = await syncEditScriptDraftToServer(content, showTitle || "");
       if (!result.ok) {
-        setSaveMsg(result.error || "Failed to save.");
+        setSaveMsg(result.error || t("editScript.failedSave"));
         return;
       }
       if (result.localOnly) {
         markDraftSaved();
-        setToastMsg("Draft updated in this browser.");
+        setToastMsg(t("editScript.updatedBrowser"));
         setTimeout(() => setToastMsg(""), 3000);
         return;
       }
       markDraftSaved();
-      setToastMsg("Script saved successfully!");
+      setToastMsg(t("editScript.savedSuccess"));
       setTimeout(() => setToastMsg(""), 3000);
     } catch {
-      setSaveMsg("Failed to save.");
+      setSaveMsg(t("editScript.failedSave"));
     } finally {
       setSaving(false);
     }
@@ -597,14 +602,14 @@ export default function EditScript() {
   const navigateToAudio = async () => {
     const trimmed = script.trim();
     if (!trimmed) {
-      setSaveMsg("Script is empty.");
+      setSaveMsg(t("editScript.empty"));
       return;
     }
 
     const badLine = findEmptySpeakerLine(script);
     if (badLine !== -1) {
       setSaveMsg(
-        "Each speaker line must include text after the colon."
+        t("editScript.lineError")
       );
       focusEmptySpeakerLine(script);
       return;
@@ -639,8 +644,8 @@ export default function EditScript() {
     saveMsg.includes("can't clear") ||
     saveMsg.includes("Failed") ||
     saveMsg.includes("No saved draft");
-  const isSavedStatus = saveMsg.startsWith("Saved at");
-
+  const isSavedStatus =
+    saveMsg.includes(t("editScript.savedKeyword"));
   return (
     <div className="min-h-screen bg-cream dark:bg-[#0a0a0a]">
       <LoadingOverlay show={exporting} />
@@ -650,44 +655,44 @@ export default function EditScript() {
       <main className="w-full max-w-[1400px] mx-auto px-4 py-8 sm:px-6 sm:py-10">
        <header className="mb-6 text-center" >
     <h1 className="text-3xl md:text-4xl font-extrabold text-black dark:text-white">
-      Review & Edit Script
+      {t("editScript.title")}
     </h1>
     <p className="mt-2 text-black/70 dark:text-white/70">
-      Review your script, make quick edits, and get it ready for audio.
+      {t("editScript.subtitle")}
     </p>
   </header>
 
         <div className="mb-8 w-full overflow-hidden rounded-2xl border border-neutral-200 bg-white/60 p-2.5 dark:border-neutral-800 dark:bg-neutral-900/60 sm:overflow-x-auto sm:p-4">
           <div className="flex w-full min-w-0 items-center gap-1 sm:min-w-max sm:gap-2">
-            <StepDot n={1} label="Choose Style" done />
+            <StepDot n={1} label={t("editScript.steps.chooseStyle")} done />
             <StepLine on={true} />
 
-            <StepDot n={2} label="Add Speakers" done />
+            <StepDot n={2} label={t("editScript.steps.addSpeakers")} done />
             <StepLine on={true} />
 
-            <StepDot n={3} label="Write Content" done />
+            <StepDot n={3} label={t("editScript.steps.writeContent")} done />
             <StepLine on={true} />
 
-            <StepDot n={4} label="Review & Edit Script" active />
+            <StepDot n={4} label={t("editScript.steps.reviewEdit")} active />
             <StepLine on={false} />
 
-            <StepDot n={5} label="Select Music" />
+            <StepDot n={5} label={t("editScript.steps.selectMusic")} />
             <StepLine on={false} />
 
-            <StepDot n={6} label="Generate Audio" />
+            <StepDot n={6} label={t("editScript.steps.generateAudio")} />
           </div>
         </div>
 
         <div className="max-w-5xl mx-auto">
           <section className="ui-card">
-            <h2 className="ui-card-title">Editing Guidelines</h2>
+            <h2 className="ui-card-title">{t("editScript.guidelines.title")}</h2>
             <ul className="list-disc pl-6 space-y-1 text-sm text-black/80 dark:text-white/80">
-              <li><strong>Do not edit speaker names</strong> (left of the colon). They are locked.</li>
-              <li>Edit <em>only</em> the content after the colon on each line.</li>
-              <li>Do not clear the entire script.</li>
+              <li><strong>{t("editScript.guidelines.noSpeakerEdit")}</strong> {t("editScript.guidelines.leftColon")} {t("editScript.guidelines.locked")}</li>
+              <li>{t("editScript.guidelines.editAfterColon")}</li>
+              <li>{t("editScript.guidelines.noClear")}</li>
               {speakerLabels.length > 0 && (
                 <li>
-                  Detected labels:&nbsp;
+                  {t("editScript.guidelines.detectedLabels")}:&nbsp;
                   <span className="inline-flex flex-wrap gap-2">
                     {speakerLabels.map((s) => (
                       <code key={s} className="px-2 py-0.5 rounded bg-black/5 dark:bg-white/5">
@@ -700,7 +705,7 @@ export default function EditScript() {
             </ul>
             {hasUnsavedChanges && (
               <div className="mt-3 p-2 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 rounded-lg text-sm">
-                ⚠️ You have unsaved changes. Please save your script before exporting.
+                  ⚠️ {t("editScript.unsavedWarning")}
               </div>
             )}
           </section>
@@ -724,7 +729,7 @@ export default function EditScript() {
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-[10px] uppercase tracking-[0.18em] text-purple-700/75 dark:text-purple-200/75 sm:text-[11px]">
-                  Podcast Title
+                  {t("editScript.podcastTitle")}
                 </p>
                 {isEditingTitle ? (
                   <textarea
@@ -748,7 +753,7 @@ export default function EditScript() {
                   />
                 ) : (
                   <p className="mt-1 max-w-full break-words text-lg font-semibold leading-tight text-neutral-950 dark:text-white">
-                    {loadingDraft ? "Loading script..." : showTitle || "Podcast Show"}
+                    {loadingDraft ? t("editScript.loading") : showTitle || t("editScript.defaultTitle")}
                   </p>
                 )}
               </div>
@@ -760,7 +765,7 @@ export default function EditScript() {
                 onClick={startEditTitle}
                 className="inline-flex shrink-0 items-center justify-center rounded-full border border-purple-200 bg-white px-3 py-1.5 text-xs font-semibold text-purple-700 shadow-sm transition-all duration-200 hover:border-purple-300 hover:bg-purple-50 hover:text-purple-800 dark:border-purple-300/30 dark:bg-purple-500/10 dark:text-purple-100 dark:shadow-none dark:hover:border-purple-300/55 dark:hover:bg-purple-500/18"
               >
-                Edit title
+                {t("editScript.editTitle")}
               </button>
             ) : (
               <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto sm:shrink-0 sm:flex-row sm:items-center sm:justify-end">
@@ -769,14 +774,14 @@ export default function EditScript() {
                   onClick={saveTitle}
                   className="min-h-9 flex-1 rounded-full bg-purple-600 px-4 py-1.5 text-xs font-semibold text-white transition-colors duration-200 hover:bg-purple-700 sm:min-h-9 sm:flex-none sm:min-w-20"
                 >
-                  Save
+                  {t("common.save")}
                 </button>
                 <button
                   type="button"
                   onClick={cancelEditTitle}
                   className="min-h-9 flex-1 rounded-full border border-purple-300/60 px-4 py-1.5 text-xs font-semibold text-purple-700 transition hover:bg-purple-50 dark:border-purple-300/25 dark:text-purple-100 dark:hover:bg-purple-500/12 sm:min-h-9 sm:flex-none sm:min-w-20"
                 >
-                  Cancel
+                  {t("common.cancel")}
                 </button>
               </div>
             )}
@@ -784,7 +789,7 @@ export default function EditScript() {
 
           <div className="ui-card mt-6">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
-              <h2 className="ui-card-title mb-0">Your Script</h2>
+              <h2 className="ui-card-title mb-0">{t("editScript.yourScript")}</h2>
               
               <div className="relative">
                 <button
@@ -796,10 +801,10 @@ export default function EditScript() {
                              ? 'bg-gray-300 dark:bg-gray-700 text-gray-600 dark:text-gray-400 cursor-not-allowed' 
                              : 'bg-purple-600 hover:bg-purple-700 text-white'
                            }`}
-                  title={hasUnsavedChanges ? "Please save your changes before exporting" : "Export script"}
+                  title={hasUnsavedChanges ? t("editScript.saveBeforeExport") : t("editScript.exportScript")}
                 >
                   <Download className="w-3.5 h-3.5" />
-                  <span>{exporting ? "Exporting..." : hasUnsavedChanges ? "Save to enable export" : "Export"}</span>
+                  <span>{exporting ? t("editScript.exporting") : hasUnsavedChanges ? t("editScript.saveToExport") : t("editScript.export")}</span>
                   {!hasUnsavedChanges && <ChevronDown className={`w-4 h-4 transition-transform ${showExportMenu ? "rotate-180" : ""}`} />}
                 </button>
                 {showExportMenu && !exporting && script.trim() && !hasUnsavedChanges && (
@@ -812,7 +817,7 @@ export default function EditScript() {
                       className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-black/80 transition hover:bg-purple-50 hover:text-purple-700 dark:text-white/80 dark:hover:bg-purple-900/20 dark:hover:text-purple-200"
                     >
                       <Download className="w-4 h-4" />
-                      Export as PDF
+                    {t("editScript.exportPdf")}
                     </button>
                     <button
                       onClick={() => {
@@ -822,7 +827,7 @@ export default function EditScript() {
                       className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-black/80 transition hover:bg-black/5 dark:text-white/80 dark:hover:bg-white/10"
                     >
                       <Download className="w-4 h-4" />
-                      Export as TXT
+                      {t("editScript.exportTxt")}
                     </button>
                   </div>
                 )}
@@ -830,11 +835,11 @@ export default function EditScript() {
             </div>
 
             {loadingDraft ? (
-              <div className="text-sm opacity-80">Loading draft…</div>
+              <div className="text-sm opacity-80">{t("editScript.loadingDraft")}</div>
             ) : (
               <>
                 <label htmlFor="scriptArea" className="form-label">
-                  Edit lines below {hasUnsavedChanges && <span className="text-yellow-600 dark:text-yellow-400">(unsaved changes)</span>}
+                  {t("editScript.editLines")} {hasUnsavedChanges && <span className="text-yellow-600 dark:text-yellow-400">({t("editScript.unsavedChanges")})</span>}
                 </label>
                 <textarea
                   id="scriptArea"
@@ -844,7 +849,7 @@ export default function EditScript() {
                   value={script}
                   onChange={handleScriptChange}
                   onKeyDown={onKeyDownGuard}
-                  placeholder="Host: …"
+                  placeholder={t("editScript.placeholder")}
                 />
 
                 <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
@@ -856,7 +861,7 @@ export default function EditScript() {
 
                     className="px-4 py-2 border border-neutral-300 dark:border-neutral-700 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition"
                   >
-                    Back to Review
+                    {t("editScript.backToReview")}
                   </button>
 
                   <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
@@ -869,14 +874,14 @@ export default function EditScript() {
                           : 'border border-neutral-300 dark:border-neutral-700 hover:bg-black/5 dark:hover:bg-white/5'
                       }`}
                     >
-                      {saving ? "Saving..." : "Save Script"}
+                      {saving ? t("editScript.saving") : t("editScript.saveScript")}
                     </button>
 
                     <button
                       onClick={navigateToAudio}
                       className="btn-cta inline-flex items-center gap-2 px-7 py-3 rounded-xl text-base font-semibold"
                     >
-                      Review your script after editing <ChevronRight className="w-4 h-4" />
+                      {t("editScript.continue")} <ChevronRight className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
@@ -901,11 +906,10 @@ export default function EditScript() {
               <div className="wecast-overlay flex items-center justify-center bg-black/60 backdrop-blur-sm">
                 <div className="w-[min(92vw,460px)] rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 shadow-2xl p-6">
                   <h2 className="text-lg font-bold text-black dark:text-white mb-2">
-                    Sign in to save your script
+                    {t("editScript.auth.title")}
                   </h2>
                   <p className="text-sm text-black/70 dark:text-white/70 mb-5">
-                    To keep your work saved, please create an account or log in.
-                    Your current script is stored temporarily and will be restored after you sign in.
+                      {t("editScript.auth.description")}
                   </p>
 
                   <div className="flex flex-wrap gap-3 justify-end">
@@ -914,7 +918,7 @@ export default function EditScript() {
                       onClick={() => setShowAuthModal(false)}
                       className="px-4 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 text-sm hover:bg-black/5 dark:hover:bg-white/5 transition"
                     >
-                      Continue without saving
+                        {t("editScript.auth.continueGuest")}
                     </button>
 
                     <button
@@ -926,7 +930,7 @@ export default function EditScript() {
                       }}
                       className="px-4 py-2 rounded-xl border border-purple-500 text-purple-600 dark:text-purple-300 text-sm font-semibold hover:bg-purple-50 dark:hover:bg-purple-900/20 transition"
                     >
-                      Log in
+                      {t("common.login")}
                     </button>
 
                     <button
@@ -938,7 +942,7 @@ export default function EditScript() {
                       }}
                       className="px-4 py-2 rounded-xl bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700 transition"
                     >
-                      Sign up
+                      {t("common.signup")}
                     </button>
                   </div>
                 </div>

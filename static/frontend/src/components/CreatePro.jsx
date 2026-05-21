@@ -1985,7 +1985,7 @@ const exportScript = async (format = "pdf") => {
         t("create.stepper.reviewEdit"),
         t("create.stepper.selectMusic"),
         t("create.stepper.generateAudio"),
-        "Finalize & Publish",
+        t("finalizePublish"),
     ];
     const StepDot = ({ n, label }) => {
         const state = step === n ? "active" : step > n ? "done" : "pending";
@@ -2621,7 +2621,10 @@ const exportScript = async (format = "pdf") => {
 
                                                                         return (
                                                                             <option key={vid} value={vid} disabled={isTaken}>
-                                                                            {v.name} {isTaken ? `(${t("create.speakers.alreadyUsed")})` : ""}
+                                                                            {i18n.language === "ar"
+                                                                                ? t(`create.voiceNames.${vid}`, { defaultValue: v.name })
+                                                                                : v.name}{" "}
+                                                                            {isTaken ? `(${t("create.speakers.alreadyUsed")})` : ""}
                                                                             </option>
                                                                         );
                                                                         })}
@@ -2648,11 +2651,10 @@ const exportScript = async (format = "pdf") => {
                                                                             onClick={() => appendVoiceLibraryPageForSpeaker(i)}
                                                                             className="mt-2 text-xs font-semibold text-purple-600 dark:text-purple-300 hover:underline"
                                                                         >
-                                                                            {t("create.speakers.loadMoreVoices", {
-                                                                                defaultValue: "Load more voices ({{shown}}/{{total}})",
-                                                                                shown: pool.length,
-                                                                                total: libr.totalCount || pool.length,
-                                                                            })}
+{t("create.speakers.loadMoreVoices", {
+  shown: pool.length,
+  total: libr.totalCount || pool.length,
+})}
                                                                         </button>
                                                                     ) : null}
                                                                 </div>
@@ -2703,14 +2705,14 @@ const exportScript = async (format = "pdf") => {
                                     onClick={() => handleUseSampleText("en")}
                                     className="inline-flex items-center rounded-lg border border-black/10 dark:border-white/10 px-3 py-1.5 text-xs font-semibold text-black/80 dark:text-white/85 hover:bg-black/5 dark:hover:bg-white/10 transition"
                                 >
-                                    Use English sample
+                                    {t("create.step3.useEnglishSample")}
                                 </button>
                                 <button
                                     type="button"
                                     onClick={() => handleUseSampleText("ar")}
                                     className="ml-2 inline-flex items-center rounded-lg border border-black/10 dark:border-white/10 px-3 py-1.5 text-xs font-semibold text-black/80 dark:text-white/85 hover:bg-black/5 dark:hover:bg-white/10 transition"
                                 >
-                                    Use Arabic sample
+                                    {t("create.step3.useArabicSample")}
                                 </button>
                             </div>
 
@@ -2794,7 +2796,7 @@ const exportScript = async (format = "pdf") => {
                     title="Export script"
                 >
                     <Download className="w-3.5 h-3.5" />
-                    <span>Export</span>
+                    <span>{t("editScript.export")}</span>
                     <ChevronDown className={`w-4 h-4 transition-transform ${showExportMenu ? "rotate-180" : ""}`} />
                 </button>
                 {showExportMenu && generatedScript && (
@@ -2807,7 +2809,7 @@ const exportScript = async (format = "pdf") => {
                             className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-black/80 transition hover:bg-purple-50 hover:text-purple-700 dark:text-white/80 dark:hover:bg-purple-900/20 dark:hover:text-purple-200"
                         >
                             <Download className="w-4 h-4" />
-                            Export as PDF
+                                {t("editScript.exportPdf")}
                         </button>
                         <button
                             onClick={() => {
@@ -2817,7 +2819,7 @@ const exportScript = async (format = "pdf") => {
                             className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-black/80 transition hover:bg-black/5 dark:text-white/80 dark:hover:bg-white/10"
                         >
                             <Download className="w-4 h-4" />
-                            Export as TXT
+                            {t("editScript.exportTxt")}
                         </button>
                     </div>
                 )}

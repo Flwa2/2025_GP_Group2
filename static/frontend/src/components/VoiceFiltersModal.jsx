@@ -35,6 +35,38 @@ export default function VoiceFiltersModal({
   formatVoiceCategoryLabel = (value) => value,
 }) {
   const { t } = useTranslation();
+  const makeKey = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/\+/g, "plus")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const translateAge = (value) =>
+  t(`create.speakers.ageOptions.${value}`, {
+    defaultValue: formatVoiceAgeLabel(value),
+  });
+
+const translateTone = (value) =>
+  t(`create.speakers.toneOptions.${value}`, {
+    defaultValue: formatToneLabel(value),
+  });
+
+const translatePitch = (value) =>
+  t(`create.speakers.pitchOptions.${value}`, {
+    defaultValue: formatPitchLabel(value),
+  });
+
+const translateAccent = (value) =>
+  t(`create.speakers.accentOptions.${makeKey(value)}`, {
+    defaultValue: value,
+  });
+
+const translateCategory = (value) =>
+  t(`create.speakers.categoryOptions.${makeKey(value)}`, {
+    defaultValue: value,
+  });
 
   const safeGenderFilter = getSafeModalGenderFilter(filters?.gender);
   const languageOptions = uniqueLanguageOptions();
@@ -55,14 +87,16 @@ export default function VoiceFiltersModal({
   const selectedToneValid =
     !filters?.tone || toneOptions.some((tone) => String(tone).toLowerCase() === String(filters.tone).toLowerCase());
 
-  const genderOptions = useMemo(
-    () =>
-      ["female", "male"].map((gender) => ({
-        value: gender,
-        label: gender === "female" ? "Female" : "Male",
-      })),
-    []
-  );
+const genderOptions = useMemo(
+  () =>
+    ["female", "male"].map((gender) => ({
+      value: gender,
+      label: t(`create.speakers.genderOptions.${gender}`, {
+        defaultValue: gender === "female" ? "Female" : "Male",
+      }),
+    })),
+  [t]
+);
 
   const setFilters = (patch) => onFiltersChange?.({ ...filters, ...patch });
 
@@ -79,9 +113,15 @@ export default function VoiceFiltersModal({
     String(filters?.q || "").trim()
       ? { key: "q", label: `${t("create.speakers.search", "Search")}: ${String(filters.q).trim()}` }
       : null,
-    safeGenderFilter !== "__all__"
-      ? { key: "gender", label: `${t("create.speakers.gender", "Gender")}: ${safeGenderFilter}` }
-      : null,
+safeGenderFilter !== "__all__"
+  ? {
+      key: "gender",
+      label: `${t("create.speakers.gender", "Gender")}: ${t(
+        `create.speakers.genderOptions.${safeGenderFilter}`,
+        { defaultValue: safeGenderFilter }
+      )}`,
+    }
+  : null,
     filters?.language
       ? {
           key: "language",
@@ -92,21 +132,36 @@ export default function VoiceFiltersModal({
           ),
         }
       : null,
-    filters?.category
-      ? { key: "category", label: `${t("create.speakers.category", "Category")}: ${formatVoiceCategoryLabel(filters.category)}` }
-      : null,
-    filters?.tone
-      ? { key: "tone", label: `${t("create.speakers.tone", "Tone")}: ${formatToneLabel(filters.tone)}` }
-      : null,
-    filters?.pitch
-      ? { key: "pitch", label: `${t("create.speakers.pitch", "Pitch")}: ${formatPitchLabel(filters.pitch)}` }
-      : null,
-    filters?.accent
-      ? { key: "accent", label: `${t("create.speakers.accent", "Accent")}: ${filters.accent}` }
-      : null,
-    filters?.age
-      ? { key: "age", label: `${t("create.speakers.age", "Age")}: ${filters.age}` }
-      : null,
+filters?.category
+  ? {
+      key: "category",
+      label: `${t("create.speakers.category", "Category")}: ${translateCategory(filters.category)}`,
+    }
+  : null,
+filters?.tone
+  ? {
+      key: "tone",
+      label: `${t("create.speakers.tone", "Tone")}: ${translateTone(filters.tone)}`,
+    }
+  : null,
+filters?.pitch
+  ? {
+      key: "pitch",
+      label: `${t("create.speakers.pitch", "Pitch")}: ${translatePitch(filters.pitch)}`,
+    }
+  : null,
+filters?.accent
+  ? {
+      key: "accent",
+      label: `${t("create.speakers.accent", "Accent")}: ${translateAccent(filters.accent)}`,
+    }
+  : null,
+filters?.age
+  ? {
+      key: "age",
+      label: `${t("create.speakers.age", "Age")}: ${translateAge(filters.age)}`,
+    }
+  : null,
   ].filter(Boolean);
 
   const handleDone = () => {
@@ -181,7 +236,7 @@ export default function VoiceFiltersModal({
               onChange={(value) => setFilters({ age: value })}
               options={[
                 { value: "", label: t("create.speakers.allAges", "All ages") },
-                ...ageOptions.map((age) => ({ value: age, label: formatVoiceAgeLabel(age) })),
+                ...ageOptions.map((age) => ({ value: age, label: translateAge(age) })),
               ]}
               isRTL={isRTL}
               menuVariant="tone"
@@ -209,7 +264,7 @@ export default function VoiceFiltersModal({
               onChange={(value) => setFilters({ accent: value })}
               options={[
                 { value: "", label: t("create.speakers.allAccents", "All accents") },
-                ...accentOptions.map((accent) => ({ value: accent, label: accent })),
+                ...accentOptions.map((accent) => ({ value: accent, label: translateAccent(accent) })),
               ]}
               isRTL={isRTL}
               menuVariant="tone"
@@ -226,7 +281,7 @@ export default function VoiceFiltersModal({
               onChange={(value) => setFilters({ tone: value })}
               options={[
                 { value: "", label: t("create.speakers.allTones", "All Tones") },
-                ...toneOptions.map((tone) => ({ value: tone, label: formatToneLabel(tone) })),
+                ...toneOptions.map((tone) => ({ value: tone, label: translateTone(tone) })),
               ]}
               isRTL={isRTL}
               menuVariant="tone"
@@ -241,7 +296,7 @@ export default function VoiceFiltersModal({
               onChange={(value) => setFilters({ pitch: value })}
               options={[
                 { value: "", label: t("create.speakers.allPitches", "All Pitches") },
-                ...pitchOptions.map((pitch) => ({ value: pitch, label: formatPitchLabel(pitch) })),
+                ...pitchOptions.map((pitch) => ({ value: pitch, label: translatePitch(pitch) })),
               ]}
               isRTL={isRTL}
               menuVariant="tone"
@@ -259,7 +314,7 @@ export default function VoiceFiltersModal({
                 { value: "", label: t("create.speakers.allCategories", "All categories") },
                 ...categoryOptions.map((category) => ({
                   value: category.value,
-                  label: category.label,
+                  label: translateCategory(category.value),
                 })),
               ]}
               isRTL={isRTL}

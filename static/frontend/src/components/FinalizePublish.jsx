@@ -12,6 +12,7 @@ import {
   Loader2,
   PencilLine,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -64,6 +65,7 @@ function Notice({ notice, noticeType }) {
 }
 
 export default function FinalizePublish() {
+  const { t } = useTranslation();
   const hash = window.location.hash;
   const query = hash.split("?")[1] || "";
   const params = new URLSearchParams(query);
@@ -299,17 +301,16 @@ export default function FinalizePublish() {
           <div className="mb-6 border-b border-white/25 pb-6 dark:mb-8 dark:rounded-[32px] dark:border-0 dark:bg-[#171821]/82 dark:p-6 dark:pb-8 dark:shadow-[0_18px_48px_rgba(0,0,0,0.26)] dark:backdrop-blur md:dark:p-8">
             <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-purple-200/80 bg-purple-50/90 px-3 py-1 text-sm font-medium text-purple-800 backdrop-blur-sm dark:border-transparent dark:bg-purple-500/10 dark:text-purple-200">
               <Sparkles className="h-4 w-4 text-purple-600 dark:text-purple-300" />
-              Final design step
+                {t("finalize.step")}
             </div>
 
             <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
               <div>
                 <h1 className="text-4xl font-black tracking-tight text-neutral-900 md:text-6xl dark:text-white">
-                  Cover Art &amp; Details
+                  {t("finalize.coverArt.title")}
                 </h1>
                 <p className="mt-3 max-w-2xl text-base leading-7 text-neutral-600 md:text-lg dark:text-[#A0A0A0]">
-                  Create a polished first impression for your episode by generating
-                  or uploading cover art and refining the title before preview.
+                  {t("finalize.coverArt.subtitle")}
                 </p>
               </div>
 
@@ -317,14 +318,14 @@ export default function FinalizePublish() {
                 {hasUnsavedTitle && (
                   <div className="inline-flex items-center gap-2 rounded-full border border-white/40 bg-white/35 px-3 py-2 text-sm font-medium text-neutral-700 backdrop-blur-sm dark:border-transparent dark:bg-white/10 dark:text-slate-300">
                     <PencilLine className="h-4 w-4 text-neutral-600 dark:text-slate-400" />
-                    Unsaved title changes
+                  {t("finalize.unsavedTitle")}
                   </div>
                 )}
 
                 {hasCover && (
                   <div className="inline-flex items-center gap-2 rounded-full border border-purple-200/70 bg-purple-50/80 px-3 py-2 text-sm font-medium text-purple-800 backdrop-blur-sm dark:border-transparent dark:bg-purple-500/10 dark:text-purple-200">
                     <CheckCircle2 className="h-4 w-4 text-purple-600 dark:text-purple-300" />
-                    Cover ready
+                    {t("finalize.coverReady")}
                   </div>
                 )}
               </div>
@@ -335,7 +336,7 @@ export default function FinalizePublish() {
             <div className="mb-6 rounded-2xl border border-white/30 bg-[rgba(255,255,255,0.45)] px-4 py-4 shadow-sm backdrop-blur-md dark:border-transparent dark:bg-[#171821]/82 dark:shadow-none dark:backdrop-blur">
               <div className="mb-3 flex items-center gap-2 text-sm font-medium text-neutral-800 dark:text-slate-200">
                 <Loader2 className="h-4 w-4 animate-spin text-purple-600 dark:text-purple-300" />
-                {busyText || "Working..."}
+                {busyText || t("finalize.working")}
               </div>
               <div className="h-2 overflow-hidden rounded-full bg-purple-100/90 dark:bg-white/10">
                 <div className="h-full w-1/3 animate-[shimmer_1.4s_ease-in-out_infinite] rounded-full bg-gradient-to-r from-purple-500 via-purple-300 to-purple-500" />
@@ -354,10 +355,10 @@ export default function FinalizePublish() {
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-bold text-neutral-900 dark:text-white">
-                  Cover Art
+                  {t("finalize.coverArt.cardTitle")}
                 </h2>
                 <p className="mt-1 text-sm text-neutral-600 dark:text-[#A0A0A0]">
-                  Recommended size: at least 512 × 512
+                  {t("finalize.coverArt.recommended")}
                 </p>
               </div>
 
@@ -382,11 +383,10 @@ export default function FinalizePublish() {
                       <ImageIcon className="h-9 w-9 text-purple-400 dark:text-slate-400" />
                     </div>
                     <h3 className="text-2xl font-semibold text-neutral-900 dark:text-white">
-                      No cover art yet
+                      {t("finalize.coverArt.empty")}
                     </h3>
                     <p className="mt-2 max-w-xs text-sm leading-6 text-neutral-600 dark:text-[#A0A0A0]">
-                      Generate an AI cover or upload your own image to give the
-                      episode a polished visual identity.
+                      {t("finalize.coverArt.description")}
                     </p>
                   </div>
                 )}
@@ -400,7 +400,9 @@ export default function FinalizePublish() {
                 className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-2xl bg-purple-600 px-4 py-3 text-sm font-semibold text-white shadow-sm shadow-purple-500/20 transition hover:bg-purple-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/40 disabled:cursor-not-allowed disabled:bg-purple-600/45 disabled:text-white/75 disabled:shadow-none dark:disabled:bg-purple-500/25 dark:disabled:text-white/65"
               >
                 <Wand2 className="h-4 w-4" />
-                {coverSrc ? "Regenerate" : "Generate"}
+                {coverSrc
+                  ? t("finalize.coverArt.regenerate")
+                  : t("finalize.coverArt.generate")}
               </button>
 
               <button
@@ -410,7 +412,7 @@ export default function FinalizePublish() {
                 className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-2xl border border-white/35 bg-white/40 px-4 py-3 text-sm font-semibold text-neutral-800 backdrop-blur-sm transition hover:bg-white/55 disabled:cursor-not-allowed disabled:opacity-60 dark:border-transparent dark:bg-[#232334] dark:text-slate-200 dark:hover:bg-[#2b2b40]"
               >
                 <Upload className="h-4 w-4" />
-                Upload
+                {t("finalize.coverArt.upload")}
               </button>
 
               <button
@@ -419,7 +421,7 @@ export default function FinalizePublish() {
                 className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-2xl border border-white/35 bg-white/40 px-4 py-3 text-sm font-semibold text-neutral-700 backdrop-blur-sm transition hover:bg-white/55 disabled:cursor-not-allowed disabled:opacity-50 dark:border-transparent dark:bg-[#232334] dark:text-slate-300 dark:hover:bg-[#2b2b40]"
               >
                 <Trash2 className="h-4 w-4" />
-                Clear
+                {t("finalize.coverArt.clear")}
               </button>
 
               <input
@@ -432,7 +434,7 @@ export default function FinalizePublish() {
             </div>
             {coverGenerationLimitReached && (
               <p className="mt-3 rounded-2xl border border-red-200/70 bg-red-50/80 px-4 py-3 text-center text-xs font-semibold leading-5 text-red-700 dark:border-red-400/15 dark:bg-red-500/10 dark:text-red-200">
-                Cover art generation limit reached. You can upload your own cover image instead.
+                {t("finalize.coverArt.limit")}
               </p>
             )}
           </section>
@@ -443,20 +445,20 @@ export default function FinalizePublish() {
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <div>
                     <h2 className="text-xl font-bold text-neutral-900 dark:text-white">
-                      Episode Title
+                      {t("finalize.episode.title")}
                     </h2>
                     <p className="mt-1 text-sm text-neutral-600 dark:text-[#A0A0A0]">
-                      Keep it clear, memorable, and aligned with the episode theme.
+                      {t("finalize.episode.subtitle")}
                     </p>
                   </div>
 
                   {hasUnsavedTitle ? (
                     <span className="rounded-full border border-white/35 bg-white/45 px-3 py-1 text-xs font-semibold text-neutral-700 backdrop-blur-sm dark:border-transparent dark:bg-[#2b2b40] dark:text-slate-300">
-                      Unsaved
+                      {t("finalize.unsaved")}
                     </span>
                   ) : (
                     <span className="rounded-full border border-purple-200/80 bg-purple-50/85 px-3 py-1 text-xs font-semibold text-purple-800 backdrop-blur-sm dark:border-transparent dark:bg-purple-500/10 dark:text-purple-200">
-                      Saved
+                      {t("finalize.saved")}
                     </span>
                   )}
                 </div>
@@ -465,7 +467,7 @@ export default function FinalizePublish() {
                   <input
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
-                    placeholder="Enter episode title"
+                    placeholder={t("finalize.episode.placeholder")}
                     className="w-full rounded-2xl border border-white/40 bg-[rgba(255,255,255,0.55)] px-4 py-4 text-lg font-medium text-neutral-900 outline-none backdrop-blur-sm transition placeholder:text-neutral-500 focus:border-purple-300/80 focus:ring-4 focus:ring-purple-500/20 dark:border-transparent dark:bg-[#171821] dark:text-white dark:placeholder:text-slate-500 dark:focus:border-transparent dark:focus:bg-[#1b1b28]"
                   />
 
@@ -476,11 +478,11 @@ export default function FinalizePublish() {
                       className="inline-flex items-center justify-center gap-2 rounded-2xl bg-purple-600 px-5 py-3 text-sm font-semibold text-white shadow-sm shadow-purple-500/20 transition hover:bg-purple-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/40 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <Save className="h-4 w-4" />
-                      Save Title
+                      {t("finalize.episode.save")}
                     </button>
 
                     <p className="text-sm text-neutral-600 dark:text-[#A0A0A0]">
-                      Good titles are usually short and easy to scan.
+                      {t("finalize.episode.helper")}
                     </p>
                   </div>
                 </div>
@@ -488,10 +490,9 @@ export default function FinalizePublish() {
 
               <div className="rounded-[22px] bg-[rgba(255,255,255,0.38)] p-5 text-neutral-900 ring-1 ring-white/25 backdrop-blur-sm dark:bg-[#202030] dark:text-white dark:ring-0">
                 <div className="mb-4">
-                  <h3 className="text-xl font-bold text-neutral-900 dark:text-white">Ready to preview?</h3>
+                  <h3 className="text-xl font-bold text-neutral-900 dark:text-white">{t("finalize.preview.title")}</h3>
                   <p className="mt-1 max-w-xl text-sm leading-6 text-neutral-600 dark:text-[#A0A0A0]">
-                    Open the episode preview to see the title, cover art, and full
-                    result together before continuing.
+                    {t("finalize.preview.subtitle")}
                   </p>
                 </div>
 
@@ -502,7 +503,7 @@ export default function FinalizePublish() {
                     className="inline-flex items-center justify-center gap-2 rounded-2xl bg-purple-600 px-5 py-3 text-sm font-semibold text-white shadow-sm shadow-purple-500/20 transition hover:bg-purple-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500/40 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Eye className="h-4 w-4" />
-                    Preview Episode
+                    {t("finalize.preview.button")}
                   </button>
                 </div>
               </div>

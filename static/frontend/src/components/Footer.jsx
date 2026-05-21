@@ -37,15 +37,20 @@ export default function Footer() {
   };
 
   const quickLinks = [
-    { label: "Home", color: "bg-[#ef4444]", onClick: scrollToTop, type: "button" },
     {
-      label: "Cast Studio",
+      label: t("footer.home"),
+      color: "bg-[#ef4444]",
+      onClick: scrollToTop,
+      type: "button",
+    },
+    {
+      label: t("footer.castStudio"),
       color: "bg-[#22c55e]",
       type: "button",
       onClick: () => navigateToCastStudio(),
     },
     {
-      label: "About Us",
+      label: t("footer.aboutUs"),
       color: "bg-[#3b82f6]",
       href: "#about",
       type: "anchor",
@@ -54,7 +59,12 @@ export default function Footer() {
         navigateToSection("#about");
       },
     },
-    { label: "Create Script", color: "bg-[#f59e0b]", href: "#/create", type: "link" },
+    {
+      label: t("footer.createScript"),
+      color: "bg-[#f59e0b]",
+      href: "#/create",
+      type: "link",
+    },
   ];
 
   const socialLinks = [
@@ -79,24 +89,32 @@ export default function Footer() {
                 alt="WeCast logo"
                 className="h-12 w-12 shrink-0 object-contain dark:brightness-110 dark:contrast-110 dark:[filter:drop-shadow(0_0_10px_rgba(139,92,246,0.55))]"
               />
+
               <h4
                 className="text-3xl font-semibold leading-none tracking-tight text-[#2c2217] dark:text-white"
-                style={{ fontFamily: "\"Playfair Display\", \"Cormorant Garamond\", Georgia, serif" }}
+                style={{
+                  fontFamily:
+                    '"Playfair Display", "Cormorant Garamond", Georgia, serif',
+                }}
               >
                 WeCast
               </h4>
             </div>
+
             <p className="mx-auto mt-3.5 max-w-[35ch] text-sm leading-6 text-[#3f3428]/80 dark:text-[#b8b8c7] md:mx-0">
-              Turn your ideas into polished podcast episodes with voice, script, and preview in one flow.
-            </p>
-            <p className="mt-2.5 text-sm font-semibold text-purple-700 dark:text-purple-300">
-              Built for creators. Powered by AI.
+              {t("footer.description")}
             </p>
 
+            <p className="mt-2.5 text-sm font-semibold text-purple-700 dark:text-purple-300">
+              {t("footer.powered")}
+            </p>
           </section>
 
           <section className="min-w-0 order-3 lg:order-2 lg:col-span-4 lg:ps-4">
-            <h5 className="text-base font-semibold text-[#2c2217] dark:text-white">{t("footer.quickLinks")}</h5>
+            <h5 className="text-base font-semibold text-[#2c2217] dark:text-white">
+              {t("footer.quickLinks")}
+            </h5>
+
             <ul className="mt-4 flex min-w-0 flex-wrap items-center justify-center gap-x-7 gap-y-3 md:justify-start lg:flex-col lg:items-start lg:gap-x-0 lg:gap-y-1">
               {quickLinks.map((item) => (
                 <li key={item.label} className="min-w-0">
@@ -105,7 +123,9 @@ export default function Footer() {
                       onClick={item.onClick}
                       className="group inline-flex min-h-10 items-center gap-2.5 text-sm font-medium text-[#2f2419]/90 transition hover:text-purple-700 dark:text-[#e6e6f0] dark:hover:text-purple-300"
                     >
-                      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${item.color}`} />
+                      <span
+                        className={`h-2.5 w-2.5 shrink-0 rounded-full ${item.color}`}
+                      />
                       <span className="whitespace-nowrap">{item.label}</span>
                     </button>
                   ) : (
@@ -114,7 +134,9 @@ export default function Footer() {
                       onClick={item.onClick}
                       className="group inline-flex min-h-10 items-center gap-2.5 text-sm font-medium text-[#2f2419]/90 transition hover:text-purple-700 dark:text-[#e6e6f0] dark:hover:text-purple-300"
                     >
-                      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${item.color}`} />
+                      <span
+                        className={`h-2.5 w-2.5 shrink-0 rounded-full ${item.color}`}
+                      />
                       <span className="whitespace-nowrap">{item.label}</span>
                     </a>
                   )}
@@ -124,7 +146,10 @@ export default function Footer() {
           </section>
 
           <section className="min-w-0 order-2 lg:order-3 lg:col-span-3 lg:ps-2 lg:text-start">
-            <h5 className="text-base font-semibold text-[#2c2217] dark:text-white">Follow Us</h5>
+            <h5 className="text-base font-semibold text-[#2c2217] dark:text-white">
+              {t("footer.followUs")}
+            </h5>
+
             <ul className="mt-2.5 flex min-w-0 flex-wrap items-center justify-center gap-3.5 md:justify-start lg:flex-nowrap lg:justify-start lg:gap-1.5">
               {socialLinks.map(({ label, href, icon: Icon }) => (
                 <li key={label}>
@@ -136,7 +161,10 @@ export default function Footer() {
                     title={label}
                     className="inline-flex h-10 w-10 items-center justify-center text-[#3f3428]/85 transition hover:text-purple-700 dark:text-[#b8b8c7] dark:hover:text-purple-300"
                   >
-                    {createElement(Icon, { className: "h-5 w-5", "aria-hidden": "true" })}
+                    {createElement(Icon, {
+                      className: "h-5 w-5",
+                      "aria-hidden": "true",
+                    })}
                   </a>
                 </li>
               ))}
@@ -147,7 +175,7 @@ export default function Footer() {
         <div className="mt-8">
           <div className="mx-auto h-px w-full max-w-[94%] bg-black/20 dark:bg-gradient-to-r dark:from-transparent dark:via-white/20 dark:to-transparent" />
           <p className="mt-4 text-center text-sm text-black/60 dark:text-[#9d9dad]">
-            © 2026 WeCast. All rights reserved.
+            {t("footer.rights")}
           </p>
         </div>
       </div>

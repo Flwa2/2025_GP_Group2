@@ -1,5 +1,6 @@
 // src/components/Login.jsx
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Eye, EyeOff, Mail, Lock, ArrowLeft, CheckCircle2 } from "lucide-react";
 import {
   auth,
@@ -142,6 +143,7 @@ function mapVerificationResendError(error) {
 }
 
 export default function Login() {
+  const { t } = useTranslation();
   const [mode, setMode] = useState("login"); // "login" | "reset"
   const [identifier, setIdentifier] = useState("");
   const [pwd, setPwd] = useState("");
