@@ -31,6 +31,7 @@ from firebase_init import db
 from PIL import Image, UnidentifiedImageError
 import json
 import html
+import traceback
 from urllib.parse import quote, urlparse
 import smtplib
 from email.mime.text import MIMEText
@@ -662,6 +663,35 @@ def _normalize_username(value):
     return _clean_username(value).lower()
 
 
+def _validate_username_for_reservation(username):
+    cleaned = _clean_username(username)
+    if not cleaned:
+        raise AuthFlowError(
+            "invalid_username",
+            "Username is required.",
+            400,
+        )
+    if len(cleaned) > 60:
+        raise AuthFlowError(
+            "invalid_username",
+            "Username must be 60 characters or fewer.",
+            400,
+        )
+    if "/" in cleaned or "\\" in cleaned:
+        raise AuthFlowError(
+            "invalid_username",
+            "Username cannot contain slashes.",
+            400,
+        )
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in cleaned):
+        raise AuthFlowError(
+            "invalid_username",
+            "Username contains unsupported characters.",
+            400,
+        )
+    return cleaned
+
+
 def _is_user_account_deleted(data):
     if not data:
         return False
@@ -1022,6 +1052,9 @@ def _write_user_profile_with_username(
             delete_ref.delete()
         return
 
+    cleaned_username = _validate_username_for_reservation(cleaned_username)
+    normalized_username = _normalize_username(cleaned_username)
+
     if _username_is_taken(
         normalized_username,
         email=email,
@@ -1055,6 +1088,12 @@ def _write_user_profile_with_username(
     @firestore.transactional
     def commit(transaction):
         reservation_snapshot = reservation_ref.get(transaction=transaction)
+        previous_snapshot = None
+        previous_data = {}
+        if previous_reservation_ref:
+            previous_snapshot = previous_reservation_ref.get(transaction=transaction)
+            previous_data = previous_snapshot.to_dict() or {}
+
         if reservation_snapshot.exists:
             reservation_data = reservation_snapshot.to_dict() or {}
             if not _reservation_owned_by(
@@ -1077,16 +1116,17 @@ def _write_user_profile_with_username(
         if delete_ref and delete_ref.path != user_ref.path:
             transaction.delete(delete_ref)
 
-        if previous_reservation_ref:
-            previous_snapshot = previous_reservation_ref.get(transaction=transaction)
-            previous_data = previous_snapshot.to_dict() or {}
-            if previous_snapshot.exists and _reservation_owned_by(
+        if (
+            previous_snapshot
+            and previous_snapshot.exists
+            and _reservation_owned_by(
                 previous_data,
                 email=email,
                 firebase_uid=firebase_uid,
                 user_ref=user_ref,
-            ):
-                transaction.delete(previous_reservation_ref)
+            )
+        ):
+            transaction.delete(previous_reservation_ref)
 
     commit(transaction)
 
@@ -4911,25 +4951,78 @@ def api_me():
 @app.post("/api/profile/update")
 def api_profile_update():
     """Update user profile information"""
+    auth_header = request.headers.get("Authorization", "")
+    token_payload = _decode_request_token()
+
+    def log_profile_update(step, **details):
+        safe_details = {
+            "origin": (request.headers.get("Origin") or "").strip(),
+            "contentType": (request.content_type or "").split(";", 1)[0],
+            "authHeaderPresent": bool(auth_header),
+            "bearerHeaderPresent": auth_header.startswith("Bearer "),
+            "jwtDecoded": bool(token_payload),
+            "sessionEmailPresent": bool(session.get("user_id")),
+            "sessionUidPresent": bool(session.get("firebase_uid")),
+        }
+        safe_details.update(details)
+        formatted = " ".join(f"{key}={value}" for key, value in safe_details.items())
+        print(f"Profile update {step}: {formatted}")
+
     identity = get_current_user_identity()
     user_id = identity.get("email")
     firebase_uid = identity.get("firebaseUid")
     existing_doc = identity.get("doc")
+    existing_path = existing_doc.reference.path if existing_doc and existing_doc.exists else ""
+    log_profile_update(
+        "identity",
+        emailPresent=bool(user_id),
+        maskedEmail=_mask_email(user_id) if user_id else "",
+        firebaseUidPresent=bool(firebase_uid),
+        targetUserDoc=existing_path or "<missing>",
+    )
     if not user_id:
-        return jsonify(error="Not logged in"), 401
+        log_profile_update("rejected", reason="not_logged_in")
+        return auth_error_response(
+            "not_logged_in",
+            "You must be logged in to update your profile.",
+            401,
+        )
 
     if not existing_doc or not existing_doc.exists:
-        return jsonify(error="User not found"), 404
+        log_profile_update(
+            "rejected",
+            reason="profile_missing",
+            maskedEmail=_mask_email(user_id),
+            firebaseUidPresent=bool(firebase_uid),
+        )
+        return auth_error_response(
+            "profile_missing",
+            "We couldn't find your user profile.",
+            404,
+        )
 
     user_ref = existing_doc.reference
     existing_data = existing_doc.to_dict() or {}
     if _is_user_account_deleted(existing_data):
-        return jsonify(error="User not found"), 404
+        log_profile_update(
+            "rejected",
+            reason="profile_deleted",
+            targetUserDoc=user_ref.path,
+        )
+        return auth_error_response(
+            "profile_missing",
+            "We couldn't find your user profile.",
+            404,
+        )
     old_avatar_key = (existing_data.get("avatarKey") or "").strip()
 
     # Handle form data with possible file upload
     if request.content_type and 'multipart/form-data' in request.content_type:
-        display_name = request.form.get('displayName', '').strip()
+        display_name = _clean_username(
+            request.form.get('displayName')
+            or request.form.get('username')
+            or request.form.get('name')
+        )
         bio = request.form.get('bio', '').strip()
         
         # Handle avatar upload
@@ -4939,14 +5032,24 @@ def api_profile_update():
         if avatar_file and avatar_file.filename:
             # Validate file type
             if not avatar_file.content_type.startswith('image/'):
-                return jsonify(error="Only image files are allowed"), 400
+                log_profile_update("rejected", reason="invalid_avatar_type")
+                return auth_error_response(
+                    "invalid_avatar",
+                    "Only image files are allowed.",
+                    400,
+                )
             
             # Read file bytes
             image_bytes = avatar_file.read()
             
             # Validate image size (max 5MB)
             if len(image_bytes) > 5 * 1024 * 1024:
-                return jsonify(error="Image size should be less than 5MB"), 400
+                log_profile_update("rejected", reason="avatar_too_large")
+                return auth_error_response(
+                    "invalid_avatar",
+                    "Image size should be less than 5MB.",
+                    400,
+                )
             
             try:
                 signed_url, avatar_key = _persist_avatar_to_r2(
@@ -4956,12 +5059,21 @@ def api_profile_update():
                 )
                 avatar_url = signed_url
             except Exception as e:
-                print(f"Avatar upload error: {e}")
-                return jsonify(error="Failed to upload avatar"), 500
+                print(f"Avatar upload error for profile update userDoc={user_ref.path}: {e}")
+                traceback.print_exc()
+                return auth_error_response(
+                    "avatar_upload_failed",
+                    "Failed to upload avatar.",
+                    500,
+                )
     else:
         # JSON data (if no file upload)
         data = request.get_json(silent=True) or {}
-        display_name = data.get('displayName', '').strip()
+        display_name = _clean_username(
+            data.get('displayName')
+            or data.get('username')
+            or data.get('name')
+        )
         bio = data.get('bio', '').strip()
         avatar_url = data.get('avatarUrl', '').strip()
 
@@ -4976,6 +5088,20 @@ def api_profile_update():
     )
     
     if display_name:
+        try:
+            _validate_username_for_reservation(display_name)
+        except AuthFlowError as auth_error:
+            log_profile_update(
+                "rejected",
+                reason=auth_error.code,
+                targetUserDoc=user_ref.path,
+            )
+            return auth_error_response(
+                auth_error.code,
+                auth_error.message,
+                auth_error.status,
+                **auth_error.extra,
+            )
         update_data['name'] = display_name
         update_data['displayName'] = display_name
         # Auto-generate handle from display name
@@ -4993,9 +5119,22 @@ def api_profile_update():
     update_data['updatedAt'] = firestore.SERVER_TIMESTAMP
 
     if not update_data:
-        return jsonify(error="No data to update"), 400
+        log_profile_update("rejected", reason="no_update_data", targetUserDoc=user_ref.path)
+        return auth_error_response(
+            "no_update_data",
+            "No profile data was provided.",
+            400,
+        )
 
     try:
+        log_profile_update(
+            "write_attempt",
+            targetUserDoc=user_ref.path,
+            usernameChanged=bool(display_name)
+            and _normalize_username(display_name) != _stored_username_lower(existing_data),
+            shouldUpdateUsername=should_update_username,
+            avatarUpload=bool('avatar_key' in locals()),
+        )
         # Update Firestore
         if should_update_username:
             _write_user_profile_with_username(
@@ -5022,6 +5161,12 @@ def api_profile_update():
             except Exception as exc:
                 print(f"Avatar response URL refresh failed: {exc}")
         
+        log_profile_update(
+            "success",
+            targetUserDoc=user_ref.path,
+            usernameLower=_stored_username_lower(updated_data),
+        )
+
         return jsonify({
             "ok": True,
             "message": "Profile updated successfully",
@@ -5033,6 +5178,12 @@ def api_profile_update():
         })
 
     except AuthFlowError as auth_error:
+        log_profile_update(
+            "rejected",
+            reason=auth_error.code,
+            targetUserDoc=user_ref.path,
+            status=auth_error.status,
+        )
         return auth_error_response(
             auth_error.code,
             auth_error.message,
@@ -5040,8 +5191,20 @@ def api_profile_update():
             **auth_error.extra,
         )
     except Exception as e:
-        print(f"Profile update error: {e}")
-        return jsonify(error="Failed to update profile"), 500
+        print(
+            "Profile update unexpected error:",
+            f"userDoc={user_ref.path}",
+            f"emailPresent={bool(user_id)}",
+            f"firebaseUidPresent={bool(firebase_uid)}",
+            f"errorType={type(e).__name__}",
+            f"error={e}",
+        )
+        traceback.print_exc()
+        return auth_error_response(
+            "profile_update_failed",
+            "Failed to update profile.",
+            500,
+        )
 
 @app.get("/api/profile/avatar")
 def api_profile_avatar():
