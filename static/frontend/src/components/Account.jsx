@@ -131,7 +131,7 @@ export default function Account() {
   const [usernameFieldError, setUsernameFieldError] = useState("");
   
   const [profile, setProfile] = useState({
-    displayName: "WeCast User",
+    displayName: t("account.defaultUser"),
     bio: "I create AI-powered podcasts.",
     avatarUrl: "",
     email: "",
@@ -171,7 +171,7 @@ export default function Account() {
         data?.message ||
         data?.error ||
         (data?.code === "username_taken"
-          ? "This username is already taken."
+          ? t("account.usernameTaken")
           : "We couldn't validate that username right now. Please try again.");
       const err = new Error(message);
       err.code = data?.code || "";
@@ -213,7 +213,7 @@ export default function Account() {
       if (storedUserRaw) {
         try {
           const u = JSON.parse(storedUserRaw);
-          const name = u.displayName || u.name || "WeCast User";
+          const name = u.displayName || u.name || t("account.defaultUser");
           const storedAuthProvider = normalizeAuthProvider(u.authProvider);
           setProfile((p) => ({
             ...p,
@@ -308,12 +308,12 @@ export default function Account() {
     if (!file) return;
     
     if (!file.type.startsWith('image/')) {
-      showToast("Please select an image file", "error");
+      showToast(t("account.selectImageFile"), "error");
       return;
     }
 
     if (file.size > 5 * 1024 * 1024) {
-      showToast("Image size should be less than 5MB", "error");
+      showToast(t("account.imageSizeLimit"), "error");
       return;
     }
 
@@ -332,7 +332,7 @@ export default function Account() {
     setAvatarFile(null);
     setAvatarPreview(null);
     if (fileRef.current) fileRef.current.value = "";
-    showToast("Profile changes discarded", "info");
+    showToast(t("account.profileChangesDiscarded"), "info");
   }
 
   function resetAppearance() {
@@ -340,12 +340,12 @@ export default function Account() {
     setPreferences(defaults);
     setDarkMode(false);
     applyDarkMode(false);
-    showToast("Appearance settings reset", "info");
+    showToast(t("account.appearanceSettingsReset"), "info");
   }
 
   async function save() {
     if (!hasUnsavedChanges) {
-      showToast("No changes to save", "info");
+      showToast(t("account.noChangesToSave"), "info");
       return;
     }
 
@@ -366,7 +366,7 @@ export default function Account() {
           const message =
             usernameError?.code === "username_taken" || usernameError?.message
               ? usernameError.message
-              : "This username is already taken.";
+              : t("account.usernameTaken");
           setUsernameFieldError(message);
           showToast(message, "error");
           setSaving(false);
@@ -390,7 +390,7 @@ export default function Account() {
         setAvatarFile(null);
         setAvatarPreview(null);
         
-        showToast("Profile saved locally!", "success");
+        showToast(t("account.profileSavedLocally"), "success");
         setSaving(false);
         return;
       }
@@ -416,7 +416,7 @@ export default function Account() {
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
         const serverError = new Error(
-          errorData.message || errorData.error || "Failed to update profile"
+          errorData.message || errorData.error || t("account.profileUpdateFailed")
         );
         serverError.code = errorData.code || "";
         serverError.serverRejected = true;
@@ -453,13 +453,13 @@ export default function Account() {
       setAvatarFile(null);
       setAvatarPreview(null);
 
-      showToast("Profile updated successfully!", "success");
+      showToast(t("account.profileUpdated"), "success");
       
     } catch (error) {
       console.error("Save error:", error);
 
       if (error?.serverRejected || error?.code) {
-        showToast(error.message || "Failed to update profile", "error");
+        showToast(error.message || t("account.profileUpdateFailed"), "error");
         return;
       }
       
@@ -475,7 +475,7 @@ export default function Account() {
       localStorage.setItem("user", JSON.stringify(userToStore));
       setOriginalProfile(profile);
       
-      showToast(error.message || "Saved locally (server unavailable)", "warning");
+      showToast(error.message || t("account.savedLocallyServerUnavailable"), "warning");
     } finally {
       setSaving(false);
     }
@@ -489,7 +489,7 @@ export default function Account() {
 
     sessionStorage.setItem(
       "wecast:flash",
-      "You have been logged out successfully."
+      t("account.loggedOut")
     );
 
     window.dispatchEvent(
@@ -603,19 +603,19 @@ export default function Account() {
     const token = localStorage.getItem("token") || sessionStorage.getItem("token");
 
     if (!token) {
-      showToast("Please sign in again before changing your email.", "error");
+      showToast(t("account.signInAgainChangeEmail"), "error");
       return;
     }
     if (!looksLikeEmail(normalizedNewEmail)) {
-      showToast("Enter a valid new email address.", "error");
+      showToast(t("account.validNewEmail"), "error");
       return;
     }
     if (normalizedNewEmail === normalizedCurrentEmail) {
-      showToast("Enter a different email address to continue.", "error");
+      showToast(t("account.differentEmail"), "error");
       return;
     }
     if (!currentPassword.trim()) {
-      showToast("Enter your current password to confirm this change.", "error");
+      showToast(t("account.currentPasswordRequired"), "error");
       return;
     }
 
@@ -647,7 +647,7 @@ export default function Account() {
       setNewEmail("");
       setCurrentPassword("");
       showToast(
-        `Approval email sent to ${data?.maskedCurrentEmail || normalizedCurrentEmail}.`,
+        t("account.approvalEmailSent", { email: data?.maskedCurrentEmail || normalizedCurrentEmail }),
         "success"
       );
     } catch (error) {
@@ -661,9 +661,9 @@ export default function Account() {
         code === "auth/invalid-credential" ||
         code === "auth/invalid-login-credentials"
       ) {
-        message = "Your current password is incorrect.";
+        message = t("account.currentPasswordIncorrect");
       } else if (code === "auth/too-many-requests") {
-        message = "Too many attempts were made. Wait a moment, then try again.";
+        message = t("account.tooManyAttempts");
       }
 
       showToast(message, "error");
@@ -685,13 +685,13 @@ export default function Account() {
 
   async function handleDeleteAccount() {
     if (deleteConfirmation !== "DELETE") {
-      showToast('Type DELETE to confirm account removal.', "warning");
+      showToast(t("account.typeDeleteConfirm"), "warning");
       return;
     }
 
     const token = localStorage.getItem("token") || sessionStorage.getItem("token");
     if (!token) {
-      showToast("You need to be signed in to delete your account.", "error");
+      showToast(t("account.signInDeleteAccount"), "error");
       return;
     }
 
@@ -707,7 +707,7 @@ export default function Account() {
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || "Failed to delete account");
+        throw new Error(data.error || t("account.deleteFailed"));
       }
 
       localStorage.removeItem("token");
@@ -723,14 +723,14 @@ export default function Account() {
 
       sessionStorage.setItem(
         "wecast:flash",
-        "Your account has been deleted successfully."
+        t("account.deletedSuccessfully")
       );
 
       setShowDeleteModal(false);
       window.location.hash = "#/";
     } catch (error) {
       console.error("Delete account error:", error);
-      showToast(error.message || "Failed to delete account", "error");
+      showToast(error.message || t("account.deleteFailed"), "error");
     } finally {
       setDeletingAccount(false);
     }
@@ -765,7 +765,7 @@ export default function Account() {
       {/* PROFILE */}
       <Card
         title={t("account.profile")}
-        subtitle="Update your public identity, avatar, and bio in one place."
+        subtitle={t("account.profileSubtitle")}
         icon={<Save className="w-5 h-5" />}
       >
         <div className="flex min-w-0 flex-col gap-5 md:gap-6">
@@ -774,7 +774,7 @@ export default function Account() {
             <div className="flex shrink-0 flex-col items-center gap-2 self-center md:self-start">
               <img
                 src={shownAvatar}
-                alt="Avatar"
+                alt={t("account.avatarAlt")}
                 className="h-20 w-20 rounded-[18px] border border-gray-200 bg-white object-cover shadow-sm dark:border-neutral-700 dark:bg-neutral-800 min-[420px]:h-24 min-[420px]:w-24 md:h-28 md:w-28 md:rounded-[24px]"
               />
               <button
@@ -800,10 +800,10 @@ export default function Account() {
                   Profile snapshot
                 </p>
                 <p className="mt-1.5 truncate text-base font-semibold leading-tight text-black dark:text-white min-[420px]:text-lg md:whitespace-normal">
-                  {profile.displayName || "WeCast User"}
+                  {profile.displayName || t("account.defaultUser")}
                 </p>
                 <p className="mt-0.5 truncate text-xs text-gray-600 dark:text-gray-400 min-[420px]:text-sm md:whitespace-normal">
-                  {profile.email || "No email available"}
+                  {profile.email || t("account.noEmailAvailable")}
                 </p>
               </div>
             </div>
@@ -812,7 +812,7 @@ export default function Account() {
               <Field label={t("account.username")} hint={usernameFieldError ? "" : t("account.usernameHint")}>
                 <input
                   className={`form-input ${usernameFieldError ? "border-rose-500 ring-1 ring-rose-500/40 dark:border-rose-400 dark:ring-rose-400/35" : ""}`}
-                  placeholder="Enter your name"
+                  placeholder={t("account.enterYourName")}
                   value={profile.displayName}
                   aria-invalid={Boolean(usernameFieldError)}
                   onChange={(e) => {
@@ -847,7 +847,7 @@ export default function Account() {
           >
             <textarea
               className="form-textarea"
-              placeholder="Tell the world what you make…"
+              placeholder={t("account.bioPlaceholder")}
               value={profile.bio}
               onChange={(e) =>
                 setProfile({ ...profile, bio: e.target.value })
@@ -898,7 +898,7 @@ export default function Account() {
       {/* APPEARANCE */}
       <Card
         title={t("account.appearance")}
-        subtitle="Device-level preferences for how WeCast feels while you work."
+        subtitle={t("account.appearanceSubtitle")}
         icon={<Palette className="w-5 h-5" />}
       >
         <div className="space-y-5">
@@ -910,8 +910,8 @@ export default function Account() {
           />
           <PreferenceRow
             icon={<PlayCircle className="w-4 h-4" />}
-            title="Auto-play voice previews"
-            hint="Keep preview playback immediate when you test voices and clips on this device."
+            title={t("account.autoplayVoicePreviews")}
+            hint={t("account.autoplayVoicePreviewsHint")}
             control={
               <Toggle
                 checked={preferences.autoplayPreview}
@@ -923,8 +923,8 @@ export default function Account() {
           />
           <PreferenceRow
             icon={<Bell className="w-4 h-4" />}
-            title="Editing notifications"
-            hint="Show or hide non-critical success notices while editing. Errors and warnings still appear."
+            title={t("account.editingNotifications")}
+            hint={t("account.editingNotificationsHint")}
             control={
               <Toggle
                 checked={preferences.editingNotifications}
@@ -997,10 +997,10 @@ export default function Account() {
                 <p className="font-semibold text-black dark:text-white">Change email</p>
                 <p className="text-sm text-gray-600 dark:text-gray-300">
                   {canChangeEmail
-                    ? "Send a confirmation link to a new email address and update your account after you verify it."
+                    ? t("account.changeEmailHint")
                     : isProviderManaged
-                      ? `Email changes are managed through ${providerLabel}.`
-                      : "Email changes are unavailable right now. Please sign in again first."}
+                      ? t("account.emailManagedByProvider", { provider: providerLabel })
+                      : t("account.emailUnavailableHint")}
                 </p>
               </div>
               {canChangeEmail ? (
@@ -1024,7 +1024,7 @@ export default function Account() {
                 </button>
               ) : (
                 <span className={ACCOUNT_STATUS_PILL_CLASS}>
-                  {isProviderManaged ? `Managed by ${providerLabel}` : "Unavailable"}
+                  {isProviderManaged ? t("account.managedByProvider", { provider: providerLabel }) : t("account.unavailable")}
                 </span>
               )}
             </div>
@@ -1254,6 +1254,7 @@ function EmailChangeModal({
   onCancel,
   onConfirm,
 }) {
+  const { t } = useTranslation();
   if (!open) return null;
 
   const modal = (
@@ -1269,7 +1270,7 @@ function EmailChangeModal({
               We&apos;ll send a confirmation link to your new address before WeCast updates your profile.
             </p>
             <p className="text-sm text-gray-600 dark:text-gray-300">
-              Current email: <span className="font-semibold text-black dark:text-white">{currentEmail || "Unavailable"}</span>
+              {t("account.currentEmail")} <span className="font-semibold text-black dark:text-white">{currentEmail || t("account.unavailable")}</span>
             </p>
           </div>
         </div>
@@ -1282,7 +1283,7 @@ function EmailChangeModal({
               type="email"
               value={newEmail}
               onChange={(event) => onNewEmailChange(event.target.value)}
-              placeholder="you@example.com"
+              placeholder={t("account.emailPlaceholder")}
               autoFocus
               disabled={requesting}
             />
@@ -1295,7 +1296,7 @@ function EmailChangeModal({
               type="password"
               value={currentPassword}
               onChange={(event) => onCurrentPasswordChange(event.target.value)}
-              placeholder="Enter your current password"
+              placeholder={t("account.currentPasswordPlaceholder")}
               disabled={requesting}
             />
             <span className="form-help">
@@ -1324,7 +1325,7 @@ function EmailChangeModal({
                   Sending...
                 </>
               ) : (
-                "Send confirmation"
+                t("account.sendConfirmation")
               )}
             </button>
           </div>
@@ -1344,6 +1345,7 @@ function DeleteAccountModal({
   onCancel,
   onConfirm,
 }) {
+  const { t } = useTranslation();
   if (!open) return null;
 
   const modal = (
@@ -1359,7 +1361,7 @@ function DeleteAccountModal({
               This action permanently deletes your account and all episodes tied to it.
             </p>
             <p className="text-sm text-gray-600 dark:text-gray-300">
-              Type <span className="font-semibold text-black dark:text-white">DELETE</span> to confirm.
+              {t("account.typeDeleteToConfirm", { word: "DELETE" })}
             </p>
           </div>
         </div>
@@ -1369,7 +1371,7 @@ function DeleteAccountModal({
             className="form-input"
             value={confirmationText}
             onChange={(e) => onConfirmationChange(e.target.value)}
-            placeholder="Type DELETE"
+            placeholder={t("account.typeDeletePlaceholder")}
             autoFocus
           />
 
@@ -1422,6 +1424,7 @@ function Field({ label, hint, children, full }) {
 }
 
 function Toggle({ checked, onChange }) {
+  const { t } = useTranslation();
   return (
     <button
       type="button"
@@ -1433,7 +1436,7 @@ function Toggle({ checked, onChange }) {
           ? "bg-black dark:bg-white justify-end"
           : "bg-gray-300 justify-start"
       }`}
-      title="Toggle dark mode"
+      title={t("account.toggleDarkMode")}
     >
       <span className="w-5 h-5 rounded-full bg-white dark:bg-black shadow transition" />
     </button>
