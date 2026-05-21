@@ -44,6 +44,16 @@ services:
         value: https://wecastsa.com,https://www.wecastsa.com,http://localhost:5173,http://127.0.0.1:5173
       - key: CORS_ORIGINS
         value: https://wecastsa.com,https://www.wecastsa.com,http://localhost:5173,http://127.0.0.1:5173
+      - key: WECAST_AUDIO_INCLUDE_MUSIC
+        value: "0"
+      - key: RENDER_AUDIO_MAX_WORDS
+        value: "700"
+      - key: RENDER_AUDIO_MAX_SPEAKERS
+        value: "6"
+      - key: RENDER_AUDIO_MAX_DURATION_SEC
+        value: "600"
+      - key: WECAST_AUDIO_TTS_FORMAT
+        value: mp3_44100_64
   - type: static
     name: wecast-frontend
     rootDir: static/frontend

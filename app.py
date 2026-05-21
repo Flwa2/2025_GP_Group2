@@ -3868,8 +3868,8 @@ def eleven_tts_with_timestamps(
     output_path=None,
 ):
     """
-    Returns: (audio_bytes_or_none, word_timings_for_this_segment)
-    When output_path is set, audio is written to disk and None is returned for bytes.
+    DEPRECATED for /api/audio — loads full JSON+base64 (OOM on Render).
+    Use eleven_tts_stream_to_file() instead.
     """
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/with-timestamps"
     headers = {
@@ -7297,20 +7297,152 @@ def parse_script_into_segments(script: str):
     return segments
 
 
-def _audio_memory_log(stage, **details):
-    """Lightweight RSS logging for Render OOM diagnosis."""
-    parts = [f"stage={stage}"]
+# Render /api/audio: low-memory synthesis (stream TTS, no alignment JSON)
+AUDIO_TTS_MODEL = os.getenv("WECAST_AUDIO_TTS_MODEL", "eleven_multilingual_v2")
+AUDIO_TTS_OUTPUT_FORMAT = os.getenv("WECAST_AUDIO_TTS_FORMAT", "mp3_44100_64")
+AUDIO_FFMPEG_BITRATE = "64k"
+AUDIO_FFMPEG_SAMPLE_RATE = "44100"
+AUDIO_FFMPEG_CHANNELS = "1"
+RENDER_AUDIO_MAX_WORDS = int(os.getenv("RENDER_AUDIO_MAX_WORDS", "700"))
+RENDER_AUDIO_MAX_SPEAKERS = int(os.getenv("RENDER_AUDIO_MAX_SPEAKERS", "6"))
+RENDER_AUDIO_MAX_DURATION_SEC = float(os.getenv("RENDER_AUDIO_MAX_DURATION_SEC", "600"))
+WECAST_AUDIO_INCLUDE_MUSIC = os.getenv("WECAST_AUDIO_INCLUDE_MUSIC", "0").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+
+
+def _audio_rss_bytes():
     try:
         import psutil
 
-        rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
-        parts.append(f"rss_mb={rss_mb:.1f}")
+        return psutil.Process().memory_info().rss
     except Exception:
-        pass
+        return None
+
+
+def _audio_memory_log(stage, **details):
+    """RSS logging after every synthesis step (Render OOM diagnosis)."""
+    parts = [f"stage={stage}"]
+    rss_bytes = _audio_rss_bytes()
+    if rss_bytes is not None:
+        parts.append(f"rss_mb={rss_bytes / (1024 * 1024):.1f}")
+        print(f"Audio RSS bytes: {rss_bytes}", flush=True)
     for key, value in details.items():
         if value is not None:
             parts.append(f"{key}={value}")
     print("Audio memory:", " ".join(parts), flush=True)
+
+
+def _validate_render_audio_limits(script: str, segments: list):
+    word_count = len(re.findall(r"\S+", script or ""))
+    if word_count > RENDER_AUDIO_MAX_WORDS:
+        return (
+            False,
+            f"Script has {word_count} words; maximum allowed is {RENDER_AUDIO_MAX_WORDS}.",
+        )
+
+    speakers = {
+        (speaker or "").strip()
+        for speaker, _text in segments
+        if (speaker or "").strip().lower() != "__music__"
+    }
+    speakers.discard("")
+    if len(speakers) > RENDER_AUDIO_MAX_SPEAKERS:
+        return (
+            False,
+            f"Too many speakers ({len(speakers)}); maximum allowed is {RENDER_AUDIO_MAX_SPEAKERS}.",
+        )
+
+    estimated_duration_sec = word_count * 0.45
+    if estimated_duration_sec > RENDER_AUDIO_MAX_DURATION_SEC:
+        return (
+            False,
+            f"Estimated audio length (~{int(estimated_duration_sec)}s) exceeds the "
+            f"{int(RENDER_AUDIO_MAX_DURATION_SEC)}s limit for this server.",
+        )
+
+    return True, ""
+
+
+def _estimate_word_timeline_from_text(text: str, speaker: str, start_offset: float, duration_sec: float):
+    """Linear word timings without ElevenLabs alignment (keeps RAM flat)."""
+    tokens = re.findall(r"\S+", text or "")
+    if not tokens or duration_sec <= 0:
+        return []
+
+    per_word = duration_sec / len(tokens)
+    timeline = []
+    cursor = float(start_offset)
+    for token in tokens:
+        timeline.append(
+            {
+                "w": token,
+                "start": cursor,
+                "end": cursor + per_word,
+                "speaker": speaker,
+            }
+        )
+        cursor += per_word
+    return timeline
+
+
+def _ffmpeg_run(cmd, timeout=600):
+    return subprocess.run(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def eleven_tts_stream_to_file(
+    text: str,
+    voice_id: str,
+    output_path: str,
+    model_id=None,
+):
+    """
+    Stream MP3 from ElevenLabs directly to disk (no JSON/base64 in RAM).
+    Returns an empty word list; callers build timings from duration probes.
+    """
+    model = model_id or AUDIO_TTS_MODEL
+    url = (
+        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+        "?optimize_streaming_latency=4"
+    )
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "audio/mpeg",
+    }
+    body = {
+        "text": text,
+        "model_id": model,
+        "output_format": AUDIO_TTS_OUTPUT_FORMAT,
+    }
+
+    with requests.post(url, headers=headers, json=body, stream=True, timeout=180) as response:
+        if not response.ok:
+            err_body = ""
+            try:
+                err_body = (response.text or "")[:300]
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"ElevenLabs error {response.status_code}: {err_body}"
+            )
+
+        with open(output_path, "wb") as output_file:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    output_file.write(chunk)
+
+    gc.collect()
+    return []
 
 
 def _audio_ffmpeg_ready():
@@ -7341,7 +7473,7 @@ def _resolve_ffprobe_executable():
     raise RuntimeError("ffprobe not installed/configured")
 
 
-def _estimate_mp3_duration_seconds(path, bitrate_kbps=128):
+def _estimate_mp3_duration_seconds(path, bitrate_kbps=64):
     try:
         size_bytes = os.path.getsize(path)
     except OSError:
@@ -7388,20 +7520,20 @@ def _ffmpeg_create_silence_mp3(output_path, duration_ms=500):
         "-f",
         "lavfi",
         "-i",
-        "anullsrc=r=44100:cl=mono",
+        f"anullsrc=r={AUDIO_FFMPEG_SAMPLE_RATE}:cl=mono",
         "-t",
         str(duration_sec),
         "-c:a",
         "libmp3lame",
         "-b:a",
-        "128k",
+        AUDIO_FFMPEG_BITRATE,
         "-ar",
-        "44100",
+        AUDIO_FFMPEG_SAMPLE_RATE,
         "-ac",
-        "1",
+        AUDIO_FFMPEG_CHANNELS,
         output_path,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    result = _ffmpeg_run(cmd, timeout=120)
     if result.returncode != 0:
         raise RuntimeError(
             f"ffmpeg silence failed: {(result.stderr or result.stdout or '').strip()[:300]}"
@@ -7425,7 +7557,7 @@ def _ffmpeg_concat_mp3_files(segment_paths, output_path):
             list_file.write(f"file '{_escape(os.path.abspath(segment_path))}'\n")
 
     def _run_concat(extra_args):
-        return subprocess.run(
+        return _ffmpeg_run(
             [
                 ffmpeg,
                 "-y",
@@ -7438,8 +7570,6 @@ def _ffmpeg_concat_mp3_files(segment_paths, output_path):
                 *extra_args,
                 output_path,
             ],
-            capture_output=True,
-            text=True,
             timeout=600,
         )
 
@@ -7448,7 +7578,7 @@ def _ffmpeg_concat_mp3_files(segment_paths, output_path):
     if result.returncode != 0:
         print(
             "WARN ffmpeg concat copy failed, re-encoding:",
-            (result.stderr or result.stdout or "").strip()[:200],
+            (result.stderr or "").strip()[:200],
             flush=True,
         )
         result = _run_concat(
@@ -7456,11 +7586,11 @@ def _ffmpeg_concat_mp3_files(segment_paths, output_path):
                 "-c:a",
                 "libmp3lame",
                 "-b:a",
-                "128k",
+                AUDIO_FFMPEG_BITRATE,
                 "-ar",
-                "44100",
+                AUDIO_FFMPEG_SAMPLE_RATE,
                 "-ac",
-                "1",
+                AUDIO_FFMPEG_CHANNELS,
             ]
         )
     try:
@@ -7469,15 +7599,28 @@ def _ffmpeg_concat_mp3_files(segment_paths, output_path):
         pass
     if result.returncode != 0:
         raise RuntimeError(
-            f"ffmpeg concat failed: {(result.stderr or result.stdout or '').strip()[:400]}"
+            f"ffmpeg concat failed: {(result.stderr or '').strip()[:400]}"
         )
     _audio_memory_log("ffmpeg_concat_done", output_path=output_path)
 
 
+def _ffmpeg_append_mp3(master_path: str, segment_path: str, work_dir: str):
+    """Incrementally merge one segment into master (two-file concat, low RAM)."""
+    if not os.path.isfile(segment_path):
+        return
+    if not os.path.isfile(master_path):
+        shutil.copy2(segment_path, master_path)
+        return
+
+    tmp_out = os.path.join(work_dir, f"_append_{os.getpid()}_{secrets.token_hex(4)}.mp3")
+    _ffmpeg_concat_mp3_files([master_path, segment_path], tmp_out)
+    os.replace(tmp_out, master_path)
+
+
 def synthesize_audio_from_script(script: str, podcast_id: str = ""):
     """
-    Disk-streamed synthesis: one segment file at a time, ffmpeg concat at the end.
-    Avoids holding every TTS/music clip in RAM (prevents Render worker SIGKILL/OOM).
+    Low-memory synthesis: stream TTS to disk (no alignment JSON), incremental ffmpeg merge.
+    Background music is off by default on Render (WECAST_AUDIO_INCLUDE_MUSIC=1 to enable).
     """
     if not _audio_ffmpeg_ready():
         return False, "ffmpeg not installed/configured"
@@ -7491,28 +7634,45 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
     if not segments:
         return False, "Nothing to read after cleaning script."
 
+    ok_limits, limit_error = _validate_render_audio_limits(script, segments)
+    if not ok_limits:
+        return False, limit_error
+
     speaker_to_voice, default_voice = build_speaker_voice_map()
     word_timeline = []
     timeline_offset = 0.0
     lead_silence_sec = 0.5
+    speech_segment_count = 0
 
     safe_id = re.sub(r"[^A-Za-z0-9_-]", "", podcast_id or "") or "output"
     local_filename = f"output_{safe_id}.mp3"
     object_key = f"episodes/{safe_id}/{local_filename}"
 
-    _audio_memory_log("synthesis_start", podcast_id=safe_id, segment_count=len(segments))
+    _audio_memory_log(
+        "synthesis_start",
+        podcast_id=safe_id,
+        segment_count=len(segments),
+        include_music=WECAST_AUDIO_INCLUDE_MUSIC,
+        tts_format=AUDIO_TTS_OUTPUT_FORMAT,
+    )
 
     try:
         with tempfile.TemporaryDirectory(prefix="wecast_audio_") as temp_dir:
-            segment_paths = []
+            master_path = os.path.join(temp_dir, local_filename)
             silence_path = os.path.join(temp_dir, "lead_silence.mp3")
             _audio_memory_log("lead_silence_create")
             _ffmpeg_create_silence_mp3(silence_path, duration_ms=500)
-            segment_paths.append(silence_path)
+            shutil.copy2(silence_path, master_path)
+            timeline_offset += _probe_mp3_duration_seconds(silence_path)
             gc.collect()
+            _audio_memory_log("master_initialized", path=master_path)
 
             for index, (speaker, text) in enumerate(segments):
                 if speaker.strip().lower() == "__music__":
+                    if not WECAST_AUDIO_INCLUDE_MUSIC:
+                        _audio_memory_log("music_skipped", index=index)
+                        continue
+
                     intro = session.get("introMusic", "")
                     body = session.get("bodyMusic", "")
                     outro = session.get("outroMusic", "")
@@ -7532,14 +7692,20 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
                     if not os.path.exists(music_path):
                         continue
 
-                    segment_paths.append(os.path.abspath(music_path))
+                    music_abs = os.path.abspath(music_path)
                     _audio_memory_log(
-                        "music_segment_added",
+                        "music_append_start",
                         index=index,
                         music=selected_music,
-                        segment_count=len(segment_paths),
                     )
-                    timeline_offset += _probe_mp3_duration_seconds(music_path)
+                    _ffmpeg_append_mp3(master_path, music_abs, temp_dir)
+                    music_duration = _probe_mp3_duration_seconds(music_abs)
+                    timeline_offset += music_duration
+                    _audio_memory_log(
+                        "music_segment_merged",
+                        index=index,
+                        duration_sec=round(music_duration, 2),
+                    )
                     gc.collect()
                     continue
 
@@ -7555,70 +7721,76 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
                 segment_path = os.path.join(temp_dir, f"speech_{index:04d}.mp3")
 
                 _audio_memory_log(
-                    "tts_request_start",
+                    "tts_stream_start",
                     index=index,
                     speaker=speaker,
                     chars=len(tts_text),
                 )
                 try:
-                    _, segment_words = eleven_tts_with_timestamps(
+                    eleven_tts_stream_to_file(
                         text=tts_text,
                         voice_id=voice_id,
-                        model_id="eleven_multilingual_v2",
                         output_path=segment_path,
                     )
                 except Exception as exc:
                     return False, str(exc)
 
+                segment_bytes = os.path.getsize(segment_path)
                 _audio_memory_log(
-                    "tts_request_done",
+                    "tts_stream_done",
                     index=index,
-                    bytes=os.path.getsize(segment_path),
+                    bytes=segment_bytes,
                 )
-                gc.collect()
 
-                segment_paths.append(segment_path)
-                segment_duration = 0.0
-                if segment_words:
-                    segment_duration = max(
-                        float(w.get("end") or 0.0) for w in segment_words
+                segment_duration = _probe_mp3_duration_seconds(segment_path)
+                word_timeline.extend(
+                    _estimate_word_timeline_from_text(
+                        tts_text,
+                        speaker,
+                        timeline_offset,
+                        segment_duration,
                     )
-                else:
-                    segment_duration = _probe_mp3_duration_seconds(segment_path)
-
-                for w in segment_words:
-                    word_timeline.append(
-                        {
-                            "w": w["w"],
-                            "start": float(w["start"]) + timeline_offset,
-                            "end": float(w["end"]) + timeline_offset,
-                            "speaker": speaker,
-                        }
-                    )
-
+                )
                 timeline_offset += segment_duration
+
+                _audio_memory_log("ffmpeg_append_start", index=index)
+                _ffmpeg_append_mp3(master_path, segment_path, temp_dir)
+                try:
+                    os.remove(segment_path)
+                except OSError:
+                    pass
+
+                speech_segment_count += 1
                 _audio_memory_log(
-                    "speech_segment_saved",
+                    "speech_segment_merged",
                     index=index,
-                    path=segment_path,
                     duration_sec=round(segment_duration, 2),
-                    segment_count=len(segment_paths),
+                    speech_segments=speech_segment_count,
                 )
                 gc.collect()
 
-            if len(segment_paths) <= 1:
+            if speech_segment_count == 0:
                 return False, "No audio data generated."
 
-            output_path = os.path.join(temp_dir, local_filename)
-            _audio_memory_log("merge_start", segment_count=len(segment_paths))
-            _ffmpeg_concat_mp3_files(segment_paths, output_path)
-            gc.collect()
+            output_path = master_path
+            measured_duration = _probe_mp3_duration_seconds(output_path)
+            if measured_duration > RENDER_AUDIO_MAX_DURATION_SEC:
+                return (
+                    False,
+                    f"Generated audio ({int(measured_duration)}s) exceeds the "
+                    f"{int(RENDER_AUDIO_MAX_DURATION_SEC)}s server limit.",
+                )
 
             for w in word_timeline:
                 w["start"] += lead_silence_sec
                 w["end"] += lead_silence_sec
 
-            _audio_memory_log("upload_start", output_path=output_path)
+            _audio_memory_log(
+                "upload_start",
+                output_path=output_path,
+                duration_sec=round(measured_duration, 2),
+                word_count=len(word_timeline),
+            )
             upload_file_to_r2(output_path, object_key, "audio/mpeg")
             gc.collect()
 
@@ -7668,14 +7840,23 @@ def api_audio():
                 result if isinstance(result, str) else "Audio generation failed."
             )
             is_ffmpeg = error_message == "ffmpeg not installed/configured"
+            is_limit = (
+                "maximum allowed" in error_message
+                or "exceeds the" in error_message
+                or "server limit" in error_message
+            )
             return _apply_cors_headers(
                 _api_json_response(
                     {
                         "ok": False,
                         "error": error_message,
-                        "code": "ffmpeg_not_configured"
-                        if is_ffmpeg
-                        else "audio_generation_failed",
+                        "code": (
+                            "ffmpeg_not_configured"
+                            if is_ffmpeg
+                            else "audio_limit_exceeded"
+                            if is_limit
+                            else "audio_generation_failed"
+                        ),
                     },
                     status=503 if is_ffmpeg else 400,
                 )

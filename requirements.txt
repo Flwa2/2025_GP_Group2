@@ -86,3 +86,4 @@ pydub
 audioop-lts; python_version >= "3.13"
 Pillow
 boto3
+psutil
