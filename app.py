@@ -195,6 +195,8 @@ def localize_script_structure(script: str, language: str) -> str:
 
 def _configured_frontend_origins():
     defaults = [
+        "https://wecastsa.com",
+        "https://www.wecastsa.com",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "https://wecast-frontend.onrender.com",

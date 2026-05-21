@@ -272,7 +272,7 @@ export default function EpisodePreviewView({
                   />
                 </div>
 
-                <div className={`${previewCardClass} min-h-[260px] w-full min-w-0 max-w-full p-5`}>
+                <div className={`${previewCardClass} preview-transcript-card min-h-[260px] w-full min-w-0 max-w-full p-5 max-md:min-h-0 max-md:p-4`}>
                   <div className="mb-3 flex min-w-0 items-center justify-between gap-2">
                     <div className="min-w-0 text-sm font-bold [overflow-wrap:anywhere]">
                       {t("preview.liveTranscript")}
@@ -290,7 +290,7 @@ export default function EpisodePreviewView({
                     onTouchMove={markUserInteraction}
                     onMouseDown={markUserInteraction}
                     className={[
-                      "preview-transcript-scroll min-w-0 max-w-full overflow-y-auto overflow-x-hidden text-[15px] leading-8 [overflow-wrap:anywhere]",
+                      "preview-transcript-scroll min-w-0 max-w-full overflow-y-auto overflow-x-hidden overscroll-contain scroll-smooth text-[15px] leading-8 [overflow-wrap:anywhere] [scrollbar-width:thin] [-webkit-overflow-scrolling:touch]",
                       transcriptDir === "rtl" ? "pl-2 text-right sm:pl-3" : "pr-2 text-left sm:pr-3",
                     ].join(" ")}
                   >

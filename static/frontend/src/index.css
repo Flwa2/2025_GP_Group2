@@ -325,6 +325,16 @@ body:has(.wecast-overlay) {
   align-items: start;
 }
 
+@media (max-width: 767px) {
+  .preview-transcript-card {
+    max-height: clamp(18rem, calc(100dvh - 14rem), 28rem);
+  }
+
+  .preview-transcript-scroll {
+    max-height: clamp(12rem, calc(100dvh - 22rem), 20rem);
+  }
+}
+
 @media (min-width: 1024px) {
   .preview-transcript-scroll {
     max-height: min(34rem, calc(100dvh - 22rem));
