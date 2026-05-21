@@ -62,7 +62,7 @@ import {
 } from "../utils/voiceAccentFilters";
 import { ensureVoiceLibraryCatalog } from "../utils/voiceLibraryCache";
 
-import { API_BASE } from "../utils/api";
+import { API_BASE, getAuthHeaders } from "../utils/api";
 
 const getPortalTarget = () => {
   if (typeof document === "undefined") return null;
@@ -74,10 +74,6 @@ const getHashSearchParams = () => {
   const query = hash.includes("?") ? hash.slice(hash.indexOf("?") + 1) : "";
   return new URLSearchParams(query);
 };
-
-const authHeaders = () => ({
-  Authorization: `Bearer ${localStorage.getItem("token") || sessionStorage.getItem("token") || ""}`,
-});
 
 const parseJsonResponse = async (res) => {
   const data = await res.json().catch(() => ({}));
@@ -765,7 +761,7 @@ const willRegenerateAudio = useCallback(() => {
         const res = await fetch(`${API_BASE}/api/podcast/${encodeURIComponent(id)}`, {
           credentials: "include",
           headers: {
-            ...authHeaders(),
+            ...getAuthHeaders(),
           }
         });
 
@@ -885,7 +881,7 @@ useEffect(() => {
           const params = buildLibraryUrlSearchParams(applied, page, pageSize);
           const res = await fetch(`${API_BASE}/api/voices/elevenlabs?${params.toString()}`, {
             credentials: "include",
-            headers: authHeaders(),
+            headers: getAuthHeaders(),
           });
           const data = await parseJsonResponse(res);
           if (!res.ok) throw new Error(data?.error || `Failed to load voices (${res.status})`);
@@ -904,7 +900,7 @@ useEffect(() => {
             params.set("limit", "500");
             const res = await fetch(`${API_BASE}/api/voices?${params.toString()}`, {
               credentials: "include",
-              headers: authHeaders(),
+              headers: getAuthHeaders(),
             });
             const data = await parseJsonResponse(res);
             if (!res.ok) return [];
@@ -916,7 +912,7 @@ useEffect(() => {
             params.set("limit", "500");
             const res = await fetch(`${API_BASE}/api/voices?${params.toString()}`, {
               credentials: "include",
-              headers: authHeaders(),
+              headers: getAuthHeaders(),
             });
             const data = await parseJsonResponse(res);
             if (!res.ok) throw new Error(data?.error || `Fallback voices failed (${res.status})`);
@@ -1042,7 +1038,7 @@ useEffect(() => {
         credentials: "include",
           headers: {
             "Content-Type": "application/json",
-            ...authHeaders(),
+            ...getAuthHeaders(),
         },
         body: JSON.stringify({
           voiceId,
@@ -1153,7 +1149,7 @@ useEffect(() => {
           credentials: "include",
           headers: {
             "Content-Type": "application/json",
-            ...authHeaders(),
+            ...getAuthHeaders(),
           },
           body: JSON.stringify({ mode: "discard_draft" }),
         });
@@ -1182,7 +1178,7 @@ useEffect(() => {
         credentials: "include",
         headers: {
           "Content-Type": "application/json",
-          ...authHeaders(),
+          ...getAuthHeaders(),
         },
         body: JSON.stringify({
           mode: "draft",
@@ -1267,7 +1263,7 @@ useEffect(() => {
           credentials: "include",
           headers: {
             "Content-Type": "application/json",
-            ...authHeaders(),
+            ...getAuthHeaders(),
           },
           body: JSON.stringify({ mode: "discard_draft" }),
         });
@@ -1360,7 +1356,7 @@ const persistChanges = async ({
       credentials: "include",
       headers: { 
         "Content-Type": "application/json",
-        ...authHeaders(),
+        ...getAuthHeaders(),
       },
       body: JSON.stringify({
         mode: "final",
@@ -1401,7 +1397,7 @@ const persistChanges = async ({
         credentials: "include",
         headers: {
           "Content-Type": "application/json",
-          ...authHeaders(),
+          ...getAuthHeaders(),
         },
         body: JSON.stringify({ title: nextShowTitle }),
       });
@@ -1512,7 +1508,7 @@ const finalizeChanges = async () => {
           credentials: "include",
           headers: {
             "Content-Type": "application/json",
-            ...authHeaders(),
+            ...getAuthHeaders(),
           },
           body: JSON.stringify({ introMusic, bodyMusic, outroMusic }),
         });
@@ -1525,7 +1521,7 @@ const finalizeChanges = async () => {
         credentials: "include",
         headers: { 
           "Content-Type": "application/json",
-          ...authHeaders(),
+          ...getAuthHeaders(),
         },
         body: JSON.stringify({
           scriptText: resolvedScript,

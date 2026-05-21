@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { LogOut, Check, AlertCircle, AlertTriangle, Save, RefreshCcw, Bell, PlayCircle, Palette, Trash2, Mail } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { API_BASE } from "../utils/api";
+import { API_BASE, getAuthHeaders } from "../utils/api";
 import { DEFAULT_ACCOUNT_PREFERENCES, loadAccountPreferences, saveAccountPreferences } from "../utils/accountPreferences";
 
 const getPortalTarget = () => {
@@ -161,7 +161,7 @@ export default function Account() {
   const checkUsernameAvailability = async (username) => {
     const res = await fetch(`${API_BASE}/api/username-availability`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getAuthHeaders({ "Content-Type": "application/json" }),
       credentials: "include",
       body: JSON.stringify({ username }),
     });
@@ -245,9 +245,7 @@ export default function Account() {
       const res = await fetch(`${API_BASE}/api/me`, {
         method: "GET",
         credentials: "include",
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: getAuthHeaders(),
       });
 
       if (!res.ok) {
@@ -407,10 +405,8 @@ export default function Account() {
       const res = await fetch(`${API_BASE}/api/profile/update`, {
         method: "POST",
         credentials: "include",
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
+        headers: getAuthHeaders(),
+        body: formData,
       });
 
       if (!res.ok) {
@@ -517,7 +513,7 @@ export default function Account() {
         const response = await fetch(`${API_BASE}/api/me`, {
           method: "GET",
           credentials: "include",
-          headers: { Authorization: `Bearer ${token}` },
+          headers: getAuthHeaders(),
         });
         const data = await response.json().catch(() => ({}));
         const apiEmail = String(data?.email || "").trim().toLowerCase();
@@ -547,10 +543,7 @@ export default function Account() {
       const token = localStorage.getItem("token") || sessionStorage.getItem("token") || "";
       const res = await fetch(`${API_BASE}/api/send-password-reset-email`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: getAuthHeaders({ "Content-Type": "application/json" }),
         credentials: "include",
         body: JSON.stringify({ email }),
       });
@@ -623,10 +616,7 @@ export default function Account() {
     try {
       const res = await fetch(`${API_BASE}/api/change-email-request`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: getAuthHeaders({ "Content-Type": "application/json" }),
         credentials: "include",
         body: JSON.stringify({
           current_email: normalizedCurrentEmail,
@@ -700,9 +690,7 @@ export default function Account() {
       const res = await fetch(`${API_BASE}/api/account`, {
         method: "DELETE",
         credentials: "include",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: getAuthHeaders(),
       });
 
       const data = await res.json().catch(() => ({}));

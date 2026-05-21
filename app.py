@@ -449,6 +449,8 @@ def _decode_request_token():
         return None
 
     token = auth_header.split(" ", 1)[1].strip()
+    if not token:
+        return None
     try:
         return jwt.decode(token, app.config["SECRET_KEY"], algorithms=["HS256"])
     except Exception as e:
@@ -1445,9 +1447,46 @@ def get_user_doc_by_candidates(user_id=None, firebase_uid="", email=""):
     return None
 
 
+def _jwt_auth_payload():
+    return _decode_request_token() or {}
+
+
+def _sync_session_from_jwt(payload=None):
+    """Restore session from app JWT when Render lost filesystem session store."""
+    payload = payload if payload is not None else _jwt_auth_payload()
+    if not payload:
+        return False
+
+    email = _normalize_email(payload.get("email") or payload.get("user_id") or "")
+    uid = (payload.get("firebase_uid") or "").strip()
+    if not email and not uid:
+        return False
+
+    changed = False
+    if email and session.get("user_id") != email:
+        session["user_id"] = email
+        changed = True
+    if uid and session.get("firebase_uid") != uid:
+        session["firebase_uid"] = uid
+        changed = True
+    if changed:
+        session.modified = True
+    return True
+
+
 def get_current_user_identity():
-    current_email = _normalize_email(session.get("user_id") or get_current_user_email())
-    current_uid = (session.get("firebase_uid") or get_current_user_firebase_uid() or "").strip()
+    payload = _jwt_auth_payload()
+    jwt_email = _normalize_email(payload.get("email") or payload.get("user_id") or "")
+    jwt_uid = (payload.get("firebase_uid") or "").strip()
+    session_email = _normalize_email(session.get("user_id") or "")
+    session_uid = (session.get("firebase_uid") or "").strip()
+
+    # JWT first: cross-origin requests keep Bearer; filesystem sessions may be empty on Render.
+    if jwt_email or jwt_uid:
+        _sync_session_from_jwt(payload)
+
+    current_email = jwt_email or session_email or _normalize_email(get_current_user_email() or "")
+    current_uid = jwt_uid or session_uid or (get_current_user_firebase_uid() or "").strip()
     doc = get_user_doc_by_candidates(current_email, firebase_uid=current_uid, email=current_email)
     if doc and doc.exists and not _user_doc_is_active(doc):
         session.clear()
@@ -4573,37 +4612,87 @@ def api_voice_preview():
         details=r.text[:800],
     ), 502
 
-def _log_api_auth_context(route_name: str):
-    """Temporary cross-origin auth diagnostics (Render + wecastsa.com)."""
-    token_payload = _decode_request_token() or {}
+def _log_api_auth_context(route_name: str, podcast_id: str = "", failure_reason: str = ""):
+    """Cross-origin auth diagnostics (Render + wecastsa.com)."""
+    auth_header = request.headers.get("Authorization", "")
+    token_payload = _jwt_auth_payload()
+    identity = get_current_user_identity()
     origin = (request.headers.get("Origin") or "").strip()
     cookie_names = sorted(request.cookies.keys())
     owner_id = get_current_podcast_owner_id() or ""
-    email = get_current_user_email() or session.get("user_id") or ""
+    episode_owner = ""
+    if podcast_id:
+        try:
+            pdata = db.collection("podcasts").document(podcast_id).get()
+            if pdata.exists:
+                pdata_dict = pdata.to_dict() or {}
+                episode_owner = (
+                    pdata_dict.get("userId")
+                    or pdata_dict.get("ownerEmail")
+                    or pdata_dict.get("ownerUid")
+                    or ""
+                )
+        except Exception as exc:
+            episode_owner = f"<lookup_error:{exc}>"
+
     print(
         "API auth",
         f"route={route_name}",
         f"origin={origin or '<none>'}",
+        f"cookie_present={'yes' if cookie_names else 'no'}",
+        f"cookies={cookie_names}",
+        f"auth_header={'yes' if auth_header else 'no'}",
+        f"bearer={'yes' if auth_header.startswith('Bearer ') else 'no'}",
         f"jwt={'yes' if token_payload else 'no'}",
+        f"session_keys={sorted(session.keys())}",
         f"session_user={'yes' if session.get('user_id') else 'no'}",
         f"session_uid={'yes' if session.get('firebase_uid') else 'no'}",
-        f"cookies={cookie_names}",
+        f"resolved_email={_mask_email(identity.get('email') or '') or '<none>'}",
+        f"resolved_uid={'yes' if identity.get('firebaseUid') else 'no'}",
         f"owner_id={owner_id[:48] if owner_id else '<none>'}",
-        f"email={_mask_email(email) if email else '<none>'}",
+        f"episode_owner={str(episode_owner)[:48] if episode_owner else '<none>'}",
+        f"failure={failure_reason or '<none>'}",
         flush=True,
     )
 
 
-def _require_login_user():
-    user_id = get_current_podcast_owner_id()
-    if not user_id:
-        return None, (
-            _apply_cors_headers(
-                jsonify(ok=False, error="Not logged in", code="not_logged_in")
-            ),
-            401,
+def _auth_identity_missing_response():
+    return (
+        _apply_cors_headers(
+            _api_json_response(
+                {
+                    "ok": False,
+                    "code": "auth_identity_missing",
+                    "error": "Please log in again.",
+                },
+                status=401,
+            )
+        ),
+        401,
+    )
+
+
+def _require_login_user(podcast_id: str = ""):
+    identity = get_current_user_identity()
+    user_email = _normalize_email(identity.get("email") or "")
+
+    if not user_email:
+        payload = _jwt_auth_payload()
+        user_email = _normalize_email(payload.get("email") or payload.get("user_id") or "")
+
+    if not user_email:
+        user_email = _normalize_email(session.get("user_id") or "")
+
+    if not user_email:
+        _log_api_auth_context(
+            "require_login",
+            podcast_id=podcast_id,
+            failure_reason="auth_identity_missing",
         )
-    return user_id, None
+        return None, _auth_identity_missing_response()
+
+    owner_id = get_current_podcast_owner_id() or user_email
+    return owner_id, None
 
 
 def _assert_podcast_owner(podcast_id: str, user_id: str):
@@ -4816,8 +4905,8 @@ def _persist_cover_to_storage_and_doc(podcast_id: str, cover_b64: str, mime_type
 
 @app.get("/api/podcasts/<podcast_id>/finalize")
 def api_finalize_get(podcast_id):
-    _log_api_auth_context("finalize_get")
-    user_id, err = _require_login_user()
+    _log_api_auth_context("finalize_get", podcast_id=podcast_id)
+    user_id, err = _require_login_user(podcast_id)
     if err:
         return err
 
@@ -4852,8 +4941,8 @@ def api_finalize_get(podcast_id):
 
 @app.post("/api/podcasts/<podcast_id>/cover/generate")
 def api_cover_generate(podcast_id):
-    _log_api_auth_context("cover_generate")
-    user_id, err = _require_login_user()
+    _log_api_auth_context("cover_generate", podcast_id=podcast_id)
+    user_id, err = _require_login_user(podcast_id)
     if err:
         return err
 
@@ -5104,8 +5193,8 @@ def api_update_podcast(podcast_id):
 
 @app.post("/api/podcasts/<podcast_id>/cover/upload")
 def api_cover_upload(podcast_id):
-    _log_api_auth_context("cover_upload")
-    user_id, err = _require_login_user()
+    _log_api_auth_context("cover_upload", podcast_id=podcast_id)
+    user_id, err = _require_login_user(podcast_id)
     if err:
         return err
 
@@ -5201,7 +5290,8 @@ def api_podcast_update_title(podcast_id):
 
 @app.post("/api/podcasts/<podcast_id>/cover/clear")
 def api_cover_clear(podcast_id):
-    user_id, err = _require_login_user()
+    _log_api_auth_context("cover_clear", podcast_id=podcast_id)
+    user_id, err = _require_login_user(podcast_id)
     if err:
         return err
 
