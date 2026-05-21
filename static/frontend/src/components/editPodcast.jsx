@@ -62,9 +62,7 @@ import {
 } from "../utils/voiceAccentFilters";
 import { ensureVoiceLibraryCatalog } from "../utils/voiceLibraryCache";
 
-const API_BASE = import.meta.env.PROD
-  ? "https://wecast.onrender.com"
-  : "http://localhost:5000";
+import { API_BASE } from "../utils/api";
 
 const getPortalTarget = () => {
   if (typeof document === "undefined") return null;

@@ -13,8 +13,7 @@ import {
   PencilLine,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+import { API_BASE } from "../utils/api";
 
 async function apiFetch(path, options = {}) {
   const res = await fetch(`${API_BASE}${path}`, {

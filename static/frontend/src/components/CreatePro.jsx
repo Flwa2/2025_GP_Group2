@@ -66,9 +66,7 @@ import { normalizeGenderToken, isNeutralGenderValue } from "../utils/voiceGender
 import { clientRefineLibraryVoices } from "../utils/voiceLibraryRefine";
 import { ensureVoiceLibraryCatalog, getCachedVoiceCatalog } from "../utils/voiceLibraryCache";
 
-const API_BASE = import.meta.env.PROD
-    ? "https://wecast.onrender.com"
-    : "http://localhost:5000";
+import { API_BASE } from "../utils/api";
 
 const DEFAULT_VOICE_LANGUAGE = "en";
 const LANGUAGE_LABELS = {

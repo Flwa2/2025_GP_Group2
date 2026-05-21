@@ -21,9 +21,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-const API_BASE = import.meta.env.PROD
-  ? "https://wecast.onrender.com"
-  : "http://localhost:5000";
+import { API_BASE } from "../utils/api";
 
 const EPISODES_CACHE_PREFIX = "wecast:episodesList:";
 const EPISODES_CACHE_TTL_MS = 5 * 60 * 1000;

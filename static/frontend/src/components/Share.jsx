@@ -2,9 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import EpisodePreviewView from "./EpisodePreviewView";
 
-const API_BASE = import.meta.env.PROD
-  ? "https://wecast.onrender.com"
-  : "http://localhost:5000";
+import { API_BASE } from "../utils/api";
 
 const isLikelyArabic = (text = "") => /[\u0600-\u06FF]/.test(text);
 

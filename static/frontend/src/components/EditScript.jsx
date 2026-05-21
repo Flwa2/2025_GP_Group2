@@ -5,9 +5,7 @@ import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
 import { useTranslation } from "react-i18next";
 
-const API_BASE = import.meta.env.PROD
-  ? "https://wecast.onrender.com"
-  : "http://localhost:5000";
+import { API_BASE } from "../utils/api";
 
 const getPortalTarget = () => {
   if (typeof document === "undefined") return null;
