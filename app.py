@@ -200,7 +200,6 @@ def _configured_frontend_origins():
         "https://www.wecastsa.com",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "https://wecast-frontend.onrender.com",
     ]
     configured = []
 
@@ -1432,7 +1431,7 @@ def _wecast_frontend_url():
     try:
         return frontend_public_url()
     except EmailConfigError:
-        return "https://wecast-frontend.onrender.com"
+        return "https://wecastsa.com"
 
 
 def _wecast_logo_url():
@@ -1553,23 +1552,26 @@ def _selected_email_provider():
 
 def _log_email_runtime_diagnostics(flow):
     sender = (os.getenv("FROM_EMAIL") or os.getenv("RESEND_FROM_EMAIL") or "").strip()
-    sender_domain = sender.rsplit("@", 1)[1] if "@" in sender else ""
+    frontend = _wecast_frontend_url()
     print(
         "Email runtime diagnostics:",
         f"flow={flow}",
         f"provider={_selected_email_provider() or 'none'}",
-        f"FRONTEND_PUBLIC_URL={(os.getenv('FRONTEND_PUBLIC_URL') or '').strip() or '<missing>'}",
-        f"WECAST_APP_URL={(os.getenv('WECAST_APP_URL') or '').strip() or '<missing>'}",
+        f"FRONTEND_PUBLIC_URL={bool((os.getenv('FRONTEND_PUBLIC_URL') or '').strip())}",
+        f"WECAST_APP_URL={bool((os.getenv('WECAST_APP_URL') or '').strip())}",
         f"FRONTEND_URL={bool((os.getenv('FRONTEND_URL') or '').strip())}",
         f"RESEND_API_KEY={bool((os.getenv('RESEND_API_KEY') or '').strip())}",
         f"RESEND_FROM_EMAIL={bool((os.getenv('RESEND_FROM_EMAIL') or '').strip())}",
-        f"SMTP_HOST={(os.getenv('SMTP_HOST') or '').strip() or '<missing>'}",
-        f"SMTP_PORT={(os.getenv('SMTP_PORT') or '').strip() or '<missing>'}",
+        f"SMTP_HOST={bool((os.getenv('SMTP_HOST') or '').strip())}",
+        f"SMTP_PORT={bool((os.getenv('SMTP_PORT') or '').strip())}",
         f"SMTP_USER={bool((os.getenv('SMTP_USER') or '').strip())}",
         f"FROM_EMAIL={bool(sender)}",
         f"FROM_NAME={bool((os.getenv('FROM_NAME') or '').strip())}",
-        f"FROM_EMAIL_DOMAIN={sender_domain or '<missing>'}",
-        f"frontend={_wecast_frontend_url()}",
+        f"WECAST_SUPPORT_EMAIL={bool((os.getenv('WECAST_SUPPORT_EMAIL') or '').strip())}",
+        f"frontendResolved={bool(frontend)}",
+        f"frontendCustomDomain={frontend.rstrip('/') in {'https://wecastsa.com', 'https://www.wecastsa.com'}}",
+        f"frontendLocalhost={'localhost' in frontend or '127.0.0.1' in frontend}",
+        f"frontendOldRender={'wecast-frontend.onrender.com' in frontend}",
     )
 
 
@@ -1630,6 +1632,27 @@ def _issue_internal_password_reset_link(email, delivery_label):
     firebase_uid = (getattr(user_record, "uid", "") or "").strip()
     if not doc or not doc.exists:
         _log_password_reset_step("fallback_no_user_doc")
+        return "", None
+
+    data = doc.to_dict() or {}
+    stored_provider = normalize_auth_provider(
+        data.get("authProvider"),
+        data.get("password_hash"),
+    )
+    provider_ids = {
+        (getattr(provider, "provider_id", "") or "").strip().lower()
+        for provider in (getattr(user_record, "provider_data", None) or [])
+        if (getattr(provider, "provider_id", "") or "").strip()
+    }
+    has_password_provider = "password" in provider_ids or (
+        not provider_ids and stored_provider == "password"
+    )
+    if not has_password_provider:
+        _log_password_reset_step(
+            "fallback_provider_hidden",
+            auth_provider=stored_provider or "unknown",
+            password_provider=False,
+        )
         return "", None
 
     nonce = secrets.token_urlsafe(24)
@@ -5751,7 +5774,8 @@ def api_send_password_reset_email():
             "ok": False,
             "step": step,
             "errorType": type(exc).__name__,
-            "message": str(exc)[:180],
+            "message": "Password reset email could not be sent right now.",
+            "providerCategory": "email_provider" if status == 502 else "backend",
             "function": frame.name if frame else "",
             "line": frame.lineno if frame else None,
         }
@@ -5869,7 +5893,7 @@ def api_send_password_reset_email():
         result = send_password_reset_email(email, action_url=action_url)
     except Exception as e:
         _log_password_reset_step("email_send_exception", errorType=type(e).__name__)
-        return debug_error("email_send_call", e, 500)
+        return debug_error("email_send_call", e, 502)
 
     if result.get("ok"):
         _log_password_reset_step(
@@ -5898,6 +5922,7 @@ def api_send_password_reset_email():
         errorType=result.get("errorType") or "UnknownError",
         error=result.get("message") or result.get("error") or "Email send failed.",
         message=result.get("message") or result.get("error") or "Email send failed.",
+        providerCategory="email_provider" if response_status == 502 else "email_config",
         provider=config.get("provider") or "",
         status=result.get("status"),
         function=result.get("function") or "",
@@ -7496,7 +7521,7 @@ def save_music():
 
 @app.route("/", methods=["GET"])
 def index():
-    return redirect("http://localhost:5173/", code=302)
+    return redirect(f"{_wecast_frontend_url()}/", code=302)
 
 @app.get("/api/audio/last")
 def api_audio_last():

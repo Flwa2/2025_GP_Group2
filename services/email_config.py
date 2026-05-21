@@ -37,7 +37,7 @@ SUPPORTED_ENV_KEYS = (
     "WECAST_SMTP_TOTAL_TIMEOUT_SECONDS",
 )
 FRONTEND_URL_KEYS = ("FRONTEND_PUBLIC_URL", "WECAST_APP_URL", "FRONTEND_URL")
-DEFAULT_EMAIL_LOGO_URL = "https://wecast-frontend.onrender.com/logo.png"
+DEFAULT_EMAIL_LOGO_URL = "https://wecastsa.com/logo.png"
 
 
 class EmailConfigError(RuntimeError):

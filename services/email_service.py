@@ -32,7 +32,7 @@ def _default_url(path):
     try:
         base = frontend_public_url()
     except Exception:
-        base = "https://wecast-frontend.onrender.com"
+        base = "https://wecastsa.com"
     return f"{base}{path}"
 
 
@@ -43,7 +43,7 @@ def _public_login_url():
     except Exception:
         base = ""
     if not base:
-        base = "https://wecast-frontend.onrender.com"
+        base = "https://wecastsa.com"
     return f"{base}/#/login"
 
 
@@ -68,7 +68,7 @@ def _render_template(
     try:
         resolved_logo_url = logo_url()
     except Exception:
-        resolved_logo_url = "https://wecast-frontend.onrender.com/logo.png"
+        resolved_logo_url = "https://wecastsa.com/logo.png"
 
     resolved_notice_text = (
         "This secure link helps protect your WeCast account. If you did not request this email, you can safely ignore it."

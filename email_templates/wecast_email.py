@@ -3,7 +3,7 @@ import os
 from urllib.parse import urlparse
 
 
-DEFAULT_EMAIL_LOGO_URL = "https://wecast-frontend.onrender.com/logo.png"
+DEFAULT_EMAIL_LOGO_URL = "https://wecastsa.com/logo.png"
 
 
 def _escape(value, *, quote=False):
