@@ -4,11 +4,6 @@ import { useTranslation } from "react-i18next";
 import { navigateToCastStudio } from "../utils/authRedirect";
 import {
   Instagram,
-  Linkedin,
-  Podcast,
-  Radio,
-  Twitter,
-  Youtube,
 } from "lucide-react";
 
 export default function Footer() {
@@ -58,12 +53,11 @@ export default function Footer() {
   ];
 
   const socialLinks = [
-    { label: "Spotify", href: "https://open.spotify.com/", icon: Podcast },
-    { label: "Apple Podcasts", href: "https://podcasts.apple.com/", icon: Radio },
-    { label: "YouTube", href: "https://www.youtube.com/", icon: Youtube },
-    { label: "X / Twitter", href: "https://x.com/", icon: Twitter },
-    { label: "Instagram", href: "https://www.instagram.com/", icon: Instagram },
-    { label: "LinkedIn", href: "https://www.linkedin.com/", icon: Linkedin },
+    {
+      label: "Instagram",
+      href: "https://www.instagram.com/wecast_1?igsh=MWpvaTNoNjgyZjhoZQ%3D%3D&utm_source=qr",
+      icon: Instagram,
+    },
   ];
 
   return (

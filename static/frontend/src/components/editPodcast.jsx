@@ -31,9 +31,11 @@ import VoiceFiltersModal from "./VoiceFiltersModal";
 import { useVoiceFilterModalPreview } from "../hooks/useVoiceFilterModalPreview";
 import {
   DEFAULT_MODAL_VOICE_FILTERS,
+  filtersModalToApplied,
   getSafeModalGenderFilter,
   hasActiveModalVoiceFilters,
 } from "../utils/voiceFilterModal";
+import { clientRefineLibraryVoices } from "../utils/voiceLibraryRefine";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
 import { shouldAutoplayVoicePreview, shouldShowEditingNotifications } from "../utils/accountPreferences";
@@ -55,8 +57,8 @@ import {
 } from "../utils/voiceTonePitchFilters";
 import {
   accentDisplaysForLanguageFromVoice,
-  accentTokensForLanguageFromVoice,
   buildAccentOptionsForLanguage,
+  languageMatchesVoice,
 } from "../utils/voiceAccentFilters";
 import { ensureVoiceLibraryCatalog } from "../utils/voiceLibraryCache";
 
@@ -396,99 +398,6 @@ const LanguageLabel = ({ value }) => {
 
 const uniqueLanguageOptions = () => VOICE_LANGUAGE_OPTIONS;
 
-const languageMatchTokensForVoice = (voice) => {
-  const tokens = [
-    ...voiceFacetValues(voice?.language),
-    ...voiceFacetValues(voice?.languages),
-    ...voiceFacetValues(voice?.locale),
-    ...voiceFacetValues(voice?.labels?.languages),
-    ...voiceFacetValues(voice?.labels?.language),
-    ...voiceFacetValues(voice?.labels?.Language),
-    ...voiceFacetValues(voice?.labels?.locale),
-    ...voiceFacetValues(voice?.labels?.Locale),
-  ].map(normalizeLanguageFilterValue).filter(Boolean);
-  return Array.from(new Set(tokens));
-};
-
-const languageFilterMatches = (selectedLower, voiceLangTokens) => {
-  if (!selectedLower) return true;
-  if (!voiceLangTokens.length) return false;
-  return voiceLangTokens.some(
-    (token) =>
-      token === selectedLower ||
-      token.startsWith(`${selectedLower}-`) ||
-      selectedLower.startsWith(`${token}-`)
-  );
-};
-
-const languageMatchesVoice = (language, voice) =>
-  languageFilterMatches(normalizeLanguageFilterValue(language), languageMatchTokensForVoice(voice));
-
-const voiceFacetValues = (value) => {
-  if (Array.isArray(value)) return value.map((x) => String(x).trim()).filter(Boolean);
-  if (typeof value === "string") {
-    return value
-      .split(/[,;/|]/)
-      .map((x) => x.trim())
-      .filter(Boolean);
-  }
-  return [];
-};
-
-const collectLanguageAccentProfilesFromVoice = (voice) => {
-  const profiles = [];
-  const addProfile = (raw) => {
-    if (!raw || typeof raw !== "object") return;
-    const language = String(raw.language || raw.Language || raw.locale || raw.Locale || "").trim();
-    const accent = String(raw.accent || raw.Accent || "").trim();
-    if (language || accent) profiles.push({ language, accent });
-  };
-
-  addProfile({
-    language: voice?.language || voice?.labels?.language || voice?.labels?.Language,
-    locale: voice?.locale || voice?.labels?.locale || voice?.labels?.Locale,
-    accent: voice?.accent || voice?.labels?.accent || voice?.labels?.Accent,
-  });
-
-  [
-    voice?.languageAccents,
-    voice?.languageAccentPairs,
-    voice?.language_accents,
-    voice?.verified_languages,
-    voice?.verifiedLanguages,
-    voice?.labels?.languageAccents,
-    voice?.labels?.languageAccentPairs,
-    voice?.labels?.language_accents,
-    voice?.labels?.verified_languages,
-    voice?.labels?.verifiedLanguages,
-  ].forEach((list) => {
-    if (Array.isArray(list)) list.forEach(addProfile);
-  });
-
-  const seen = new Set();
-  return profiles.filter((profile) => {
-    const key = `${profile.language.toLowerCase()}|${profile.accent.toLowerCase()}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-};
-
-const languageMatchesAccentProfile = (language, profile) => {
-  const selected = normalizeLanguageFilterValue(language);
-  if (!selected) return true;
-  const profileLang = normalizeLanguageFilterValue(profile?.language);
-  if (!profileLang) return false;
-  return profileLang === selected || profileLang.startsWith(`${selected}-`) || selected.startsWith(`${profileLang}-`);
-};
-
-const collectFlatAccentDisplaysFromVoice = (voice) => [
-  ...voiceFacetValues(voice?.accent),
-  ...voiceFacetValues(voice?.Accent),
-  ...voiceFacetValues(voice?.labels?.accent),
-  ...voiceFacetValues(voice?.labels?.Accent),
-];
-
 const uniqueSortedDisplay = (values) =>
   Array.from(new Set(values.map((value) => String(value).trim()).filter(Boolean))).sort((a, b) =>
     a.localeCompare(b, undefined, { sensitivity: "base" })
@@ -587,19 +496,7 @@ const buildLibraryUrlSearchParams = (applied, page, pageSize = VOICE_LIBRARY_PAG
 };
 
 const voiceAccentDebugSummary = (voicesList, language = "ar") => {
-  const matchingVoices = voicesList.filter((voice) => {
-    const tokens = [
-      ...voiceFacetValues(voice?.language),
-      ...voiceFacetValues(voice?.languages),
-      ...voiceFacetValues(voice?.locale),
-      ...voiceFacetValues(voice?.labels?.language),
-      ...voiceFacetValues(voice?.labels?.Language),
-      ...voiceFacetValues(voice?.labels?.languages),
-      ...voiceFacetValues(voice?.labels?.locale),
-      ...voiceFacetValues(voice?.labels?.Locale),
-    ].map(normalizeLanguageFilterValue).filter(Boolean);
-    return tokens.some((token) => token === language || token.startsWith(`${language}-`) || language.startsWith(`${token}-`));
-  });
+  const matchingVoices = voicesList.filter((voice) => languageMatchesVoice(language, voice));
   return {
     totalVoices: matchingVoices.length,
     accents: Array.from(new Set(
@@ -986,15 +883,18 @@ useEffect(() => {
       try {
         setLoadingVoices(true);
 
-        const fetchLibraryPage = async (applied) => {
-          const params = buildLibraryUrlSearchParams(applied, 0, VOICE_LIBRARY_PAGE_SIZE);
+        const fetchLibraryPage = async (applied, page = 0, pageSize = VOICE_LIBRARY_PAGE_SIZE) => {
+          const params = buildLibraryUrlSearchParams(applied, page, pageSize);
           const res = await fetch(`${API_BASE}/api/voices/elevenlabs?${params.toString()}`, {
             credentials: "include",
             headers: authHeaders(),
           });
           const data = await parseJsonResponse(res);
           if (!res.ok) throw new Error(data?.error || `Failed to load voices (${res.status})`);
-          return { items: Array.isArray(data?.items) ? data.items : [] };
+          return {
+            items: Array.isArray(data?.items) ? data.items : [],
+            has_more: Boolean(data?.has_more),
+          };
         };
 
         const raw = await ensureVoiceLibraryCatalog({
@@ -1071,9 +971,9 @@ useEffect(() => {
     });
   }, [voices]);
 
-  // Filter voices for a specific speaker (matching CreatePro)
+  // Filter voices for a specific speaker (same pipeline as CreatePro clientRefineLibraryVoices)
   const getFilteredVoicesForSpeaker = useCallback((speakerIndex) => {
-    const f = speakerVoiceFilters[speakerIndex] || { q: "", gender: "", language: DEFAULT_VOICE_LANGUAGE, tone: "", pitch: "", accent: "", age: "", category: "" };
+    const f = speakerVoiceFilters[speakerIndex] || DEFAULT_MODAL_VOICE_FILTERS;
     const isNeutralGender = (value) => {
       const g = String(value || "").trim().toLowerCase();
       return g.includes("neutral") || g.includes("netural");
@@ -1081,35 +981,15 @@ useEffect(() => {
     const speakerGenderRaw = String(speakers?.[speakerIndex]?.gender || "").trim().toLowerCase();
     const speakerGender = isNeutralGender(speakerGenderRaw) ? "" : speakerGenderRaw;
     const selectedGender = String(f.gender || "").trim().toLowerCase();
-    const effectiveGender = (selectedGender === "__all__" || isNeutralGender(selectedGender))
-      ? ""
-      : String(selectedGender || speakerGender || "").trim().toLowerCase();
-    const matchFacet = (selected, candidates) => {
-      const s = String(selected || "").trim().toLowerCase();
-      if (!s) return true;
-      return candidates.some((c) => c === s);
-    };
-
-    return voices.filter((v) => {
-      const name = String(v.name || "").toLowerCase();
-      const desc = String(v.description || "").toLowerCase();
-      const q = String(f.q || "").trim().toLowerCase();
-
-      const vGender = String(v.gender || v.labels?.gender || "").toLowerCase();
-      const vAccents = accentTokensForLanguageFromVoice(v, f.language);
-      const category = normalizeCategoryLabelKey(f.category);
-
-      if (q && !(name.includes(q) || desc.includes(q))) return false;
-      if (effectiveGender && vGender !== effectiveGender) return false;
-      if (!voiceMatchesPitch(v, f.pitch)) return false;
-      if (!voiceMatchesTone(v, f.tone)) return false;
-      if (!languageMatchesVoice(f.language, v)) return false;
-      if (!matchFacet(f.accent, vAccents)) return false;
-      if (!voiceMatchesAge(v, f.age)) return false;
-      if (category && !voiceMatchesRoleCategory(v, category)) return false;
-
-      return true;
+    const effectiveGender =
+      selectedGender === "__all__" || isNeutralGender(selectedGender)
+        ? ""
+        : String(selectedGender || speakerGender || "").trim().toLowerCase();
+    const applied = filtersModalToApplied({
+      ...f,
+      gender: effectiveGender || (f.gender === "__all__" ? "" : f.gender),
     });
+    return clientRefineLibraryVoices(voices, applied);
   }, [speakerVoiceFilters, speakers, voices]);
 
   const activeModalFilters =
@@ -2281,6 +2161,17 @@ const exportScript = async (format = "pdf") => {
                         </p>
                       ) : voices.length === 0 ? (
                         <p className="text-sm text-red-500">No voices found. Check ElevenLabs config.</p>
+                      ) : pool.length === 0 ? (
+                        <p className="text-sm text-black/60 dark:text-white/60">
+                          {speakerVoiceFilters[index]?.accent
+                            ? t("create.speakers.noMatchingAccentVoices", {
+                                defaultValue:
+                                  "No voices found for this accent. Try another accent or clear the accent filter.",
+                              })
+                            : t("create.speakers.noVoicesFiltered", {
+                                defaultValue: "No voices found. Try changing filters.",
+                              })}
+                        </p>
                       ) : (
                         <div className="w-full">
                           <div className="flex flex-wrap items-center gap-2 sm:gap-3">

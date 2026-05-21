@@ -1,6 +1,7 @@
 import { VOICE_AGE_BUCKETS } from "./voiceAgeFilters";
+import { ARABIC_ACCENT_OPTIONS, ENGLISH_ACCENT_OPTIONS } from "./voiceAccentFilters";
 
-const CACHE_STORAGE_KEY = "wecast:voiceCatalog:v1";
+const CACHE_STORAGE_KEY = "wecast:voiceCatalog:v2";
 const CACHE_TTL_MS = 30 * 60 * 1000;
 
 let memoryCatalog = null;
@@ -57,10 +58,10 @@ export function clearVoiceLibraryCache() {
 
 async function expandCatalogWithAgeBuckets(fetchPage, baseApplied = {}) {
   if (!fetchPage) return [];
-  const base = await fetchPage({ ...baseApplied, age: "" });
+  const base = await fetchPage({ ...baseApplied, age: "" }, 0, 100);
   const baseItems = Array.isArray(base?.items) ? base.items : Array.isArray(base) ? base : [];
   const ageResults = await Promise.allSettled(
-    VOICE_AGE_BUCKETS.map((age) => fetchPage({ ...baseApplied, age }))
+    VOICE_AGE_BUCKETS.map((age) => fetchPage({ ...baseApplied, age }, 0, 100))
   );
   const agePages = ageResults
     .filter((result) => result.status === "fulfilled")
@@ -69,6 +70,39 @@ async function expandCatalogWithAgeBuckets(fetchPage, baseApplied = {}) {
       return Array.isArray(value?.items) ? value.items : Array.isArray(value) ? value : [];
     });
   return mergeVoicesById(baseItems, ...agePages);
+}
+
+async function fetchAllPagesForFilters(fetchPage, applied, maxPages = 8) {
+  const pages = [];
+  for (let page = 0; page < maxPages; page += 1) {
+    const result = await fetchPage(applied, page, 100);
+    const items = Array.isArray(result?.items) ? result.items : Array.isArray(result) ? result : [];
+    pages.push(items);
+    const hasMore = Boolean(result?.has_more ?? result?.hasMore);
+    if (!hasMore || items.length === 0) break;
+  }
+  return mergeVoicesById(...pages);
+}
+
+async function expandCatalogWithLanguageAccentBuckets(fetchPage) {
+  if (!fetchPage) return [];
+  const accentRequests = [
+    { language: "ar" },
+    { language: "en" },
+    ...ARABIC_ACCENT_OPTIONS.map((accent) => ({ language: "ar", accent })),
+    ...ENGLISH_ACCENT_OPTIONS.map((accent) => ({ language: "en", accent })),
+  ];
+  const results = await Promise.allSettled(
+    accentRequests.map((applied) => fetchAllPagesForFilters(fetchPage, applied))
+  );
+  return mergeVoicesById(
+    ...results
+      .filter((result) => result.status === "fulfilled")
+      .map((result) => {
+        const value = result.value;
+        return Array.isArray(value?.items) ? value.items : Array.isArray(value) ? value : [];
+      })
+  );
 }
 
 /**
@@ -94,7 +128,11 @@ export async function ensureVoiceLibraryCatalog(loaders) {
     try {
       let seedItems = [];
       if (loaders.fetchPageForAgeBuckets) {
-        seedItems = await expandCatalogWithAgeBuckets(loaders.fetchPageForAgeBuckets, {});
+        const [ageBucketItems, languageAccentItems] = await Promise.all([
+          expandCatalogWithAgeBuckets(loaders.fetchPageForAgeBuckets, {}),
+          expandCatalogWithLanguageAccentBuckets(loaders.fetchPageForAgeBuckets),
+        ]);
+        seedItems = mergeVoicesById(ageBucketItems, languageAccentItems);
       } else {
         const seedPage = await loaders.fetchSeedPage();
         seedItems = Array.isArray(seedPage?.items) ? seedPage.items : [];

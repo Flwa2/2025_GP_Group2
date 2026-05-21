@@ -6505,7 +6505,9 @@ def api_generate():
     speakers = int(data.get("speakers") or 0)
     speakers_info = data.get("speakers_info") or []
     description = (data.get("description") or "").strip()
-    ui_language = (data.get("language") or "").strip().lower()
+    content_language = (data.get("content_language") or "").strip().lower()
+    if content_language not in ("en", "ar"):
+        content_language = detect_language(description)
 
     ok, msg = validate_roles(script_style, speakers_info)
     if not ok:
@@ -6518,7 +6520,7 @@ def api_generate():
         return jsonify(ok=False, error="Your text must be at least 500 words."), 400
 
     try:
-        script = generate_podcast_script(description, speakers_info, script_style, language=ui_language)
+        script = generate_podcast_script(description, speakers_info, script_style, language=content_language)
     except Exception as e:
         print("api_generate script error:", e)
         return jsonify(ok=False, error=f"Script generation failed: {str(e)}"), 500
@@ -6544,7 +6546,7 @@ def api_generate():
             description=description,
             script=script_template,
             speakers_info=speakers_info,
-            language=ui_language,
+            language=content_language,
         )
     else:
         # Try WeCast guest flow: keep the draft in-session and defer persistence
@@ -6561,12 +6563,20 @@ def api_generate():
         "script": script_template,
         "show_title": show_title,
         "title": title,
-        "language": ui_language,
+        "language": content_language,
         "guestMode": is_guest_session,
     }
 
 
-    return jsonify(ok=True, script=script_template, title=title, show_title=show_title, podcastId=podcast_id)
+    return jsonify(
+        ok=True,
+        script=script_template,
+        title=title,
+        show_title=show_title,
+        podcastId=podcast_id,
+        language=content_language,
+        content_language=content_language,
+    )
 
 
 

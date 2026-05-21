@@ -54,8 +54,8 @@ import {
 } from "../utils/voiceTonePitchFilters";
 import {
     accentDisplaysForLanguageFromVoice,
-    accentTokensForLanguageFromVoice,
     buildAccentOptionsForLanguage,
+    languageMatchesVoice,
 } from "../utils/voiceAccentFilters";
 import {
     markEditNavigationFromCreate,
@@ -69,38 +69,6 @@ import { ensureVoiceLibraryCatalog, getCachedVoiceCatalog } from "../utils/voice
 const API_BASE = import.meta.env.PROD
     ? "https://wecast.onrender.com"
     : "http://localhost:5000";
-
-const FACET_SPLIT = /[,;/|]/;
-
-const pushFacetTokens = (raw, bucket) => {
-    if (raw == null) return;
-    if (Array.isArray(raw)) {
-        raw.forEach((x) => pushFacetTokens(x, bucket));
-        return;
-    }
-    if (typeof raw === "string") {
-        raw
-            .split(FACET_SPLIT)
-            .map((x) => x.trim())
-            .filter(Boolean)
-            .forEach((x) => bucket.push(x));
-        return;
-    }
-    const s = String(raw).trim();
-    if (s) bucket.push(s);
-};
-
-/** Display strings per voice for language dropdown (preserves casing from API). */
-const collectLanguageDisplaysFromVoice = (v) => {
-    const acc = [];
-    pushFacetTokens(v?.languages, acc);
-    if (v?.labels && typeof v.labels === "object") {
-        pushFacetTokens(v.labels.languages, acc);
-        pushFacetTokens(v.labels.language, acc);
-        pushFacetTokens(v.labels.Language, acc);
-    }
-    return acc;
-};
 
 const DEFAULT_VOICE_LANGUAGE = "en";
 const LANGUAGE_LABELS = {
@@ -202,89 +170,6 @@ const LanguageLabel = ({ value }) => {
 };
 
 const uniqueLanguageOptions = () => VOICE_LANGUAGE_OPTIONS;
-
-/** Lowercased language tokens for matching (BCP-47 friendly). */
-const languageMatchTokensForVoice = (v) => {
-    const seen = new Set();
-    const out = [];
-    for (const d of collectLanguageDisplaysFromVoice(v)) {
-        const low = normalizeLanguageFilterValue(d);
-        if (!low || seen.has(low)) continue;
-        seen.add(low);
-        out.push(low);
-    }
-    return out;
-};
-
-const languageFilterMatches = (selectedLower, voiceLangTokens) => {
-    if (!selectedLower) return true;
-    if (!voiceLangTokens.length) return false;
-    return voiceLangTokens.some(
-        (t) =>
-            t === selectedLower ||
-            t.startsWith(`${selectedLower}-`) ||
-            selectedLower.startsWith(`${t}-`)
-    );
-};
-
-const languageMatchesVoice = (language, voice) =>
-    languageFilterMatches(normalizeLanguageFilterValue(language), languageMatchTokensForVoice(voice));
-
-const collectFacetDisplaysFromVoice = (v, ...keys) => {
-    const bucket = [];
-    for (const key of keys) {
-        pushFacetTokens(v?.[key], bucket);
-        if (v?.labels && typeof v.labels === "object") pushFacetTokens(v.labels[key], bucket);
-    }
-    return bucket;
-};
-
-const collectLanguageAccentProfilesFromVoice = (v) => {
-    const profiles = [];
-    const addProfile = (raw) => {
-        if (!raw || typeof raw !== "object") return;
-        const language = String(raw.language || raw.Language || raw.locale || raw.Locale || "").trim();
-        const accent = String(raw.accent || raw.Accent || "").trim();
-        if (language || accent) profiles.push({ language, accent });
-    };
-
-    addProfile({
-        language: v?.language || v?.labels?.language || v?.labels?.Language,
-        locale: v?.locale || v?.labels?.locale || v?.labels?.Locale,
-        accent: v?.accent || v?.labels?.accent || v?.labels?.Accent,
-    });
-
-    [
-        v?.languageAccents,
-        v?.languageAccentPairs,
-        v?.language_accents,
-        v?.verified_languages,
-        v?.verifiedLanguages,
-        v?.labels?.languageAccents,
-        v?.labels?.languageAccentPairs,
-        v?.labels?.language_accents,
-        v?.labels?.verified_languages,
-        v?.labels?.verifiedLanguages,
-    ].forEach((list) => {
-        if (Array.isArray(list)) list.forEach(addProfile);
-    });
-
-    const seen = new Set();
-    return profiles.filter((profile) => {
-        const key = `${profile.language.toLowerCase()}|${profile.accent.toLowerCase()}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
-};
-
-const languageMatchesAccentProfile = (language, profile) => {
-    const selected = normalizeLanguageFilterValue(language);
-    if (!selected) return true;
-    const profileLang = normalizeLanguageFilterValue(profile?.language);
-    if (!profileLang) return false;
-    return languageFilterMatches(selected, [profileLang]);
-};
 
 const voiceLanguageDebugValues = (v) => ({
     name: v?.name || "",
@@ -689,8 +574,8 @@ const fetchLibraryItemsPage = useCallback(async (applied, page, pageSize = VOICE
 const loadSharedVoiceCatalog = useCallback(async () => {
     return ensureVoiceLibraryCatalog({
         fetchSeedPage: () => fetchLibraryItemsPage(emptyAppliedVoiceFilters(), 0, 100),
-        fetchPageForAgeBuckets: (filters) =>
-            fetchLibraryItemsPage(filters, 0, 100).then((page) => ({ items: page.items })),
+        fetchPageForAgeBuckets: (filters, page = 0, pageSize = 100) =>
+            fetchLibraryItemsPage(filters, page, pageSize),
         fetchAccountVoices: async () => {
             const params = new URLSearchParams();
             params.set("provider", "ElevenLabs");
@@ -1156,10 +1041,13 @@ useEffect(() => {
     const MIN = 500;
     const MAX = 2500;
     const countWords = (text) => String(text || "").trim().split(/\s+/).filter(Boolean).length;
-    const isArabicText = (text) => /[\u0600-\u06FF]/.test(String(text || ""));
-    const resolveContentLanguage = (text) => (
-        isArabicText(text) ? "ar" : (i18n.language === "ar" ? "ar" : "en")
-    );
+    const resolveContentLanguage = (text) => {
+        const raw = String(text || "");
+        const arabicChars = (raw.match(/[\u0600-\u06FF]/g) || []).length;
+        const latinChars = (raw.match(/[A-Za-z]/g) || []).length;
+        if (arabicChars > 0 && arabicChars >= latinChars) return "ar";
+        return "en";
+    };
 
     const EN_SAMPLE_TEXT = `Qiddiya: Saudi Arabia's Emerging Global Capital of Entertainment, Sports, and Culture
 Qiddiya stands as one of the boldest and most imaginative components of Saudi Arabia's Vision 2030. Located just 40 kilometers southwest of Riyadh, the project is designed to transform the Kingdom's entertainment and cultural landscape, offering world-class experiences that appeal to residents, tourists, and global enthusiasts alike. Stretching across more than 360 square kilometers, Qiddiya is not simply a recreational zone. It is an entire city built around the idea that entertainment, creativity, and human connection can reshape how people live, learn, and spend their time.
@@ -1717,6 +1605,7 @@ Qiddiya represents a powerful statement about the future Saudi Arabia is buildin
                     speakers: Number(speakersCount),
                     speakers_info: speakers,
                     description,
+                    content_language: requestedLanguage,
                     language: requestedLanguage,
                 }),
             });
@@ -2405,9 +2294,18 @@ const exportScript = async (format = "pdf") => {
                                                                 error: null,
                                                             };
                                                             const rawPool = libr.rawItems || [];
-                                                            const pool = libr.preFiltered
-                                                                ? rawPool
-                                                                : clientRefineLibraryVoices(rawPool, applied);
+                                                            const catalogSource =
+                                                                getCachedVoiceCatalog()?.length
+                                                                    ? getCachedVoiceCatalog()
+                                                                    : librarySeedVoices?.length
+                                                                      ? librarySeedVoices
+                                                                      : rawPool;
+                                                            const allRefined = clientRefineLibraryVoices(catalogSource, applied);
+                                                            const pageEnd =
+                                                                libr.preFiltered && libr.nextPage != null
+                                                                    ? (libr.nextPage + 1) * VOICE_LIBRARY_PAGE_SIZE
+                                                                    : allRefined.length;
+                                                            const pool = allRefined.slice(0, Math.min(pageEnd, allRefined.length));
                                                             const poolIds = new Set(pool.map(getVoiceId));
                                                             const currentId = sp.voiceId || "";
                                                             const safeValue = poolIds.has(currentId) ? currentId : "";
@@ -2427,9 +2325,14 @@ const exportScript = async (format = "pdf") => {
                                                                     ) : null}
                                                                     {listEmpty ? (
                                                                         <p className="text-sm text-black/60 dark:text-white/60 mb-2">
-                                                                            {t("create.speakers.noVoicesFiltered", {
-                                                                                defaultValue: "No voices found. Try changing filters.",
-                                                                            })}
+                                                                            {applied.accent
+                                                                                ? t("create.speakers.noMatchingAccentVoices", {
+                                                                                      defaultValue:
+                                                                                          "No voices found for this accent. Try another accent or clear the accent filter.",
+                                                                                  })
+                                                                                : t("create.speakers.noVoicesFiltered", {
+                                                                                      defaultValue: "No voices found. Try changing filters.",
+                                                                                  })}
                                                                         </p>
                                                                     ) : null}
                                                                     <div className="flex items-center gap-3">
@@ -2719,7 +2622,7 @@ const exportScript = async (format = "pdf") => {
                                 value={description}
                                 onChange={(e) => setDescription(e.target.value)}
                                 placeholder={t("create.step3.textPlaceholder", { min: MIN, max: MAX })}
-                                dir={isArabicText(description) || isRTL ? "rtl" : "ltr"}
+                                dir="auto"
                                 className={`form-textarea mt-3 text-start`}
                                 rows={8}
                             />

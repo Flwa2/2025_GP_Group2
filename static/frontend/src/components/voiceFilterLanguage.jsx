@@ -55,8 +55,34 @@ const LANGUAGE_NAME_TO_CODE = Object.entries(LANGUAGE_LABELS).reduce((acc, [code
 
 export const VOICE_LANGUAGE_OPTIONS = ["en", "ar"];
 
+const extractLanguageFilterValue = (value) => {
+  if (value == null) return "";
+  if (typeof value !== "object") return String(value);
+
+  const direct = value.value ?? value.code ?? value.language ?? value.locale ?? value.id ?? value.name;
+  if (direct != null && typeof direct !== "object") return String(direct);
+
+  const label = value.label ?? value.title;
+  if (label != null && typeof label !== "object") return String(label);
+
+  const propsValue = value.props?.value ?? value.props?.code ?? value.props?.language;
+  if (propsValue != null && typeof propsValue !== "object") return String(propsValue);
+
+  const children = value.props?.children;
+  if (typeof children === "string" || typeof children === "number") return String(children);
+  if (Array.isArray(children)) {
+    const childText = children
+      .map((child) => extractLanguageFilterValue(child))
+      .filter(Boolean)
+      .join(" ");
+    if (childText) return childText;
+  }
+
+  return "";
+};
+
 export const normalizeLanguageFilterValue = (value) => {
-  const raw = String(value || "").trim().toLowerCase().replace("_", "-");
+  const raw = extractLanguageFilterValue(value).trim().toLowerCase().replace("_", "-");
   if (!raw) return "";
   if (raw === "arabic" || raw.startsWith("arabic ") || raw.startsWith("arabic(")) return "ar";
   if (raw === "english" || raw.startsWith("english ") || raw.startsWith("english(")) return "en";
@@ -65,6 +91,8 @@ export const normalizeLanguageFilterValue = (value) => {
   const base = raw.split("-")[0];
   return LANGUAGE_LABELS[base] ? base : raw;
 };
+
+export const isArabicLanguage = (value) => normalizeLanguageFilterValue(value) === "ar";
 
 const formatLanguageLabel = (value) => {
   const normalized = normalizeLanguageFilterValue(value);

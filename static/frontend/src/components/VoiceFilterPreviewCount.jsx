@@ -2,12 +2,20 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 
 /** Live filter match count — same UI on Create Podcast and Edit Podcast. */
-export default function VoiceFilterPreviewCount({ loading = false, refinedCount = null }) {
+export default function VoiceFilterPreviewCount({
+  loading = false,
+  refinedCount = null,
+  accent = "",
+}) {
   const { t } = useTranslation();
 
   let text = "";
   if (loading) {
     text = t("create.speakers.searchingVoices", { defaultValue: "Searching…" });
+  } else if (refinedCount === 0 && String(accent || "").trim()) {
+    text = t("create.speakers.noMatchingAccentVoices", {
+      defaultValue: "No voices found for this accent. Try another accent or clear the accent filter.",
+    });
   } else if (refinedCount != null) {
     text = t("create.speakers.filteredCount", {
       count: refinedCount,

@@ -1,3 +1,6 @@
+import { normalizeLanguageFilterValue } from "../components/voiceFilterLanguage";
+import { normalizeAccentToken } from "./voiceAccentFilters";
+
 export const DEFAULT_VOICE_LANGUAGE = "en";
 
 export const DEFAULT_MODAL_VOICE_FILTERS = {
@@ -22,16 +25,20 @@ export const getSafeModalGenderFilter = (gender) => {
   return g;
 };
 
-export const filtersModalToApplied = (f) => ({
-  search: String(f?.q || "").trim(),
-  gender: f?.gender === "__all__" ? "" : String(f?.gender || "").trim().toLowerCase(),
-  language: String(f?.language || "").trim(),
-  accent: String(f?.accent || "").trim(),
-  age: String(f?.age || "").trim(),
-  category: String(f?.category || "").trim(),
-  tone: String(f?.tone || "").trim(),
-  pitch: String(f?.pitch || "").trim(),
-});
+export const filtersModalToApplied = (f) => {
+  const language = normalizeLanguageFilterValue(f?.language) || String(f?.language || "").trim();
+  const accent = String(f?.accent || "").trim();
+  return {
+    search: String(f?.q || "").trim(),
+    gender: f?.gender === "__all__" ? "" : String(f?.gender || "").trim().toLowerCase(),
+    language,
+    accent,
+    age: String(f?.age || "").trim(),
+    category: String(f?.category || "").trim(),
+    tone: String(f?.tone || "").trim(),
+    pitch: String(f?.pitch || "").trim(),
+  };
+};
 
 export const appliedFiltersToModalPatch = (applied) => ({
   q: applied?.search || "",
@@ -65,7 +72,7 @@ export const sanitizeModalFiltersForDone = (filters, validators = {}) => {
 
   const selectedAccentValid =
     !filters.accent ||
-    accentOptions.some((accent) => String(accent).trim().toLowerCase() === String(filters.accent).trim().toLowerCase());
+    accentOptions.some((accent) => normalizeAccentToken(accent) === normalizeAccentToken(filters.accent));
   const selectedToneValid =
     !filters.tone ||
     toneOptions.some((tone) => String(tone).toLowerCase() === String(filters.tone).toLowerCase());

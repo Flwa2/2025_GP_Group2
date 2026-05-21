@@ -1,8 +1,8 @@
 import { normalizeLanguageFilterValue } from "../components/voiceFilterLanguage";
 import {
-  accentTokensForLanguageFromVoice,
-  languageFilterMatches,
-  languageMatchTokensForVoice,
+  languageForAccentValue,
+  languageMatchesVoice,
+  rankVoicesForAccentForLanguage,
 } from "./voiceAccentFilters";
 import { voiceMatchesAge } from "./voiceAgeFilters";
 import { normalizeGenderToken } from "./voiceGender";
@@ -36,8 +36,8 @@ export const clientRefineLibraryVoices = (items, applied) => {
   let out = clientRefineVoicesByTonePitch(items, applied?.tone, applied?.pitch);
   const q = String(applied?.search || "").trim().toLowerCase();
   const g = normalizeGenderToken(applied?.gender);
-  const lang = normalizeLanguageFilterValue(applied?.language);
-  const accent = String(applied?.accent || "").trim().toLowerCase();
+  const accent = String(applied?.accent || "").trim();
+  const lang = normalizeLanguageFilterValue(applied?.language) || languageForAccentValue(accent);
   const age = String(applied?.age || "").trim();
   const category = normalizeCategoryLabelKey(applied?.category);
 
@@ -50,10 +50,10 @@ export const clientRefineLibraryVoices = (items, applied) => {
     );
   }
   if (lang) {
-    out = out.filter((voice) => languageFilterMatches(lang, languageMatchTokensForVoice(voice)));
+    out = out.filter((voice) => languageMatchesVoice(lang, voice));
   }
   if (accent) {
-    out = out.filter((voice) => accentTokensForLanguageFromVoice(voice, lang).includes(accent));
+    out = rankVoicesForAccentForLanguage(out, lang, accent);
   }
   if (age) {
     out = out.filter((voice) => voiceMatchesAge(voice, age));

@@ -10,6 +10,7 @@ import {
 } from "../utils/voiceFilterModal";
 import { PITCH_VALUES, TONE_FILTER_VALUES, formatPitchLabel, formatToneLabel } from "../utils/voiceTonePitchFilters";
 import { formatVoiceAgeLabel } from "../utils/voiceAgeFilters";
+import { ARABIC_ACCENT_OPTIONS, ENGLISH_ACCENT_OPTIONS, normalizeAccentToken } from "../utils/voiceAccentFilters";
 import VoiceFilterPreviewCount from "./VoiceFilterPreviewCount";
 
 /** Shared voice filter modal — identical UI on Create Podcast and Edit Podcast. */
@@ -37,13 +38,21 @@ export default function VoiceFiltersModal({
   const { t } = useTranslation();
 
   const safeGenderFilter = getSafeModalGenderFilter(filters?.gender);
+  const rawSelectedLanguage = filters?.language || DEFAULT_VOICE_LANGUAGE;
+  const selectedLanguage = normalizeLanguageFilterValue(rawSelectedLanguage);
+  const visibleAccentOptions =
+    selectedLanguage === "ar"
+      ? ARABIC_ACCENT_OPTIONS
+      : selectedLanguage === "en"
+        ? ENGLISH_ACCENT_OPTIONS
+        : accentOptions;
   const languageOptions = uniqueLanguageOptions();
   const toneOptions = TONE_FILTER_VALUES;
   const pitchOptions = PITCH_VALUES;
 
   const selectedAccentValid =
     !filters?.accent ||
-    accentOptions.some((accent) => String(accent).trim().toLowerCase() === String(filters.accent).trim().toLowerCase());
+    visibleAccentOptions.some((accent) => normalizeAccentToken(accent) === normalizeAccentToken(filters.accent));
   const selectedAgeValid =
     !filters?.age || ageOptions.some((age) => String(age).toLowerCase() === String(filters.age).toLowerCase());
   const selectedPitchValid =
@@ -111,7 +120,7 @@ export default function VoiceFiltersModal({
 
   const handleDone = () => {
     const sanitized = sanitizeModalFiltersForDone(filters, {
-      accentOptions,
+      accentOptions: visibleAccentOptions,
       toneOptions,
       pitchOptions,
       ageOptions,
@@ -209,7 +218,7 @@ export default function VoiceFiltersModal({
               onChange={(value) => setFilters({ accent: value })}
               options={[
                 { value: "", label: t("create.speakers.allAccents", "All accents") },
-                ...accentOptions.map((accent) => ({ value: accent, label: accent })),
+                ...visibleAccentOptions.map((accent) => ({ value: accent, label: accent })),
               ]}
               isRTL={isRTL}
               menuVariant="tone"
@@ -299,7 +308,11 @@ export default function VoiceFiltersModal({
 
         {previewSlot ?? (
           preview ? (
-            <VoiceFilterPreviewCount loading={preview.loading} refinedCount={preview.refinedCount} />
+            <VoiceFilterPreviewCount
+              loading={preview.loading}
+              refinedCount={preview.refinedCount}
+              accent={filters?.accent}
+            />
           ) : null
         )}
       </div>
