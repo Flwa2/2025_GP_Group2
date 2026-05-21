@@ -667,7 +667,7 @@ export default function Preview({ onTitleChange } = {}) {
               const link = `${window.location.origin}/#/share/${encodeURIComponent(episodeId)}`;
               try {
                 await navigator.clipboard.writeText(link);
-                setSaveMessage("Share link copied.");
+                setSaveMessage(t("preview.shareCopied"));
                 setSaveMessageType("success");
               } catch {
                 setSaveMessage(link);
@@ -676,7 +676,7 @@ export default function Preview({ onTitleChange } = {}) {
             }}
             className="inline-flex h-11 w-full min-w-0 shrink-0 items-center justify-center rounded-2xl bg-purple-600 px-5 text-sm font-semibold text-white shadow-sm transition hover:opacity-90 sm:w-auto sm:min-w-[10.75rem]"
           >
-            Share Podcast
+            {t("preview.share")}
           </button>
         ) : null}
       </>

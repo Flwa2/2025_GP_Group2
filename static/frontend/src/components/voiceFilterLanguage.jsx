@@ -1,15 +1,18 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 
 const LANGUAGE_LABELS = {
-  en: { flagCode: "gb", name: "English" },
-  "en-us": { flagCode: "gb", name: "English" },
-  "en-gb": { flagCode: "gb", name: "English" },
+  en: { flagCode: "gb", key: "english", name: "English" },
+  "en-us": { flagCode: "gb", key: "english", name: "English" },
+  "en-gb": { flagCode: "gb", key: "english", name: "English" },
+
+  ar: { flagCode: "sa", key: "arabic", name: "Arabic" },
+  "ar-sa": { flagCode: "sa", key: "arabic", name: "Arabic" },
+
   zh: { flagCode: "cn", name: "Chinese" },
   "zh-cn": { flagCode: "cn", name: "Chinese" },
   cmn: { flagCode: "cn", name: "Chinese" },
   yue: { flagCode: "cn", name: "Chinese" },
-  ar: { flagCode: "sa", name: "Arabic" },
-  "ar-sa": { flagCode: "sa", name: "Arabic" },
   fr: { flagCode: "fr", name: "French" },
   es: { flagCode: "es", name: "Spanish" },
   de: { flagCode: "de", name: "German" },
@@ -48,10 +51,13 @@ const LANGUAGE_LABELS = {
   he: { flagCode: "il", name: "Hebrew" },
 };
 
-const LANGUAGE_NAME_TO_CODE = Object.entries(LANGUAGE_LABELS).reduce((acc, [code, info]) => {
-  acc[info.name.toLowerCase()] = code.split("-")[0];
-  return acc;
-}, {});
+const LANGUAGE_NAME_TO_CODE = Object.entries(LANGUAGE_LABELS).reduce(
+  (acc, [code, info]) => {
+    acc[info.name.toLowerCase()] = code.split("-")[0];
+    return acc;
+  },
+  {}
+);
 
 export const VOICE_LANGUAGE_OPTIONS = ["en", "ar"];
 
@@ -84,10 +90,18 @@ const extractLanguageFilterValue = (value) => {
 export const normalizeLanguageFilterValue = (value) => {
   const raw = extractLanguageFilterValue(value).trim().toLowerCase().replace("_", "-");
   if (!raw) return "";
-  if (raw === "arabic" || raw.startsWith("arabic ") || raw.startsWith("arabic(")) return "ar";
-  if (raw === "english" || raw.startsWith("english ") || raw.startsWith("english(")) return "en";
+
+  if (raw === "arabic" || raw.startsWith("arabic ") || raw.startsWith("arabic(")) {
+    return "ar";
+  }
+
+  if (raw === "english" || raw.startsWith("english ") || raw.startsWith("english(")) {
+    return "en";
+  }
+
   if (LANGUAGE_NAME_TO_CODE[raw]) return LANGUAGE_NAME_TO_CODE[raw];
   if (LANGUAGE_LABELS[raw]) return raw.split("-")[0];
+
   const base = raw.split("-")[0];
   return LANGUAGE_LABELS[base] ? base : raw;
 };
@@ -95,11 +109,9 @@ export const normalizeLanguageFilterValue = (value) => {
 export const isArabicLanguage = (value) => normalizeLanguageFilterValue(value) === "ar";
 
 const formatLanguageLabel = (value) => {
-  const normalized = normalizeLanguageFilterValue(value);
-  const info = LANGUAGE_LABELS[normalized] || LANGUAGE_LABELS[String(value || "").trim().toLowerCase()];
-  if (info) return info.name;
   const fallback = String(value || "").trim();
   if (!fallback) return "";
+
   return fallback
     .split(/[\s_-]+/)
     .filter(Boolean)
@@ -107,23 +119,34 @@ const formatLanguageLabel = (value) => {
     .join(" ");
 };
 
-const getLanguageDisplay = (value) => {
+const getLanguageDisplay = (value, t) => {
   const normalized = normalizeLanguageFilterValue(value);
-  const info = LANGUAGE_LABELS[normalized] || LANGUAGE_LABELS[String(value || "").trim().toLowerCase()];
+
+  const info =
+    LANGUAGE_LABELS[normalized] ||
+    LANGUAGE_LABELS[String(value || "").trim().toLowerCase()];
+
   return {
     flagCode: info?.flagCode || "",
-    name: info?.name || formatLanguageLabel(value),
+    name: info?.key
+      ? t(`create.speakers.${info.key}`)
+      : info?.name || formatLanguageLabel(value),
   };
 };
 
 export const uniqueLanguageOptions = () => VOICE_LANGUAGE_OPTIONS;
 
 export function LanguageLabel({ value }) {
-  const info = getLanguageDisplay(value);
+  const { t } = useTranslation();
+  const info = getLanguageDisplay(value, t);
+
   return (
     <span className="inline-flex min-w-0 items-center gap-2">
       {info.flagCode ? (
-        <span className={`wecast-language-flag wecast-language-flag-${info.flagCode}`} aria-hidden="true" />
+        <span
+          className={`wecast-language-flag wecast-language-flag-${info.flagCode}`}
+          aria-hidden="true"
+        />
       ) : null}
       <span className="truncate">{info.name}</span>
     </span>

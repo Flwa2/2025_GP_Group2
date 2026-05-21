@@ -1,5 +1,6 @@
 // src/components/Login.jsx
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Eye, EyeOff, Mail, Lock, ArrowLeft, CheckCircle2 } from "lucide-react";
 import {
   auth,
@@ -142,6 +143,7 @@ function mapVerificationResendError(error) {
 }
 
 export default function Login() {
+  const { t } = useTranslation();
   const [mode, setMode] = useState("login"); // "login" | "reset"
   const [identifier, setIdentifier] = useState("");
   const [pwd, setPwd] = useState("");
@@ -775,7 +777,7 @@ export default function Login() {
               className="mb-4 inline-flex items-center text-sm text-black/70 dark:text-white/70 hover:text-black dark:hover:text-white"
             >
               <ArrowLeft className="h-4 w-4 me-1 rtl:rotate-180" />
-              Back to login
+              {t("login.backToLogin")}
             </button>
           )}
 
@@ -784,25 +786,25 @@ export default function Login() {
             {mode === "login" ? (
               <>
                 <h2 className="text-2xl font-extrabold tracking-tight text-black dark:text-white sm:text-[2rem]">
-                  Log in to{" "}
+                  {t("login.title")}{" "}
                   <span className="text-purple-700 dark:text-purple-300">
                     WeCast
                   </span>
                 </h2>
                 <p className="mt-1 text-sm leading-6 text-black/60 dark:text-white/60">
-                  Welcome back. Sign in to access your podcasts and drafts.
+                  {t("login.subtitle")}
                 </p>
                 <p className="hidden text-sm text-black/60 dark:text-white/60 mt-1">
-                  Enter the email you use for WeCast. If it matches an account, we’ll send a reset link.
+                  {t("login.resetSubtitle")}
                 </p>
               </>
             ) : (
               <>
                 <h2 className="text-2xl font-extrabold tracking-tight text-black dark:text-white sm:text-[2rem]">
-                  Reset your password
+                  {t("login.resetTitle")}
                 </h2>
                 <p className="text-sm text-black/60 dark:text-white/60 mt-1">
-                  Enter the email you use for WeCast. If it matches an account, we’ll send a reset link.
+                  {t("login.resetSubtitle")}
                 </p>
                 <p className="hidden text-sm text-black/60 dark:text-white/60 mt-1">
                   Enter your account email and we’ll send you a secure password reset link.
@@ -835,10 +837,10 @@ export default function Login() {
           {mode === "login" && pendingVerificationEmail && (
             <div className="mb-5 rounded-2xl border border-yellow-300 bg-yellow-50 px-4 py-4 text-center">
               <p className="text-sm font-medium text-yellow-800">
-                Verification pending for <span className="font-semibold">{pendingVerificationEmail}</span>
+                {t("login.verificationPending")} <span className="font-semibold">{pendingVerificationEmail}</span>
               </p>
               <p className="mt-1 text-sm text-yellow-800">
-                Didn’t get the email? Enter your password and resend the verification link.
+                {t("login.resendHelp")}
               </p>
               <button
                 type="button"
@@ -846,7 +848,7 @@ export default function Login() {
                 disabled={loading}
                 className="mt-3 inline-flex items-center justify-center rounded-xl border border-yellow-300 bg-white px-4 py-2 text-sm font-semibold text-yellow-800 transition hover:bg-yellow-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Resend verification email
+                {t("login.resendVerification")}
               </button>
             </div>
           )}
@@ -857,7 +859,7 @@ export default function Login() {
               {/* Email / Username */}
               <div className={resetRequestComplete ? "hidden" : ""}>
                 <label className="block text-sm font-medium text-black dark:text-white mb-2">
-                  Email or username
+                  {t("login.emailOrUsername")}
                 </label>
                 <div className="flex items-center border rounded-lg bg-white dark:bg-white/5 border-black/10 dark:border-white/15 focus-within:ring-2 focus-within:ring-purple-500">
                   <span className="ps-3 text-black/60 dark:text-white/60">
@@ -866,7 +868,7 @@ export default function Login() {
                   <input
                     type="text"
                     className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text-white placeholder-black/50 dark:placeholder-white/50"
-                    placeholder="you@example.com or your username"
+                    placeholder={t("login.emailOrUsernamePlaceholder")}
                     value={identifier}
                     onChange={(e) => setIdentifier(e.target.value)}
                     required
@@ -877,7 +879,7 @@ export default function Login() {
 
               {/* Password */}
               <div className={resetRequestComplete ? "hidden" : ""}>
-                <label className="form-label">Password</label>
+                <label className="form-label">{t("login.password")}</label>
                 <div className="relative">
                   <span className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-neutral-500 dark:text-neutral-400">
                     <Lock className="h-5 w-5" />
@@ -885,7 +887,7 @@ export default function Login() {
                   <input
                     type={showPwd ? "text" : "password"}
                     className="form-input ps-10 pe-10"
-                    placeholder="Your password"
+                    placeholder={t("login.passwordPlaceholder")}
                     value={pwd}
                     onChange={(e) => setPwd(e.target.value)}
                     required
@@ -895,7 +897,7 @@ export default function Login() {
                     type="button"
                     onClick={() => setShowPwd((v) => !v)}
                     className="absolute end-3 top-1/2 -translate-y-1/2 text-neutral-500 dark:text-neutral-400 transition hover:text-black dark:hover:text-white"
-                    aria-label={showPwd ? "Hide password" : "Show password"}
+                    aria-label={showPwd ? t("login.hidePassword") : t("login.showPassword")}
                   >
                     {showPwd ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
@@ -913,7 +915,7 @@ export default function Login() {
                     onChange={(e) => setRememberMe(e.target.checked)}
                   />
                   <span className="text-black/80 dark:text-white/80">
-                    Remember me
+                    {t("login.rememberMe")}
                   </span>
                 </label>
                 <button
@@ -921,7 +923,7 @@ export default function Login() {
                   onClick={switchToReset}
                   className="text-purple-700 dark:text-purple-300 hover:underline"
                 >
-                  Forgot password?
+                  {t("login.forgotPassword")}
                 </button>
               </div>
 
@@ -931,14 +933,14 @@ export default function Login() {
                 className="w-full btn-primary"
                 disabled={loading}
               >
-                {loading ? "Logging in..." : "Log in"}
+                {loading ? t("login.loggingIn") : t("login.button")}
               </button>
 
               {/* Divider */}
               <div className="flex items-center gap-4">
                 <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
                 <span className="text-xs text-black/50 dark:text-white/50">
-                  or continue with
+                  {t("login.orContinueWith")}
                 </span>
                 <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
               </div>
@@ -974,7 +976,7 @@ export default function Login() {
                       d="M43.611 20.083H42V20H24v8h11.303c-.791 2.233-2.273 4.134-4.09 5.556l6.177 5.219C39.708 35.911 44 30.455 44 24c0-1.345-.138-2.655-.389-3.917z"
                     />
                   </svg>
-                  Continue with Google
+                  {t("login.continueGoogle")}
                 </button>
 
                 <button
@@ -992,17 +994,17 @@ export default function Login() {
                   >
                     <path d="M12 .5a12 12 0 0 0-3.793 23.4c.6.11.82-.26.82-.58v-2.02c-3.338.73-4.04-1.61-4.04-1.61-.546-1.39-1.333-1.76-1.333-1.76-1.09-.75.083-.734.083-.734 1.205.086 1.84 1.238 1.84 1.238 1.07 1.835 2.807 1.305 3.492.998.108-.79.418-1.305.76-1.604-2.665-.304-5.467-1.333-5.467-5.93 0-1.31.47-2.38 1.236-3.22-.124-.304-.536-1.527.117-3.183 0 0 1.008-.322 3.303 1.23a11.5 11.5 0 0 1 6.006 0c2.294-1.552 3.301-1.23 3.301-1.23.655 1.656.243 2.879.12 3.183.77.84 1.235 1.91 1.235 3.22 0 4.61-2.807 5.624-5.48 5.922.43.37.816 1.102.816 2.222v3.293c0 .322.216.696.826.578A12 12 0 0 0 12 .5z" />
                   </svg>
-                  Continue with GitHub
+                  {t("login.continueGithub")}
                 </button>
               </div>
 
               <p className="mt-6 text-center text-sm text-neutral-600 dark:text-neutral-300">
-                Do not have an account?{" "}
+                {t("login.noAccount")}{" "}
                 <a
                   href={preserveRedirectQueryForRoute("signup")}
                   className="text-purple-medium dark:text-purple-400 underline-offset-2 hover:underline"
                 >
-                  Sign up
+                  {t("login.signup")}
                 </a>
               </p>
 
@@ -1015,7 +1017,7 @@ export default function Login() {
               {/* Email */}
               <div className={resetRequestComplete ? "hidden" : ""}>
                 <label className="block text-sm font-medium text-black dark:text-white mb-2">
-                  Email address
+                  {t("login.emailAddress")}
                 </label>
                 <div className="flex items-center border rounded-lg bg-white dark:bg-white/5 border-black/10 dark:border-white/15 focus-within:ring-2 focus-within:ring-purple-500">
                   <span className="ps-3 text-black/60 dark:text-white/60">
@@ -1024,7 +1026,7 @@ export default function Login() {
                   <input
                     type="email"
                     className="w-full px-3 py-3 rounded-lg outline-none bg-transparent text-black dark:text-white placeholder-black/50 dark:placeholder-white/50"
-                    placeholder="you@example.com"
+                    placeholder={t("login.emailPlaceholder")}
                     value={resetEmail}
                     onChange={(e) => setResetEmail(e.target.value)}
                     readOnly={resetRequestComplete}
@@ -1042,10 +1044,10 @@ export default function Login() {
                     </span>
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700 dark:text-emerald-300">
-                        Email Sent
+                        {t("login.emailSent")}
                       </p>
                       <p className="mt-1 text-2xl font-semibold tracking-tight text-emerald-950 dark:text-white">
-                        Check your email
+                        {t("login.checkEmail")}
                       </p>
                       <p className="mt-3 text-sm leading-7 text-emerald-800 dark:text-emerald-100/90">
                         {buildPasswordResetSuccessMessage(resetSubmittedEmail)}
@@ -1061,7 +1063,7 @@ export default function Login() {
                   className="w-full btn-primary"
                   disabled={loading}
                 >
-                  {loading ? "Sending reset link..." : "Send reset link"}
+                  {loading ? t("login.sendingReset") : t("login.sendReset")}
                 </button>
               ) : null}
             </form>

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Play, Pause, RotateCcw, RotateCw, Download } from "lucide-react";
-
+import { useTranslation } from "react-i18next";
 export default function WeCastAudioPlayer({
   src,
   title = "Generated Audio",
@@ -12,7 +12,7 @@ export default function WeCastAudioPlayer({
 }) {
   const audioRef = useRef(null);
   const lastSeekRef = useRef(null); // NEW
-
+  const {t} = useTranslation();
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -231,7 +231,7 @@ export default function WeCastAudioPlayer({
               className={`flex max-w-full flex-wrap items-center gap-0.5 rounded-full px-1.5 py-1 sm:gap-1 sm:px-2 ${speedRailClass}`}
             >
               <span className="px-0.5 text-[0.65rem] font-medium uppercase tracking-wide text-black/50 dark:text-white/50 sm:mr-1 sm:text-[0.7rem]">
-                Speed
+                {t("speed")}
               </span>
               {SPEED_OPTIONS.map((opt) => (
                 <button

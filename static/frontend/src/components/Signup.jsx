@@ -555,22 +555,22 @@ const pwLabel = strengthLabels[passwordScore];
                     <div className="space-y-5">
                         <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-5 text-center dark:border-emerald-500/20 dark:bg-emerald-500/10">
                             <h2 className="text-2xl font-extrabold tracking-tight text-black dark:text-white sm:text-[2rem]">
-                                {verificationStatus === "retry" ? "Account created" : "Check your email"}
+                                {verificationStatus === "retry"
+                                    ? t("signup.verification.accountCreated")
+                                    : t("signup.verification.checkEmail")}
                             </h2>
                             <p className="mt-3 text-sm leading-6 text-black/70 dark:text-white/70">
                                 {verificationStatus === "retry" ? (
-                                    <>Your WeCast sign-up was created for <span className="font-semibold text-black dark:text-white">{verificationEmail}</span>.</>
-                                ) : (
-                                    <>We sent a verification link to <span className="font-semibold text-black dark:text-white">{verificationEmail}</span>.</>
-                                )}
+                                    <>{t("signup.verification.createdFor")} <span className="font-semibold text-black dark:text-white">{verificationEmail}</span>.</>                                ) : (
+                                    <>{t("signup.verification.sentTo")} <span className="font-semibold text-black dark:text-white">{verificationEmail}</span>.</>                                )}
                             </p>
                             <p className="mt-2 text-sm leading-6 text-black/70 dark:text-white/70">
                                 {verificationStatus === "retry"
-                                    ? "Open the login page, sign in with the password you just created, and resend the verification email to finish setup."
-                                    : "Open the email, verify your address, then return to WeCast and log in."}
+                                    ? t("signup.verification.retryMessage")
+                                    : t("signup.verification.verifyMessage")}         
                             </p>
                             <p className="mt-2 text-sm leading-6 text-black/70 dark:text-white/70">
-                                Your WeCast profile becomes active after your email is verified and you log in.
+                                {t("signup.verification.activeAfterVerify")}
                             </p>
                         </div>
 
@@ -579,7 +579,7 @@ const pwLabel = strengthLabels[passwordScore];
                                 href={preserveRedirectQueryForRoute("login")}
                                 className="btn-primary w-full justify-center text-center"
                             >
-                                Go to Login
+                                {t("signup.verification.goLogin")}
                             </a>
 
                             <button
@@ -591,7 +591,7 @@ const pwLabel = strengthLabels[passwordScore];
                                 }}
                                 className="btn-secondary w-full justify-center"
                             >
-                                Use a different email
+                                {t("signup.verification.useDifferentEmail")}
                             </button>
                         </div>
                     </div>
@@ -675,7 +675,7 @@ const pwLabel = strengthLabels[passwordScore];
 </div>
 
                     <div>
-                        <label className="form-label">Confirm Password</label>
+                        <label className="form-label">{t("signup.confirmPassword")}</label>
                         <div className="relative">
                             <input
                                 type="password"
@@ -715,7 +715,7 @@ const pwLabel = strengthLabels[passwordScore];
                     </button>
                     <div className="flex items-center gap-4 my-4">
                         <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
-                        <span className="text-xs text-black/50 dark:text-white/50">or</span>
+                        <span className="text-xs text-black/50 dark:text-white/50">{t("signup.or")}</span>
                         <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
                     </div>
 
