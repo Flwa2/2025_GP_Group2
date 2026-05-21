@@ -340,6 +340,11 @@ export default function Login() {
       const resolvedEmail = normalizeEmail(
         resolvedIdentifier.email || normalizedIdentifier
       );
+      console.debug("[WeCast auth] login strategy resolved", {
+        loginStrategy,
+        resolvedEmail,
+        usingEmail,
+      });
       const firebaseEmail =
         loginStrategy === "legacy_password" ? "" : resolvedEmail;
       const backendIdentifier =
@@ -371,6 +376,7 @@ export default function Login() {
           setPendingVerificationEmail("");
 
           const idToken = await firebaseUser.getIdToken(true);
+          console.debug("[WeCast auth] Firebase sign-in succeeded, exchanging session");
           const firebaseRes = await fetch(`${API_BASE}/api/firebase-email-login`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -399,11 +405,13 @@ export default function Login() {
             throw apiError;
           }
 
+          console.debug("[WeCast auth] backend session created via firebase-email-login");
           storeAuthenticatedSession(firebaseData, normalizedIdentifier);
           redirectAfterAuth();
           return;
         } catch (firebaseError) {
           const code = firebaseError?.code || "";
+          console.debug("[WeCast auth] Firebase sign-in failed", { code });
           const shouldFallback =
             code === "auth/user-not-found" ||
             code === "auth/invalid-credential" ||
@@ -417,6 +425,9 @@ export default function Login() {
         }
       }
 
+      console.debug("[WeCast auth] attempting legacy /api/login", {
+        backendIdentifier,
+      });
       const res = await fetch(`${API_BASE}/api/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -465,10 +476,15 @@ export default function Login() {
 
       sessionStorage.removeItem("wecast:pendingVerificationEmail");
       setPendingVerificationEmail("");
+      console.debug("[WeCast auth] backend session created via /api/login");
       storeAuthenticatedSession(data, normalizedIdentifier);
       redirectAfterAuth();
     } catch (err) {
       console.error("LOGIN NETWORK ERROR:", err);
+      console.debug("[WeCast auth] login failed", {
+        code: err?.code || "",
+        message: err?.message || "",
+      });
       showErrorMessage(mapLoginError(err));
     } finally {
       setLoading(false);
@@ -559,6 +575,7 @@ export default function Login() {
         return;
       }
 
+      console.debug("[WeCast auth] password reset email requested", { email });
       const res = await fetch(`${API_BASE}/api/send-password-reset-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

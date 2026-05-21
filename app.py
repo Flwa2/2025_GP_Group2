@@ -929,10 +929,22 @@ def _username_login_match_metadata(username, doc):
     }
     has_password_hash = bool(data.get("password_hash"))
 
+    resolved_email = _normalize_email(data.get("email") or (doc.id if doc and doc.exists else ""))
+    firebase_state = (
+        _firebase_account_state_for_email(resolved_email, user_data=data)
+        if resolved_email
+        else None
+    )
+    login_strategy = "firebase_email"
+    if firebase_state and firebase_state.get("hasPasswordProvider"):
+        login_strategy = "firebase_email"
+    elif has_password_hash:
+        login_strategy = "legacy_password"
+
     return {
         "doc": doc,
         "data": data,
-        "loginStrategy": "legacy_password" if has_password_hash else "firebase_email",
+        "loginStrategy": login_strategy,
         "score": (
             1 if has_password_hash else 0,
             1 if explicit_username_match else 0,
@@ -977,13 +989,18 @@ def resolve_login_strategy_for_email(email):
         stored_hash,
     )
 
-    login_strategy = "legacy_password" if stored_hash else "firebase_email"
     if (
         firebase_state
         and firebase_state.get("authProvider") in {"google", "github"}
         and not firebase_state.get("hasPasswordProvider")
     ):
         login_strategy = "social_only"
+    elif firebase_state and firebase_state.get("hasPasswordProvider"):
+        login_strategy = "firebase_email"
+    elif stored_hash:
+        login_strategy = "legacy_password"
+    else:
+        login_strategy = "firebase_email"
 
     return {
         "userDoc": user_doc,
@@ -992,6 +1009,33 @@ def resolve_login_strategy_for_email(email):
         "authProvider": auth_provider,
         "loginStrategy": login_strategy,
     }
+
+
+def _verify_password_for_login(user_email, user_data, user_doc, password, firebase_state):
+    """Return (ok, path) where path is legacy_hash, firebase_rest, or failed."""
+    stored_hash = user_data.get("password_hash")
+    normalized_email = _normalize_email(user_email)
+
+    if stored_hash and check_password_hash(stored_hash, password):
+        return True, "legacy_hash"
+
+    if firebase_state and firebase_state.get("hasPasswordProvider"):
+        if _verify_firebase_email_password(normalized_email, password):
+            if stored_hash and user_doc and user_doc.exists:
+                try:
+                    user_doc.reference.set(
+                        {"password_hash": firestore.DELETE_FIELD},
+                        merge=True,
+                    )
+                    _log_auth_login_step("cleared_stale_password_hash", email=normalized_email)
+                except Exception as clear_error:
+                    _log_auth_login_step(
+                        "clear_stale_password_hash_failed",
+                        errorType=type(clear_error).__name__,
+                    )
+            return True, "firebase_rest"
+
+    return False, "failed"
 
 
 def _username_is_taken(username_lower, *, email="", firebase_uid="", user_ref=None):
@@ -1610,6 +1654,15 @@ def _log_password_reset_step(step, **details):
             continue
         safe_parts.append(f"{key}={value}")
     print("Password reset trace:", *safe_parts, flush=True)
+
+
+def _log_auth_login_step(step, **details):
+    safe_parts = [f"step={step}"]
+    for key, value in details.items():
+        if value is None:
+            continue
+        safe_parts.append(f"{key}={value}")
+    print("Auth login trace:", *safe_parts, flush=True)
 
 
 def _issue_internal_password_reset_link(email, delivery_label):
@@ -5441,25 +5494,42 @@ def api_password_reset_confirm():
     try:
         doc, user_data, payload = _validate_pending_password_reset(token)
         firebase_uid = (user_data.get("firebaseUid") or payload.get("firebase_uid") or "").strip()
+        _log_password_reset_step("token_confirm_start", has_firebase_uid=bool(firebase_uid))
 
         if firebase_uid:
             fb_auth.update_user(firebase_uid, password=new_password)
-
-        doc.reference.set(
-            {
+            _log_password_reset_step("token_confirm_firebase_admin_updated", uid=firebase_uid[:8])
+            profile_patch = {
+                "password_hash": firestore.DELETE_FIELD,
+                "authProvider": "password",
+                "failed_attempts": 0,
+                "lock_until": None,
+                "pendingPasswordReset": firestore.DELETE_FIELD,
+                "last_password_reset_completed": datetime.utcnow().isoformat(),
+            }
+        else:
+            profile_patch = {
                 "password_hash": generate_password_hash(new_password),
                 "authProvider": "password",
                 "failed_attempts": 0,
                 "lock_until": None,
                 "pendingPasswordReset": firestore.DELETE_FIELD,
                 "last_password_reset_completed": datetime.utcnow().isoformat(),
-            },
-            merge=True,
-        )
+            }
+
+        doc.reference.set(profile_patch, merge=True)
 
         resolved_email = _normalize_email(user_data.get("email"))
         if not resolved_email and doc and doc.exists:
             resolved_email = _normalize_email(doc.reference.id)
+
+        if firebase_uid and resolved_email:
+            firebase_ok = _verify_firebase_email_password(resolved_email, new_password)
+            _log_password_reset_step(
+                "token_confirm_firebase_verify",
+                ok=firebase_ok,
+                email=resolved_email,
+            )
 
         if is_reasonably_valid_email(resolved_email):
             try:
@@ -5467,6 +5537,7 @@ def api_password_reset_confirm():
             except Exception as email_error:
                 print(f"Password changed confirmation email failed: {email_error}")
 
+        _log_password_reset_step("token_confirm_success", email=resolved_email)
         return jsonify(ok=True, email=resolved_email)
     except Exception as e:
         print(f"Password reset confirmation error: {e}")
@@ -5510,6 +5581,8 @@ def api_firebase_password_reset_confirm():
     if not api_key:
         return jsonify(error="Password reset is not configured right now."), 503
 
+    _log_password_reset_step("firebase_confirm_start", oob_present=bool(oob_code))
+
     try:
         response = requests.post(
             f"https://identitytoolkit.googleapis.com/v1/accounts:resetPassword?key={api_key}",
@@ -5530,6 +5603,7 @@ def api_firebase_password_reset_confirm():
             f"status={response.status_code}",
             flush=True,
         )
+        _log_password_reset_step("firebase_confirm_failed", status=response.status_code)
         return jsonify(error=error_message), status_code
 
     try:
@@ -5541,11 +5615,18 @@ def api_firebase_password_reset_confirm():
     if not is_reasonably_valid_email(resolved_email):
         return jsonify(error="Password updated, but the account email could not be confirmed."), 502
 
+    firebase_verify_ok = _verify_firebase_email_password(resolved_email, new_password)
+    _log_password_reset_step(
+        "firebase_confirm_password_verify",
+        ok=firebase_verify_ok,
+        email=resolved_email,
+    )
+
     doc = get_user_doc_by_candidates(resolved_email, email=resolved_email)
     if doc and doc.exists:
         doc.reference.set(
             {
-                "password_hash": generate_password_hash(new_password),
+                "password_hash": firestore.DELETE_FIELD,
                 "authProvider": "password",
                 "failed_attempts": 0,
                 "lock_until": None,
@@ -5554,6 +5635,7 @@ def api_firebase_password_reset_confirm():
             },
             merge=True,
         )
+    _log_password_reset_step("firebase_confirm_firestore_synced", has_doc=bool(doc and doc.exists))
 
     tokens_revoked = False
     try:
@@ -7910,6 +7992,16 @@ def login():
         user_data.get("authProvider"),
         stored_hash,
     )
+    login_strategy_hint = resolve_login_strategy_for_email(user_email).get("loginStrategy")
+    _log_auth_login_step(
+        "login_entered",
+        using_email=using_email,
+        email=user_email or "<none>",
+        has_user_doc=bool(user_data),
+        has_password_hash=bool(stored_hash),
+        has_password_provider=bool(firebase_state and firebase_state.get("hasPasswordProvider")),
+        login_strategy_hint=login_strategy_hint,
+    )
 
     if not user_data:
         if firebase_state:
@@ -7941,57 +8033,55 @@ def login():
             404,
         )
 
-    if stored_hash:
-        if not check_password_hash(stored_hash, password):
-            return auth_error_response(
-                "wrong_password",
-                "The password you entered is incorrect.",
-                401,
-            )
-
+    if firebase_state:
         if (
-            user_data.get("emailVerified") is False
-            and firebase_state
-            and firebase_state.get("hasPasswordProvider")
-            and not firebase_state.get("emailVerified", True)
+            firebase_state.get("authProvider") in {"google", "github"}
+            and not firebase_state.get("hasPasswordProvider")
         ):
+            provider = firebase_state.get("authProvider")
+            provider_label = _auth_provider_label(provider)
+            _log_auth_login_step("login_rejected", reason="social_only", provider=provider)
             return auth_error_response(
-                "email_not_verified",
-                "Please verify your email first before logging in.",
-                403,
-                email=user_email,
-                emailVerified=False,
-                pendingVerification=True,
+                "provider_mismatch",
+                f"This account uses {provider_label} sign-in. Use that button to continue.",
+                409,
+                authProvider=provider,
             )
-    else:
-        if firebase_state:
-            if (
-                firebase_state.get("authProvider") in {"google", "github"}
-                and not firebase_state.get("hasPasswordProvider")
-            ):
-                provider = firebase_state.get("authProvider")
-                provider_label = _auth_provider_label(provider)
-                return auth_error_response(
-                    "provider_mismatch",
-                    f"This account uses {provider_label} sign-in. Use that button to continue.",
-                    409,
-                    authProvider=provider,
-                )
-            if auth_provider == "password" or firebase_state.get("hasPasswordProvider"):
-                return auth_error_response(
-                    "wrong_password",
-                    "The password you entered is incorrect.",
-                    401,
-                )
 
+    password_ok, password_path = _verify_password_for_login(
+        user_email,
+        user_data,
+        user_doc,
+        password,
+        firebase_state,
+    )
+    _log_auth_login_step(
+        "password_verification",
+        ok=password_ok,
+        path=password_path,
+    )
+    if not password_ok:
+        _log_auth_login_step("login_rejected", reason="wrong_password")
         return auth_error_response(
-            "account_not_found",
-            (
-                "We couldn't find an account with that email address."
-                if using_email
-                else "We couldn't find an account with that username."
-            ),
-            404,
+            "wrong_password",
+            "The password you entered is incorrect.",
+            401,
+        )
+
+    if (
+        user_data.get("emailVerified") is False
+        and firebase_state
+        and firebase_state.get("hasPasswordProvider")
+        and not firebase_state.get("emailVerified", True)
+    ):
+        _log_auth_login_step("login_rejected", reason="email_not_verified")
+        return auth_error_response(
+            "email_not_verified",
+            "Please verify your email first before logging in.",
+            403,
+            email=user_email,
+            emailVerified=False,
+            pendingVerification=True,
         )
 
     firebase_uid = (
@@ -8004,6 +8094,13 @@ def login():
     session["user_id"] = user_email
     session["firebase_uid"] = firebase_uid
     session.modified = True
+
+    _log_auth_login_step(
+        "session_created",
+        path=password_path,
+        email=user_email,
+        firebase_uid=bool(firebase_uid),
+    )
 
     return (
         jsonify(
@@ -8125,6 +8222,8 @@ def firebase_email_login():
     if not id_token:
         return jsonify(error="Missing Firebase ID token"), 400
 
+    _log_auth_login_step("firebase_email_login_entered")
+
     try:
         decoded = fb_auth.verify_id_token(id_token)
         email = (decoded.get("email") or "").strip().lower()
@@ -8159,12 +8258,22 @@ def firebase_email_login():
         session["firebase_uid"] = firebase_uid
         session.modified = True
 
+        _log_auth_login_step(
+            "firebase_email_login_success",
+            email=email,
+            email_verified=email_verified,
+        )
+
         return jsonify(
             message="Login successful",
             token=token,
             user=_session_user_payload(final_data, email),
         )
     except AuthFlowError as auth_error:
+        _log_auth_login_step(
+            "firebase_email_login_rejected",
+            reason=auth_error.code,
+        )
         return auth_error_response(
             auth_error.code,
             auth_error.message,
@@ -8173,6 +8282,10 @@ def firebase_email_login():
         )
     except Exception as e:
         print("Firebase email login error:", e)
+        _log_auth_login_step(
+            "firebase_email_login_failed",
+            errorType=type(e).__name__,
+        )
         return jsonify(
             error=(
                 "We couldn't verify your Firebase sign-in. Make sure the backend "

@@ -233,6 +233,7 @@ export default function EmailAction() {
 
         try {
           const email = await verifyPasswordResetCode(auth, oobCode);
+          console.debug("[WeCast auth] reset code validated (client)", { email });
           if (!cancelled) {
             setDetails({ email });
           }
@@ -463,6 +464,10 @@ export default function EmailAction() {
     try {
       let resolvedEmail = details?.email || "";
       if (isFirebaseResetMode) {
+        console.debug("[WeCast auth] password reset submit", {
+          mode: "firebase_oob",
+          hasOobCode: Boolean(oobCode),
+        });
         const res = await fetch(`${API_BASE}/api/password-reset/firebase-confirm`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -486,7 +491,17 @@ export default function EmailAction() {
         }
 
         resolvedEmail = data?.email || resolvedEmail;
+        console.debug("[WeCast auth] password reset success", {
+          mode: "firebase_oob",
+          email: resolvedEmail,
+        });
+        await signOut(auth).catch(() => {});
+        clearStoredAuth();
       } else {
+        console.debug("[WeCast auth] password reset submit", {
+          mode: "token",
+          hasToken: Boolean(token),
+        });
         const res = await fetch(`${API_BASE}/api/password-reset/confirm`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -510,6 +525,12 @@ export default function EmailAction() {
         }
 
         resolvedEmail = data?.email || resolvedEmail;
+        console.debug("[WeCast auth] password reset success", {
+          mode: "token",
+          email: resolvedEmail,
+        });
+        await signOut(auth).catch(() => {});
+        clearStoredAuth();
       }
 
       if (resolvedEmail) {
