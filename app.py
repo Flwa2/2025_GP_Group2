@@ -4694,6 +4694,43 @@ def _auth_identity_missing_response():
     )
 
 
+@app.post("/api/auth/session-token")
+def api_auth_session_token():
+    _log_api_auth_context("auth_session_token")
+    identity = get_current_user_identity()
+    email = _normalize_email(identity.get("email") or "")
+    firebase_uid = (identity.get("firebaseUid") or "").strip()
+    if not email and not firebase_uid:
+        _log_api_auth_context("auth_session_token", failure_reason="auth_identity_missing")
+        return _auth_identity_missing_response()
+
+    try:
+        token_email = email or session.get("user_id") or ""
+        app_token = _encode_app_jwt_token(token_email, firebase_uid=firebase_uid)
+    except Exception as exc:
+        print("Session token mint failed:", exc, flush=True)
+        return _api_json_response(
+            {
+                "ok": False,
+                "code": "session_token_failed",
+                "error": "Could not refresh your session. Please log in again.",
+            },
+            status=500,
+        )
+
+    return _api_json_response(
+        {
+            "ok": True,
+            "token": app_token,
+            "user": {
+                "email": email,
+                "firebaseUid": firebase_uid,
+            },
+        },
+        status=200,
+    )
+
+
 def _require_login_user(podcast_id: str = ""):
     identity = get_current_user_identity()
     user_email = _normalize_email(identity.get("email") or "")
@@ -4721,10 +4758,20 @@ def _assert_podcast_owner(podcast_id: str, user_id: str):
     ref = db.collection("podcasts").document(podcast_id)
     doc = ref.get()
     if not doc.exists:
+        _log_api_auth_context(
+            "assert_podcast_owner",
+            podcast_id=podcast_id,
+            failure_reason="podcast_not_found",
+        )
         return None, (jsonify(error="Podcast not found"), 404)
 
     pdata = doc.to_dict() or {}
     if not _podcast_owned_by_user(pdata, user_id):
+        _log_api_auth_context(
+            "assert_podcast_owner",
+            podcast_id=podcast_id,
+            failure_reason="forbidden_owner_mismatch",
+        )
         return None, (jsonify(error="Forbidden"), 403)
 
     return pdata, None
@@ -5077,11 +5124,13 @@ def api_cover_generate(podcast_id):
 @app.post("/api/podcast/<podcast_id>/update")
 def api_update_podcast(podcast_id):
     """Save edit draft or finalize podcast changes."""
-    user_id = get_current_podcast_owner_id()
-    if not user_id:
-        return jsonify(error="Not logged in"), 401
+    _log_api_auth_context("podcast_update", podcast_id=podcast_id)
+    user_id, err = _require_login_user(podcast_id)
+    if err:
+        return err
 
     data = request.get_json(silent=True) or {}
+    _log_request_json_context("podcast_update")
     print(f"Received update for podcast {podcast_id}")
     print(f"Data keys: {data.keys()}")
     
@@ -5096,6 +5145,11 @@ def api_update_podcast(podcast_id):
     
     # Verify ownership
     if not _podcast_owned_by_user(podcast_data, user_id):
+        _log_api_auth_context(
+            "podcast_update",
+            podcast_id=podcast_id,
+            failure_reason="forbidden_owner_mismatch",
+        )
         return jsonify(error="Forbidden"), 403
 
     mode = str(data.get("mode") or "final").strip().lower()
@@ -5288,20 +5342,32 @@ def api_cover_upload(podcast_id):
 
 @app.post("/api/podcasts/<podcast_id>/title")
 def api_podcast_update_title(podcast_id):
-    user_id = get_current_podcast_owner_id()
-    if not user_id:
-        return jsonify(error="Not logged in"), 401
+    _log_api_auth_context("podcast_title", podcast_id=podcast_id)
+    user_id, err = _require_login_user(podcast_id)
+    if err:
+        return err
 
     ref = db.collection("podcasts").document(podcast_id)
     doc = ref.get()
     if not doc.exists:
+        _log_api_auth_context(
+            "podcast_title",
+            podcast_id=podcast_id,
+            failure_reason="podcast_not_found",
+        )
         return jsonify(error="Podcast not found"), 404
 
     pdata = doc.to_dict() or {}
     if not _podcast_owned_by_user(pdata, user_id):
+        _log_api_auth_context(
+            "podcast_title",
+            podcast_id=podcast_id,
+            failure_reason="forbidden_owner_mismatch",
+        )
         return jsonify(error="Forbidden"), 403
 
     payload = request.get_json(silent=True) or {}
+    _log_request_json_context("podcast_title")
     title = resolve_episode_title(payload, fallback="")
     if not title:
         return jsonify(error="Title is required"), 400

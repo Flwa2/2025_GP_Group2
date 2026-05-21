@@ -62,7 +62,7 @@ import {
 } from "../utils/voiceAccentFilters";
 import { ensureVoiceLibraryCatalog } from "../utils/voiceLibraryCache";
 
-import { API_BASE, getAuthHeaders } from "../utils/api";
+import { API_BASE, apiFetch, getAuthHeaders } from "../utils/api";
 
 const getPortalTarget = () => {
   if (typeof document === "undefined") return null;
@@ -1144,13 +1144,9 @@ useEffect(() => {
     setShowExitWarning(false);
     if (podcastId && (draftRestored || hasUnsavedChanges)) {
       try {
-        await fetch(`${API_BASE}/api/podcast/${encodeURIComponent(podcastId)}/update`, {
+        await apiFetch(`/api/podcast/${encodeURIComponent(podcastId)}/update`, {
           method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            ...getAuthHeaders(),
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ mode: "discard_draft" }),
         });
       } catch (error) {
@@ -1173,13 +1169,9 @@ useEffect(() => {
         showTitle
       );
       const speakersForSave = enrichSpeakersWithVoiceNames(speakers);
-      const res = await fetch(`${API_BASE}/api/podcast/${encodeURIComponent(podcastId)}/update`, {
+      const data = await apiFetch(`/api/podcast/${encodeURIComponent(podcastId)}/update`, {
         method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          ...getAuthHeaders(),
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           mode: "draft",
           script: updatedScript,
@@ -1205,10 +1197,6 @@ useEffect(() => {
           description: "",
         }),
       });
-      const data = await parseJsonResponse(res);
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to save draft");
-      }
 
       const savedSnapshot = buildEditableSnapshot({
         nextShowTitle: showTitle,
@@ -1258,13 +1246,9 @@ useEffect(() => {
     setDraftTitle(originalShowTitle);
     if (podcastId) {
       try {
-        await fetch(`${API_BASE}/api/podcast/${encodeURIComponent(podcastId)}/update`, {
+        await apiFetch(`/api/podcast/${encodeURIComponent(podcastId)}/update`, {
           method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            ...getAuthHeaders(),
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ mode: "discard_draft" }),
         });
       } catch (error) {
@@ -1351,13 +1335,9 @@ const persistChanges = async ({
     Array.isArray(nextSpeakers) ? nextSpeakers : speakers
   );
 
-  const res = await fetch(`${API_BASE}/api/podcast/${encodeURIComponent(podcastId)}/update`, {
+  const responseData = await apiFetch(`/api/podcast/${encodeURIComponent(podcastId)}/update`, {
       method: "POST",
-      credentials: "include",
-      headers: { 
-        "Content-Type": "application/json",
-        ...getAuthHeaders(),
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         mode: "final",
         script: resolvedScript,
@@ -1384,27 +1364,14 @@ const persistChanges = async ({
       }),
     });
 
-    const responseData = await parseJsonResponse(res);
     console.log("Save response:", responseData);
 
-    if (!res.ok) {
-      throw new Error(responseData.error || "Failed to apply updates");
-    }
-
     if (String(nextShowTitle || "").trim()) {
-      const titleRes = await fetch(`${API_BASE}/api/podcasts/${encodeURIComponent(podcastId)}/title`, {
+      await apiFetch(`/api/podcasts/${encodeURIComponent(podcastId)}/title`, {
         method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          ...getAuthHeaders(),
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: nextShowTitle }),
       });
-      const titleData = await parseJsonResponse(titleRes);
-      if (!titleRes.ok) {
-        throw new Error(titleData.error || "Failed to update episode title");
-      }
     }
 
     setOriginalScript(resolvedScript);

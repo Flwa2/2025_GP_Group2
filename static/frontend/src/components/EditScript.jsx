@@ -5,7 +5,7 @@ import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
 import { useTranslation } from "react-i18next";
 
-import { API_BASE, getAuthHeaders } from "../utils/api";
+import { API_BASE, apiFetch } from "../utils/api";
 
 const getPortalTarget = () => {
   if (typeof document === "undefined") return null;
@@ -40,15 +40,10 @@ async function syncEditScriptDraftToServer(content, showTitle) {
     String(editData.showTitle || editData.episodeTitle || "").trim() ||
     t("editScript.defaultTitle");
 
-  const r = await fetch(
-    `${API_BASE}/api/podcast/${encodeURIComponent(podcastId)}/update`,
-    {
+  try {
+    await apiFetch(`/api/podcast/${encodeURIComponent(podcastId)}/update`, {
       method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        ...getAuthHeaders(),
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         mode: "draft",
         script: content,
@@ -61,14 +56,11 @@ async function syncEditScriptDraftToServer(content, showTitle) {
         description: editData.description || "",
         scriptStyle: editData.scriptStyle || "",
       }),
-    }
-  );
-
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) {
+    });
+  } catch (error) {
     return {
       ok: false,
-      error: data.error || `Save failed (${r.status})`,
+      error: error?.message || "Save failed",
     };
   }
   return { ok: true, localOnly: false };
