@@ -7605,9 +7605,17 @@ AUDIO_TTS_OUTPUT_FORMAT = os.getenv("WECAST_AUDIO_TTS_FORMAT", "mp3_44100_64")
 AUDIO_FFMPEG_BITRATE = "64k"
 AUDIO_FFMPEG_SAMPLE_RATE = "44100"
 AUDIO_FFMPEG_CHANNELS = "1"
-RENDER_AUDIO_MAX_WORDS = int(os.getenv("RENDER_AUDIO_MAX_WORDS", "700"))
-RENDER_AUDIO_MAX_SPEAKERS = int(os.getenv("RENDER_AUDIO_MAX_SPEAKERS", "6"))
-RENDER_AUDIO_MAX_DURATION_SEC = float(os.getenv("RENDER_AUDIO_MAX_DURATION_SEC", "600"))
+RENDER_AUDIO_MAX_WORDS = int(os.getenv("RENDER_AUDIO_MAX_WORDS", "400"))
+RENDER_AUDIO_MAX_SPEAKERS = int(os.getenv("RENDER_AUDIO_MAX_SPEAKERS", "2"))
+RENDER_AUDIO_MAX_SEGMENTS = int(os.getenv("RENDER_AUDIO_MAX_SEGMENTS", "25"))
+RENDER_AUDIO_MAX_TTS_CHARS = int(os.getenv("RENDER_AUDIO_MAX_TTS_CHARS", "1500"))
+RENDER_AUDIO_MAX_DURATION_SEC = float(os.getenv("RENDER_AUDIO_MAX_DURATION_SEC", "300"))
+AUDIO_SKIP_GPT_CHAPTERS = os.getenv("AUDIO_SKIP_GPT_CHAPTERS", "1").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 WECAST_AUDIO_INCLUDE_MUSIC = os.getenv("WECAST_AUDIO_INCLUDE_MUSIC", "0").strip().lower() in (
     "1",
     "true",
@@ -7638,25 +7646,65 @@ def _audio_memory_log(stage, **details):
     print("Audio memory:", " ".join(parts), flush=True)
 
 
+def _audio_stage_log(stage, phase="during", **details):
+    """Structured /api/audio stage logging with RSS before/after major work."""
+    label = f"{stage}_{phase}" if phase in ("before", "after") else stage
+    _audio_memory_log(label, **details)
+    if phase == "before":
+        print(f"Audio stage BEGIN: {stage}", flush=True)
+    elif phase == "after":
+        print(f"Audio stage END: {stage}", flush=True)
+    else:
+        print(f"Audio stage: {stage}", flush=True)
+
+
+def _audio_api_json_error(message, code, status=400):
+    return _apply_cors_headers(
+        _api_json_response(
+            {"ok": False, "error": message, "code": code},
+            status=status,
+        )
+    )
+
+
 def _validate_render_audio_limits(script: str, segments: list):
     word_count = len(re.findall(r"\S+", script or ""))
     if word_count > RENDER_AUDIO_MAX_WORDS:
         return (
             False,
-            f"Script has {word_count} words; maximum allowed is {RENDER_AUDIO_MAX_WORDS}.",
+            f"Script has {word_count} words; maximum allowed is {RENDER_AUDIO_MAX_WORDS} on this server.",
         )
 
-    speakers = {
-        (speaker or "").strip()
-        for speaker, _text in segments
-        if (speaker or "").strip().lower() != "__music__"
-    }
+    speech_segments = [
+        (speaker, text)
+        for speaker, text in segments
+        if (speaker or "").strip().lower() != "__music__" and (text or "").strip()
+    ]
+    if len(speech_segments) > RENDER_AUDIO_MAX_SEGMENTS:
+        return (
+            False,
+            f"Script has {len(speech_segments)} speech segments; maximum allowed is {RENDER_AUDIO_MAX_SEGMENTS}.",
+        )
+
+    speakers = {(speaker or "").strip() for speaker, _text in speech_segments}
     speakers.discard("")
     if len(speakers) > RENDER_AUDIO_MAX_SPEAKERS:
         return (
             False,
             f"Too many speakers ({len(speakers)}); maximum allowed is {RENDER_AUDIO_MAX_SPEAKERS}.",
         )
+
+    for speaker, text in speech_segments:
+        if is_arabic(text):
+            tts_len = len((text or "").strip())
+        else:
+            tts_len = len(clean_script_for_tts(text or ""))
+        if tts_len > RENDER_AUDIO_MAX_TTS_CHARS:
+            return (
+                False,
+                f"Speech block for {speaker or 'speaker'} is too long ({tts_len} chars); "
+                f"maximum per block is {RENDER_AUDIO_MAX_TTS_CHARS}.",
+            )
 
     estimated_duration_sec = word_count * 0.45
     if estimated_duration_sec > RENDER_AUDIO_MAX_DURATION_SEC:
@@ -7667,6 +7715,13 @@ def _validate_render_audio_limits(script: str, segments: list):
         )
 
     return True, ""
+
+
+def _chapters_for_audio_save(word_timeline, transcript_text, language="en"):
+    """Avoid extra OpenAI work during /api/audio (reduces memory/time on Render)."""
+    if AUDIO_SKIP_GPT_CHAPTERS:
+        return fallback_time_split_chapters(word_timeline, language=language)
+    return build_chapters(word_timeline, transcript_text, language=language)
 
 
 def _estimate_word_timeline_from_text(text: str, speaker: str, start_offset: float, duration_sec: float):
@@ -7727,7 +7782,9 @@ def eleven_tts_stream_to_file(
         "output_format": AUDIO_TTS_OUTPUT_FORMAT,
     }
 
+    _audio_stage_log("elevenlabs_request", chars=len(text), voice_id=voice_id)
     with requests.post(url, headers=headers, json=body, stream=True, timeout=180) as response:
+        _audio_stage_log("elevenlabs_response", status_code=response.status_code)
         if not response.ok:
             err_body = ""
             try:
@@ -7744,6 +7801,7 @@ def eleven_tts_stream_to_file(
                     output_file.write(chunk)
 
     gc.collect()
+    _audio_stage_log("tts_segment_saved", path=output_path)
     return []
 
 
@@ -7924,20 +7982,33 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
     Low-memory synthesis: stream TTS to disk (no alignment JSON), incremental ffmpeg merge.
     Background music is off by default on Render (WECAST_AUDIO_INCLUDE_MUSIC=1 to enable).
     """
+    _audio_stage_log("synthesis_entry", phase="before")
     if not _audio_ffmpeg_ready():
+        _audio_stage_log("ffmpeg_ready", ready=False)
         return False, "ffmpeg not installed/configured"
+    _audio_stage_log("ffmpeg_ready", ready=True)
+
+    if not _elevenlabs_key_ready():
+        _audio_stage_log("elevenlabs_ready", ready=False)
+        return False, "ElevenLabs API key is not configured."
+
+    if not r2_client:
+        _audio_stage_log("r2_ready", ready=False)
+        return False, "Audio storage (R2) is not configured."
 
     music_index = 0
     script = (script or "").strip()
     if not script:
         return False, "Script is empty."
 
+    _audio_stage_log("script_extracted", script_chars=len(script))
     segments = parse_script_into_segments(script)
     if not segments:
         return False, "Nothing to read after cleaning script."
 
     ok_limits, limit_error = _validate_render_audio_limits(script, segments)
     if not ok_limits:
+        _audio_stage_log("limits_rejected", error=limit_error[:120])
         return False, limit_error
 
     speaker_to_voice, default_voice = build_speaker_voice_map()
@@ -7959,11 +8030,14 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
     )
 
     try:
+        _audio_stage_log("temp_workspace", phase="before")
         with tempfile.TemporaryDirectory(prefix="wecast_audio_") as temp_dir:
+            _audio_stage_log("temp_workspace", phase="after", temp_dir=temp_dir)
             master_path = os.path.join(temp_dir, local_filename)
             silence_path = os.path.join(temp_dir, "lead_silence.mp3")
-            _audio_memory_log("lead_silence_create")
+            _audio_stage_log("lead_silence_create", phase="before")
             _ffmpeg_create_silence_mp3(silence_path, duration_ms=500)
+            _audio_stage_log("lead_silence_create", phase="after")
             shutil.copy2(silence_path, master_path)
             timeline_offset += _probe_mp3_duration_seconds(silence_path)
             gc.collect()
@@ -8022,8 +8096,9 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
                 voice_id = speaker_to_voice.get(speaker, default_voice)
                 segment_path = os.path.join(temp_dir, f"speech_{index:04d}.mp3")
 
-                _audio_memory_log(
-                    "tts_stream_start",
+                _audio_stage_log(
+                    "tts_stream",
+                    phase="before",
                     index=index,
                     speaker=speaker,
                     chars=len(tts_text),
@@ -8038,8 +8113,9 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
                     return False, str(exc)
 
                 segment_bytes = os.path.getsize(segment_path)
-                _audio_memory_log(
-                    "tts_stream_done",
+                _audio_stage_log(
+                    "tts_stream",
+                    phase="after",
                     index=index,
                     bytes=segment_bytes,
                 )
@@ -8055,8 +8131,9 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
                 )
                 timeline_offset += segment_duration
 
-                _audio_memory_log("ffmpeg_append_start", index=index)
+                _audio_stage_log("ffmpeg_merge_segment", phase="before", index=index)
                 _ffmpeg_append_mp3(master_path, segment_path, temp_dir)
+                _audio_stage_log("ffmpeg_merge_segment", phase="after", index=index)
                 try:
                     os.remove(segment_path)
                 except OSError:
@@ -8087,22 +8164,30 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
                 w["start"] += lead_silence_sec
                 w["end"] += lead_silence_sec
 
-            _audio_memory_log(
-                "upload_start",
+            _audio_stage_log(
+                "upload",
+                phase="before",
                 output_path=output_path,
                 duration_sec=round(measured_duration, 2),
                 word_count=len(word_timeline),
             )
             upload_file_to_r2(output_path, object_key, "audio/mpeg")
+            _audio_stage_log("upload", phase="after", object_key=object_key)
             gc.collect()
 
     except Exception as synthesis_error:
         print("Audio synthesis failed:", synthesis_error, flush=True)
         traceback.print_exc()
+        _audio_stage_log("synthesis_failure", error=str(synthesis_error)[:200])
         return False, f"Audio synthesis failed: {synthesis_error}"
 
     signed_url = build_r2_asset_url(object_key, expires_in=3600)
-    _audio_memory_log("synthesis_complete", object_key=object_key)
+    if not signed_url:
+        _audio_stage_log("signed_url_failure", object_key=object_key)
+        return False, "Audio uploaded but URL could not be generated."
+
+    _audio_stage_log("synthesis_success", object_key=object_key)
+    _audio_stage_log("synthesis_entry", phase="after")
 
     return True, {
         "url": signed_url,
@@ -8112,15 +8197,21 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
 
 @app.post("/api/audio")
 def api_audio():
+    _audio_stage_log("api_request_received", phase="before")
     try:
+        _audio_stage_log("payload_parse", phase="before")
         payload = request.get_json(silent=True) or {}
         script = (payload.get("scriptText") or request.form.get("scriptText") or "").strip()
         podcast_id = (payload.get("podcastId") or "").strip()
         ui_language = (payload.get("language") or "").strip().lower()
+        _audio_stage_log(
+            "payload_parsed",
+            phase="after",
+            script_chars=len(script),
+            podcast_id=podcast_id or "<missing>",
+            word_count=len(re.findall(r"\S+", script)),
+        )
 
-        print("DEBUG /api/audio script length:", len(script))
-        print("DEBUG /api/audio first 200 chars:", script[:200])
-        print("DEBUG /api/audio podcastId:", podcast_id)
         incoming_speakers_info = payload.get("speakers_info")
         if isinstance(incoming_speakers_info, list) and incoming_speakers_info:
             draft = session.get("create_draft") or {}
@@ -8129,116 +8220,146 @@ def api_audio():
             session.modified = True
 
         if not podcast_id:
-            return _apply_cors_headers(
-                _api_json_response(
-                    {"error": "Missing podcastId", "code": "missing_podcast_id"},
-                    status=400,
-                )
+            _audio_stage_log("api_failure", reason="missing_podcast_id")
+            return _audio_api_json_error(
+                "Missing podcastId",
+                "missing_podcast_id",
+                status=400,
             )
 
+        if not script:
+            return _audio_api_json_error("Script is empty.", "empty_script", status=400)
+
+        word_count = len(re.findall(r"\S+", script))
+        if word_count > RENDER_AUDIO_MAX_WORDS:
+            _audio_stage_log("api_failure", reason="word_limit", word_count=word_count)
+            return _audio_api_json_error(
+                f"Script has {word_count} words; maximum allowed is {RENDER_AUDIO_MAX_WORDS} on this server.",
+                "audio_limit_exceeded",
+                status=400,
+            )
+
+        _audio_stage_log("synthesis_invoke", phase="before")
         ok, result = synthesize_audio_from_script(script, podcast_id)
+        _audio_stage_log("synthesis_invoke", phase="after", ok=ok)
         if not ok:
             error_message = (
                 result if isinstance(result, str) else "Audio generation failed."
             )
-            is_ffmpeg = error_message == "ffmpeg not installed/configured"
+            is_ffmpeg = "ffmpeg" in error_message.lower()
+            is_eleven = "elevenlabs" in error_message.lower()
+            is_r2 = "storage" in error_message.lower() or "r2" in error_message.lower()
             is_limit = (
                 "maximum allowed" in error_message
                 or "exceeds the" in error_message
                 or "server limit" in error_message
+                or "too long" in error_message
             )
-            return _apply_cors_headers(
-                _api_json_response(
-                    {
-                        "ok": False,
-                        "error": error_message,
-                        "code": (
-                            "ffmpeg_not_configured"
-                            if is_ffmpeg
-                            else "audio_limit_exceeded"
-                            if is_limit
-                            else "audio_generation_failed"
-                        ),
-                    },
-                    status=503 if is_ffmpeg else 400,
-                )
+            _audio_stage_log("api_failure", reason=error_message[:160])
+            return _audio_api_json_error(
+                error_message,
+                (
+                    "ffmpeg_not_configured"
+                    if is_ffmpeg
+                    else "elevenlabs_not_configured"
+                    if is_eleven
+                    else "audio_storage_not_configured"
+                    if is_r2
+                    else "audio_limit_exceeded"
+                    if is_limit
+                    else "audio_generation_failed"
+                ),
+                status=503
+                if (is_ffmpeg or is_eleven or is_r2)
+                else 400,
             )
 
         session["last_audio_url"] = result["url"]
         session["last_audio_key"] = result.get("audioKey", "")
         session.modified = True
 
+        _audio_stage_log("firestore_persist", phase="before")
         user_id = get_current_podcast_owner_id()
+        persist_error = ""
         if user_id and podcast_id:
-            podcast_ref = db.collection("podcasts").document(podcast_id)
-            doc = podcast_ref.get()
+            try:
+                podcast_ref = db.collection("podcasts").document(podcast_id)
+                doc = podcast_ref.get()
 
-            if doc.exists:
-                pdata = doc.to_dict() or {}
-                if _podcast_owned_by_user(pdata, user_id):
-                    words = result.get("words") or []
-                    transcript_text = build_transcript_text_with_speakers(words)
-                    old_audio_key = (pdata.get("audioKey") or "").strip()
-                    new_audio_key = (result.get("audioKey") or "").strip()
+                if doc.exists:
+                    pdata = doc.to_dict() or {}
+                    if _podcast_owned_by_user(pdata, user_id):
+                        words = result.get("words") or []
+                        transcript_text = build_transcript_text_with_speakers(words)
+                        old_audio_key = (pdata.get("audioKey") or "").strip()
+                        new_audio_key = (result.get("audioKey") or "").strip()
 
-                    if ui_language in ("en", "ar"):
-                        podcast_ref.set({"language": ui_language}, merge=True)
+                        if ui_language in ("en", "ar"):
+                            podcast_ref.set({"language": ui_language}, merge=True)
 
-                    podcast_ref.set(
-                        {
-                            "transcriptText": transcript_text,
-                            "transcriptUpdatedAt": firestore.SERVER_TIMESTAMP,
-                            "audioUrl": result["url"],
-                            "audioKey": new_audio_key,
-                            "audioUpdatedAt": firestore.SERVER_TIMESTAMP,
-                        },
-                        merge=True,
-                    )
+                        podcast_ref.set(
+                            {
+                                "transcriptText": transcript_text,
+                                "transcriptUpdatedAt": firestore.SERVER_TIMESTAMP,
+                                "audioUrl": result["url"],
+                                "audioKey": new_audio_key,
+                                "audioUpdatedAt": firestore.SERVER_TIMESTAMP,
+                            },
+                            merge=True,
+                        )
 
-                    if old_audio_key and new_audio_key and old_audio_key != new_audio_key:
-                        delete_from_r2_quietly(old_audio_key, label="Audio replace")
+                        if old_audio_key and new_audio_key and old_audio_key != new_audio_key:
+                            delete_from_r2_quietly(old_audio_key, label="Audio replace")
 
-                    podcast_ref.collection("transcripts").document("main").set(
-                        {
-                            "words": words,
-                            "updatedAt": firestore.SERVER_TIMESTAMP,
-                        },
-                        merge=True,
-                    )
+                        podcast_ref.collection("transcripts").document("main").set(
+                            {
+                                "words": words,
+                                "updatedAt": firestore.SERVER_TIMESTAMP,
+                            },
+                            merge=True,
+                        )
 
-                    language = ui_language or pdata.get("language") or "en"
-                    chapters = build_chapters(words, transcript_text, language=language)
-                    podcast_ref.set(
-                        {
-                            "chapters": chapters,
-                            "chaptersUpdatedAt": firestore.SERVER_TIMESTAMP,
-                        },
-                        merge=True,
-                    )
+                        language = ui_language or pdata.get("language") or "en"
+                        chapters = _chapters_for_audio_save(
+                            words, transcript_text, language=language
+                        )
+                        podcast_ref.set(
+                            {
+                                "chapters": chapters,
+                                "chaptersUpdatedAt": firestore.SERVER_TIMESTAMP,
+                            },
+                            merge=True,
+                        )
+                    else:
+                        print("WARN: user does not own this podcast. Not saving transcript.")
                 else:
-                    print("WARN: user does not own this podcast. Not saving transcript.")
-            else:
-                print("WARN: podcastId not found. Not saving transcript.")
+                    print("WARN: podcastId not found. Not saving transcript.")
+            except Exception as persist_exc:
+                persist_error = str(persist_exc)
+                print("WARN /api/audio Firestore persist failed:", persist_exc, flush=True)
+                traceback.print_exc()
+        _audio_stage_log("firestore_persist", phase="after", error=persist_error or None)
 
-        return _apply_cors_headers(
-            jsonify(
-                ok=True,
-                url=result["url"],
-                audioKey=result.get("audioKey", ""),
-                words=result["words"],
+        _audio_stage_log("api_success", phase="after", audio_key=result.get("audioKey"))
+        response_payload = {
+            "ok": True,
+            "url": result["url"],
+            "audioKey": result.get("audioKey", ""),
+            "words": result.get("words") or [],
+        }
+        if persist_error:
+            response_payload["warning"] = (
+                "Audio generated but episode metadata could not be fully saved."
             )
-        )
+        return _apply_cors_headers(jsonify(response_payload))
     except Exception as audio_error:
         print("API /api/audio failed:", audio_error, flush=True)
         traceback.print_exc()
-        return _apply_cors_headers(
-            _api_json_response(
-                {
-                    "error": "Audio generation failed on the server. Please try again.",
-                    "code": "audio_server_error",
-                },
-                status=500,
-            )
+        _audio_stage_log("api_failure", reason=str(audio_error)[:200])
+        return _audio_api_json_error(
+            "Audio generation failed on the server. Please try again.",
+            "audio_server_error",
+            status=500,
         )
 
 @app.get("/api/audio/<podcast_id>")
