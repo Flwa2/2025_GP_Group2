@@ -9,6 +9,11 @@ import {
 
 import { ensureFirebaseClientReady } from "../firebaseClient";
 import { API_BASE } from "./api";
+import {
+  describeFirebaseIdToken,
+  isPlausibleFirebaseIdToken,
+  logFirebaseAuthAttempt,
+} from "./firebaseAuthDebug";
 
 function storeAuthSession({ token, user, remember = true }) {
   const tokenStorage = remember ? localStorage : sessionStorage;
@@ -70,19 +75,33 @@ function providerLabelFromId(providerId) {
   return "OAuth";
 }
 
+const PENDING_SOCIAL_REDIRECT_KEY = "wecast:pendingSocialRedirect";
+
 async function exchangeFirebaseUser({
   user,
   providerLabel,
   remember,
 }) {
-  const idToken = await user.getIdToken(true);
+  const firebaseIdToken = await user.getIdToken(true);
+  const tokenDiagnostics = describeFirebaseIdToken(firebaseIdToken);
+  logFirebaseAuthAttempt("social-login getIdToken result", {
+    providerLabel,
+    uid: user?.uid || "",
+    ...tokenDiagnostics,
+  });
+
+  if (!isPlausibleFirebaseIdToken(firebaseIdToken)) {
+    throw new Error(
+      `${providerLabel} sign-in did not produce a valid Firebase JWT. Hard refresh and try again.`
+    );
+  }
 
   const res = await fetch(`${API_BASE}/api/social-login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
     body: JSON.stringify({
-      idToken,
+      idToken: firebaseIdToken,
       email: user.email || "",
       name: user.displayName || "",
     }),
@@ -96,14 +115,39 @@ async function exchangeFirebaseUser({
   }
 
   if (!res.ok) {
-    throw new Error(data.error || `${providerLabel} login failed.`);
+    const contentType = String(res.headers.get("content-type") || "").toLowerCase();
+    console.debug("[WeCast auth] social-login failed", {
+      status: res.status,
+      contentType,
+      providerLabel,
+      error: data?.error || data?.message,
+      code: data?.code,
+    });
+    throw new Error(
+      data?.message ||
+        data?.error ||
+        `${providerLabel} login failed (server ${res.status}).`
+    );
   }
 
   if (!data.token || !data.user) {
-    throw new Error(`The server did not return a valid ${providerLabel} session.`);
+    const contentType = String(res.headers.get("content-type") || "").toLowerCase();
+    console.debug("[WeCast auth] social-login invalid payload", {
+      status: res.status,
+      contentType,
+      providerLabel,
+      hasToken: Boolean(data.token),
+      hasUser: Boolean(data.user),
+      keys: Object.keys(data || {}),
+    });
+    throw new Error(
+      `The server did not return a valid ${providerLabel} sign-in (missing token or user). ` +
+        "Check Render backend Firebase Admin credentials and CORS."
+    );
   }
 
   storeAuthSession({ token: data.token, user: data.user, remember });
+  sessionStorage.removeItem(PENDING_SOCIAL_REDIRECT_KEY);
 }
 
 async function setAuthPersistence(auth, remember) {
@@ -114,10 +158,18 @@ async function setAuthPersistence(auth, remember) {
   await setPersistence(auth, persistence);
 }
 
+export function hasPendingSocialRedirect() {
+  return sessionStorage.getItem(PENDING_SOCIAL_REDIRECT_KEY) === "1";
+}
+
 export async function completePendingSocialRedirect({
   auth,
   remember = true,
 }) {
+  if (!hasPendingSocialRedirect()) {
+    return false;
+  }
+
   ensureFirebaseClientReady();
   await setAuthPersistence(auth, remember);
   let result;
@@ -133,13 +185,16 @@ export async function completePendingSocialRedirect({
   }
 
   if (!result?.user) {
+    sessionStorage.removeItem(PENDING_SOCIAL_REDIRECT_KEY);
     return false;
   }
 
-  const providerId = result.providerId || result.user.providerData?.[0]?.providerId || "OAuth";
+  const providerId =
+    result.providerId || result.user.providerData?.[0]?.providerId || "OAuth";
+  const providerLabel = providerLabelFromId(providerId);
   await exchangeFirebaseUser({
     user: result.user,
-    providerLabel: providerId,
+    providerLabel,
     remember,
   });
   return true;
@@ -164,6 +219,7 @@ export async function authenticateWithSocialProvider({
     return { redirected: false };
   } catch (error) {
     if (error?.code === "auth/popup-blocked") {
+      sessionStorage.setItem(PENDING_SOCIAL_REDIRECT_KEY, "1");
       await signInWithRedirect(auth, provider);
       return { redirected: true };
     }

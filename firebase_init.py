@@ -4,7 +4,28 @@ import json
 import os
 
 SERVICE_ACCOUNT_PATH = "config/service_account.json"
-cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
+
+
+def _load_firebase_credentials():
+    """Render/production: set FIREBASE_SERVICE_ACCOUNT_JSON to the full service account JSON."""
+    raw_json = (os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON") or "").strip()
+    if raw_json:
+        try:
+            payload = json.loads(raw_json)
+            return credentials.Certificate(payload)
+        except Exception as exc:
+            raise RuntimeError(
+                "FIREBASE_SERVICE_ACCOUNT_JSON is set but could not be parsed."
+            ) from exc
+    if os.path.exists(SERVICE_ACCOUNT_PATH):
+        return credentials.Certificate(SERVICE_ACCOUNT_PATH)
+    raise RuntimeError(
+        "Firebase Admin credentials missing. Add config/service_account.json "
+        "or set FIREBASE_SERVICE_ACCOUNT_JSON on the server."
+    )
+
+
+cred = _load_firebase_credentials()
 
 storage_bucket = os.getenv("FIREBASE_STORAGE_BUCKET", "").strip()
 if not storage_bucket:

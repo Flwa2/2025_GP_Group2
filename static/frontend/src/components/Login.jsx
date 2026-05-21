@@ -24,7 +24,9 @@ import {
   signOut,
 } from "firebase/auth";
 import {
+  describeFirebaseIdToken,
   formatFirebaseAuthError,
+  isPlausibleFirebaseIdToken,
   logFirebaseAuthAttempt,
   maskEmail,
   userMessageForFirebaseAuthError,
@@ -183,6 +185,13 @@ export default function Login() {
   };
 
   const storeAuthenticatedSession = (data, rememberedIdentifier) => {
+    if (!data?.token || !data?.user) {
+      throw new Error(
+        "Server did not return a valid email sign-in (missing token or user). " +
+          "Check the Network tab for /api/firebase-email-login or /api/login."
+      );
+    }
+
     if (data.token) {
       if (rememberMe) {
         localStorage.setItem("token", data.token);
@@ -322,13 +331,13 @@ export default function Login() {
     e.preventDefault();
     clearStatusMessages();
     setPendingVerificationEmail("");
+    setLoading(true);
 
     if (!identifier.trim() || !pwd.trim()) {
       showErrorMessage("Please enter both email/username and password.");
+      setLoading(false);
       return;
     }
-
-    setLoading(true);
 
     try {
       const trimmedIdentifier = identifier.trim();
@@ -392,15 +401,36 @@ export default function Login() {
           sessionStorage.removeItem("wecast:pendingVerificationEmail");
           setPendingVerificationEmail("");
 
-          const idToken = await firebaseUser.getIdToken(true);
+          if (!firebaseUser?.uid) {
+            throw new Error(
+              "Firebase sign-in did not return a user. Hard refresh wecastsa.com and try again."
+            );
+          }
+
+          const firebaseIdToken = await firebaseUser.getIdToken(true);
+          const tokenDiagnostics = describeFirebaseIdToken(firebaseIdToken);
+          logFirebaseAuthAttempt("Firebase getIdToken result", {
+            email: maskEmail(firebaseEmail),
+            uid: firebaseUser.uid,
+            ...tokenDiagnostics,
+          });
+
+          if (!isPlausibleFirebaseIdToken(firebaseIdToken)) {
+            throw new Error(
+              "Firebase returned an invalid session token (not a JWT). " +
+                "Hard refresh wecastsa.com (Ctrl+Shift+R), confirm VITE_FIREBASE_* env vars on Render, then try again."
+            );
+          }
+
           logFirebaseAuthAttempt("Firebase sign-in succeeded, exchanging session", {
             email: maskEmail(firebaseEmail),
+            ...tokenDiagnostics,
           });
           const firebaseRes = await fetch(`${API_BASE}/api/firebase-email-login`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             credentials: "include",
-            body: JSON.stringify({ idToken }),
+            body: JSON.stringify({ idToken: firebaseIdToken }),
           });
 
           let firebaseData = {};
@@ -410,7 +440,17 @@ export default function Login() {
             firebaseData = {};
           }
 
+          const responseContentType = String(
+            firebaseRes.headers.get("content-type") || ""
+          ).toLowerCase();
+
           if (!firebaseRes.ok) {
+            logFirebaseAuthAttempt("firebase-email-login failed", {
+              status: firebaseRes.status,
+              contentType: responseContentType,
+              error: firebaseData?.error || firebaseData?.message,
+              code: firebaseData?.code,
+            });
             const apiError = buildApiError(firebaseData, "Login failed.");
             if (apiError.code === "email_not_verified") {
               await signOut(auth).catch(() => {});
@@ -424,8 +464,25 @@ export default function Login() {
             throw apiError;
           }
 
+          if (!firebaseData?.token || !firebaseData?.user) {
+            logFirebaseAuthAttempt("firebase-email-login invalid payload", {
+              status: firebaseRes.status,
+              contentType: responseContentType,
+              hasToken: Boolean(firebaseData?.token),
+              hasUser: Boolean(firebaseData?.user),
+              keys: Object.keys(firebaseData || {}),
+            });
+            throw new Error(
+              firebaseData?.error ||
+                firebaseData?.message ||
+                "Server returned an empty email login response. Check Render logs for firebase_email_login."
+            );
+          }
+
           logFirebaseAuthAttempt("backend session created via firebase-email-login", {
             ok: true,
+            authProvider: firebaseData?.user?.authProvider,
+            hasToken: Boolean(firebaseData?.token),
           });
           storeAuthenticatedSession(firebaseData, normalizedIdentifier);
           redirectAfterAuth();

@@ -270,14 +270,18 @@ def add_cors_headers(response):
     return response
 
 
-# Server-side sessions 
+# Server-side sessions (JWT is primary; cookies are supplementary for /api/me)
+from services.email_config import is_production as _email_is_production
+
+_session_cookie_secure = _email_is_production()
+_session_cookie_samesite = "None" if _session_cookie_secure else "Lax"
 app.config.update(
-    SECRET_KEY= "WeCast2025", 
-    SESSION_TYPE="filesystem", 
+    SECRET_KEY=os.getenv("FLASK_SECRET_KEY", "WeCast2025"),
+    SESSION_TYPE="filesystem",
     SESSION_FILE_DIR="./.flask_session",
     SESSION_PERMANENT=False,
-    SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=False,  
+    SESSION_COOKIE_SAMESITE=_session_cookie_samesite,
+    SESSION_COOKIE_SECURE=_session_cookie_secure,
 )
 Session(app)
 
@@ -1686,6 +1690,45 @@ def _log_auth_login_step(step, **details):
             continue
         safe_parts.append(f"{key}={value}")
     print("Auth login trace:", *safe_parts, flush=True)
+
+
+def _firebase_admin_project_id():
+    try:
+        import firebase_admin
+
+        app_instance = firebase_admin.get_app()
+        project_id = getattr(app_instance, "project_id", None)
+        if project_id:
+            return str(project_id).strip()
+        cred_obj = getattr(app_instance, "credential", None)
+        if cred_obj and getattr(cred_obj, "project_id", None):
+            return str(cred_obj.project_id).strip()
+    except Exception:
+        pass
+    try:
+        with open("config/service_account.json", "r", encoding="utf-8") as fh:
+            return (json.load(fh).get("project_id") or "").strip()
+    except Exception:
+        return ""
+
+
+def _looks_like_firebase_jwt(token):
+    value = (token or "").strip()
+    if not value or value.lower() in {"invalid", "undefined", "null"}:
+        return False
+    parts = value.split(".")
+    return len(parts) == 3 and all(part for part in parts)
+
+
+def _map_firebase_sign_in_provider(raw_provider):
+    normalized = (raw_provider or "").strip().lower()
+    if normalized in {"password", "email", "email_password"}:
+        return "password"
+    if "google" in normalized:
+        return "google"
+    if "github" in normalized:
+        return "github"
+    return normalized or "unknown"
 
 
 def _issue_internal_password_reset_link(email, delivery_label):
@@ -7764,6 +7807,31 @@ def api_username_availability():
     )
 
 
+@app.get("/api/auth/runtime-diagnostics")
+def api_auth_runtime_diagnostics():
+    """Safe production checks (no secrets) for frontend/backend auth alignment."""
+    api_key = _firebase_web_api_key()
+    admin_project = _firebase_admin_project_id()
+    return jsonify(
+        {
+            "production": _email_is_production(),
+            "frontendOrigins": FRONTEND_ORIGINS,
+            "sessionCookieSecure": bool(app.config.get("SESSION_COOKIE_SECURE")),
+            "sessionCookieSameSite": app.config.get("SESSION_COOKIE_SAMESITE"),
+            "firebaseWebApiKeyConfigured": bool(api_key),
+            "firebaseWebApiKeyPrefix": (api_key[:8] if api_key else ""),
+            "firebaseAdminProjectId": admin_project,
+            "firebaseAdminConfigured": bool(admin_project),
+            "expectedFirebaseProjectId": "wecast-e8019",
+            "firebaseProjectsMatch": admin_project == "wecast-e8019",
+            "requestOrigin": (request.headers.get("Origin") or "").strip(),
+            "corsAllowedForOrigin": _is_allowed_cors_origin(
+                request.headers.get("Origin") or ""
+            ),
+        }
+    )
+
+
 @app.post("/api/auth/resolve-identifier")
 def api_auth_resolve_identifier():
     data = request.get_json(silent=True) or {}
@@ -8272,10 +8340,19 @@ def social_login():
     from firebase_admin import auth as fb_auth
 
     data = request.get_json(silent=True) or {}
-    id_token = data.get("idToken")
+    id_token = (data.get("idToken") or "").strip()
 
     if not id_token:
         return jsonify(error="Missing Firebase ID token"), 400
+
+    if not _looks_like_firebase_jwt(id_token):
+        _log_auth_login_step(
+            "social_login_rejected",
+            reason="malformed_id_token",
+            tokenLength=len(id_token),
+            tokenSegments=len(id_token.split(".")),
+        )
+        return jsonify(error="Invalid Firebase ID token format.", code="malformed_id_token"), 400
 
     try:
         decoded = fb_auth.verify_id_token(id_token)
@@ -8285,15 +8362,16 @@ def social_login():
         if not email:
             return jsonify(error="Unable to read email from Firebase token"), 400
 
+        sign_in_provider = decoded.get("firebase", {}).get("sign_in_provider", "oauth")
+        mapped_provider = _map_firebase_sign_in_provider(sign_in_provider)
         final_data = _upsert_firebase_user_profile(
             email=email,
             display_name=name,
-            auth_provider=decoded.get("firebase", {}).get("sign_in_provider", "oauth"),
+            auth_provider=mapped_provider,
             email_verified=bool(decoded.get("email_verified")),
             firebase_uid=decoded.get("uid") or "",
             mark_login=True,
         )
-
 
         firebase_uid = (decoded.get("uid") or "").strip()
         token = create_token(email, email, firebase_uid=firebase_uid)
@@ -8302,14 +8380,25 @@ def social_login():
         session["firebase_uid"] = firebase_uid
         session.modified = True
 
+        user_payload = _session_user_payload(final_data, email)
+        _log_auth_login_step(
+            "social_login_success",
+            email=email,
+            authProvider=user_payload.get("authProvider"),
+            signInProvider=sign_in_provider,
+        )
         return jsonify(
             message="Login successful",
             token=token,
-            user=_session_user_payload(final_data, email),
+            user=user_payload,
         )
 
     except Exception as e:
         print("Social login error:", e)
+        _log_auth_login_step(
+            "social_login_failed",
+            errorType=type(e).__name__,
+        )
         return jsonify(
             error=(
                 "We couldn't verify your Firebase sign-in. Make sure the backend "
@@ -8322,12 +8411,33 @@ def firebase_email_login():
     from firebase_admin import auth as fb_auth
 
     data = request.get_json(silent=True) or {}
-    id_token = data.get("idToken")
+    id_token = (data.get("idToken") or "").strip()
 
     if not id_token:
         return jsonify(error="Missing Firebase ID token"), 400
 
-    _log_auth_login_step("firebase_email_login_entered")
+    if not _looks_like_firebase_jwt(id_token):
+        _log_auth_login_step(
+            "firebase_email_login_rejected",
+            reason="malformed_id_token",
+            tokenLength=len(id_token),
+            tokenSegments=len(id_token.split(".")),
+            origin=(request.headers.get("Origin") or "").strip(),
+            userAgent=(request.headers.get("User-Agent") or "")[:80],
+        )
+        return jsonify(
+            error=(
+                "Invalid Firebase ID token format. The client must send a JWT "
+                "from user.getIdToken(), not a placeholder string."
+            ),
+            code="malformed_id_token",
+        ), 400
+
+    _log_auth_login_step(
+        "firebase_email_login_entered",
+        tokenLength=len(id_token),
+        origin=(request.headers.get("Origin") or "").strip(),
+    )
 
     try:
         decoded = fb_auth.verify_id_token(id_token)
@@ -8348,10 +8458,11 @@ def firebase_email_login():
                 pendingVerification=True,
             )
 
+        sign_in_provider = decoded.get("firebase", {}).get("sign_in_provider", "password")
         final_data = _upsert_firebase_user_profile(
             email=email,
             display_name=name,
-            auth_provider=decoded.get("firebase", {}).get("sign_in_provider", "password"),
+            auth_provider="password",
             email_verified=email_verified,
             firebase_uid=decoded.get("uid") or "",
             mark_login=True,
@@ -8363,16 +8474,21 @@ def firebase_email_login():
         session["firebase_uid"] = firebase_uid
         session.modified = True
 
+        user_payload = _session_user_payload(final_data, email)
+        user_payload["authProvider"] = "password"
         _log_auth_login_step(
             "firebase_email_login_success",
             email=email,
             email_verified=email_verified,
+            authProvider=user_payload.get("authProvider"),
+            signInProvider=sign_in_provider,
+            tokenPresent=bool(token),
         )
 
         return jsonify(
             message="Login successful",
             token=token,
-            user=_session_user_payload(final_data, email),
+            user=user_payload,
         )
     except AuthFlowError as auth_error:
         _log_auth_login_step(

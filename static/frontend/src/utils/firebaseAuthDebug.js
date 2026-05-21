@@ -29,6 +29,28 @@ export function logFirebaseAuthAttempt(label, details = {}) {
   console.debug(`[WeCast auth] ${label}`, details);
 }
 
+/** Firebase ID tokens are JWTs: header.payload.signature (three base64url segments). */
+export function isPlausibleFirebaseIdToken(token) {
+  const value = String(token || "").trim();
+  if (!value || value === "invalid" || value === "undefined" || value === "null") {
+    return false;
+  }
+  const parts = value.split(".");
+  if (parts.length !== 3) return false;
+  return parts.every((part) => part.length > 0);
+}
+
+export function describeFirebaseIdToken(token) {
+  const value = String(token || "").trim();
+  const parts = value.split(".");
+  return {
+    tokenLength: value.length,
+    segmentCount: parts.length,
+    looksLikeJwt: isPlausibleFirebaseIdToken(value),
+    tokenPreview: value ? `${value.slice(0, 12)}...` : "<empty>",
+  };
+}
+
 export function userMessageForFirebaseAuthError(error) {
   const info = formatFirebaseAuthError(error);
   const code = info.code.toLowerCase();
