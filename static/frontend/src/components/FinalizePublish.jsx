@@ -13,7 +13,11 @@ import {
   PencilLine,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { apiFetch, ensureAuthTokenForApi } from "../utils/api";
+import {
+  apiFetch,
+  ensureAuthTokenForApi,
+  getStoredAuthToken,
+} from "../utils/api";
 
 function Notice({ notice, noticeType }) {
   if (!notice) return null;
@@ -151,7 +155,17 @@ export default function FinalizePublish() {
     setBusy(true);
     setBusyText(hasCover ? "Regenerating cover art..." : "Generating cover art...");
     try {
-      await ensureAuthTokenForApi();
+      const token = await ensureAuthTokenForApi(true);
+      if (!token) {
+        setNotice("Please log in again to generate cover art.");
+        setNoticeType("error");
+        return;
+      }
+      if (!getStoredAuthToken()) {
+        setNotice("Session token missing. Please log in again.");
+        setNoticeType("error");
+        return;
+      }
       const resp = await apiFetch(`/api/podcasts/${podcastId}/cover/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

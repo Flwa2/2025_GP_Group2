@@ -11,8 +11,8 @@ const STATIC_FRONTEND_HOSTS = new Set([
   "wecast-frontend.onrender.com",
 ]);
 
-/** Must match Login.jsx / socialAuth.js storage key. */
-const AUTH_TOKEN_KEYS = ["token", "wecastToken", "authToken", "appToken"];
+/** Single canonical key — must match Login.jsx storeAuthenticatedSession. */
+export const AUTH_TOKEN_STORAGE_KEY = "token";
 
 function normalizeApiBaseUrl(value) {
   return String(value || "").trim().replace(/\/$/, "");
@@ -54,28 +54,22 @@ export const API_BASE = resolveApiBaseUrl();
 
 let authTokenBootstrapPromise = null;
 
-/** App JWT from email/social login (required for cross-origin API on wecast.onrender.com). */
+/** App JWT from login (required for cross-origin API on wecast.onrender.com). */
 export function getStoredAuthToken() {
   if (typeof window === "undefined") return "";
-  for (const key of AUTH_TOKEN_KEYS) {
-    const value = (
-      window.localStorage.getItem(key) ||
-      window.sessionStorage.getItem(key) ||
-      ""
-    ).trim();
-    if (value) return value;
-  }
-  return "";
+  const fromLocal = (window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || "").trim();
+  if (fromLocal) return fromLocal;
+  return (window.sessionStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || "").trim();
 }
 
-/** Persist app JWT where apiFetch can always read it (cross-origin Render API). */
+/** Persist app JWT — always localStorage so apiFetch can attach Bearer on wecastsa.com → onrender.com. */
 export function storeAuthToken(token) {
   const value = String(token || "").trim();
   if (!value || typeof window === "undefined") return "";
-  window.localStorage.setItem("token", value);
-  window.sessionStorage.setItem("token", value);
+  window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, value);
+  window.sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, value);
   window.dispatchEvent(
-    new StorageEvent("storage", { key: "token", newValue: value })
+    new StorageEvent("storage", { key: AUTH_TOKEN_STORAGE_KEY, newValue: value })
   );
   return value;
 }
@@ -103,7 +97,7 @@ function getFirebaseUserForAuthBootstrap() {
     window.setTimeout(() => {
       unsubscribe();
       finish(auth?.currentUser || null);
-    }, 2500);
+    }, 3000);
   });
 }
 
@@ -112,6 +106,28 @@ async function getFirebaseIdTokenForBootstrap() {
     const firebaseUser = await getFirebaseUserForAuthBootstrap();
     if (!firebaseUser?.getIdToken) return "";
     return (await firebaseUser.getIdToken(true)) || "";
+  } catch {
+    return "";
+  }
+}
+
+async function bootstrapAuthTokenFromFirebase() {
+  try {
+    const idToken = await getFirebaseIdTokenForBootstrap();
+    if (!idToken) return "";
+
+    const res = await fetch(`${API_BASE}/api/firebase-email-login`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idToken }),
+    });
+    const contentType = res.headers.get("content-type") || "";
+    const data = contentType.includes("application/json")
+      ? await res.json()
+      : {};
+    if (!res.ok || !data?.token) return "";
+    return storeAuthToken(data.token);
   } catch {
     return "";
   }
@@ -151,56 +167,34 @@ async function bootstrapAuthTokenFromSession(force = false) {
   return authTokenBootstrapPromise;
 }
 
-async function bootstrapAuthTokenFromFirebase() {
-  try {
-    const idToken = await getFirebaseIdTokenForBootstrap();
-    if (!idToken) return "";
-
-    const res = await fetch(`${API_BASE}/api/firebase-email-login`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ idToken }),
-    });
-    const contentType = res.headers.get("content-type") || "";
-    const data = contentType.includes("application/json")
-      ? await res.json()
-      : {};
-    if (!res.ok || !data?.token) return "";
-    return storeAuthToken(data.token);
-  } catch {
-    return "";
-  }
-}
-
 /**
- * Ensure a Bearer token exists before cover/finalize/account API calls.
+ * Resolve Bearer token before any authenticated API call.
  */
 export async function ensureAuthTokenForApi(force = false) {
-  const existing = getStoredAuthToken();
-  if (existing && !force) return existing;
-  return bootstrapAuthTokenFromSession(force);
+  let token = getStoredAuthToken();
+  if (token && !force) return token;
+  token = await bootstrapAuthTokenFromSession(Boolean(force));
+  return token || "";
+}
+
+function buildRequestHeaders(extraHeaders = {}, token = "") {
+  const headers = new Headers();
+  const plain = extraHeaders || {};
+  Object.entries(plain).forEach(([key, value]) => {
+    if (value != null && value !== "") {
+      headers.set(key, String(value));
+    }
+  });
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  return headers;
 }
 
 /** Merge Authorization Bearer + any extra headers (skip Content-Type for FormData). */
 export function getAuthHeaders(extraHeaders = {}) {
-  const headers = { ...(extraHeaders || {}) };
   const token = getStoredAuthToken();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-  return headers;
-}
-
-async function getAuthHeadersForRequest(extraHeaders = {}) {
-  let headers = getAuthHeaders(extraHeaders);
-  if (!headers.Authorization) {
-    const token = await bootstrapAuthTokenFromSession();
-    if (token) {
-      headers = { ...(extraHeaders || {}), Authorization: `Bearer ${token}` };
-    }
-  }
-  return headers;
+  return buildRequestHeaders(extraHeaders, token);
 }
 
 function logApiFetchAuth(url, token) {
@@ -209,6 +203,11 @@ function logApiFetchAuth(url, token) {
     url,
     hasToken: Boolean(token),
     tokenPreview: token ? token.slice(0, 12) : null,
+    storageKey: AUTH_TOKEN_STORAGE_KEY,
+    localStorageHasToken: Boolean(
+      typeof window !== "undefined" &&
+        window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)
+    ),
   });
 }
 
@@ -217,28 +216,53 @@ function isAuthIdentityMissingError(data, status) {
   if (!data || typeof data !== "object") return false;
   return (
     data.code === "auth_identity_missing" ||
-    String(data.error || "").toLowerCase().includes("log in again")
+    data.code === "not_logged_in" ||
+    String(data.error || "").toLowerCase().includes("log in again") ||
+    String(data.error || "").toLowerCase().includes("not logged in")
   );
 }
 
 /**
- * Authenticated fetch: credentials (session cookie) + Bearer JWT (cross-origin).
+ * Authenticated fetch: credentials + mandatory Bearer JWT (cross-origin Render API).
+ * options.auth === false skips Bearer (public endpoints only).
  */
 export async function apiFetch(path, options = {}, attempt = 0) {
-  const { headers: optionHeaders, body, ...rest } = options;
+  const {
+    headers: optionHeaders,
+    body,
+    auth = true,
+    ...rest
+  } = options;
+
   const isFormData =
     typeof FormData !== "undefined" && body instanceof FormData;
-  const headers = await getAuthHeadersForRequest(optionHeaders || {});
-  const token = String(headers.Authorization || "").replace(/^Bearer\s+/i, "");
-  const url = `${API_BASE}${path}`;
 
-  if (isFormData) {
-    delete headers["Content-Type"];
+  let token = "";
+  if (auth) {
+    token = getStoredAuthToken();
+    if (!token) {
+      token = await bootstrapAuthTokenFromSession(attempt > 0);
+    }
+    if (!token) {
+      token = await bootstrapAuthTokenFromFirebase();
+    }
+    if (!token) {
+      const url = `${API_BASE}${path}`;
+      logApiFetchAuth(url, "");
+      throw new Error("Please log in again.");
+    }
   }
 
+  const headers = buildRequestHeaders(optionHeaders || {}, auth ? token : "");
+  if (isFormData) {
+    headers.delete("Content-Type");
+  }
+
+  const url = `${API_BASE}${path}`;
   logApiFetchAuth(url, token);
 
   const res = await fetch(url, {
+    method: rest.method || "GET",
     credentials: "include",
     ...rest,
     body,
@@ -251,6 +275,7 @@ export async function apiFetch(path, options = {}, attempt = 0) {
     : await res.text();
 
   if (
+    auth &&
     !res.ok &&
     attempt === 0 &&
     isAuthIdentityMissingError(data, res.status)
@@ -271,4 +296,28 @@ export async function apiFetch(path, options = {}, attempt = 0) {
   }
 
   return data;
+}
+
+/** Call once on app load so existing Firebase sessions get localStorage.token before cover/finalize. */
+export function installAuthTokenBootstrap() {
+  if (typeof window === "undefined" || !auth) return () => {};
+
+  const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    if (!user) return;
+    if (getStoredAuthToken()) return;
+    try {
+      await ensureAuthTokenForApi(true);
+    } catch (err) {
+      console.warn("[WeCast] auth token bootstrap failed:", err?.message || err);
+    }
+  });
+
+  if (getStoredAuthToken()) {
+    console.log("[apiFetch auth] startup", {
+      hasToken: true,
+      tokenPreview: getStoredAuthToken().slice(0, 12),
+    });
+  }
+
+  return unsubscribe;
 }

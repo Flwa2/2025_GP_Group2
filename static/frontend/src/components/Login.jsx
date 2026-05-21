@@ -8,7 +8,7 @@ import {
   githubProvider,
   ensureFirebaseClientReady,
 } from "../firebaseClient";
-import { API_BASE } from "../utils/api";
+import { API_BASE, storeAuthToken } from "../utils/api";
 import {
   authenticateWithSocialProvider,
   completePendingSocialRedirect,
@@ -195,13 +195,7 @@ export default function Login() {
     }
 
     if (data.token) {
-      // Cross-origin API (wecast.onrender.com) requires Bearer; keep token in localStorage.
-      localStorage.setItem("token", data.token);
-      if (rememberMe) {
-        sessionStorage.removeItem("token");
-      } else {
-        sessionStorage.setItem("token", data.token);
-      }
+      storeAuthToken(data.token);
     }
 
     if (rememberMe) {

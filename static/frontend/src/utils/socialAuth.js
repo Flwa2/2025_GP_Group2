@@ -8,7 +8,7 @@ import {
 } from "firebase/auth";
 
 import { ensureFirebaseClientReady } from "../firebaseClient";
-import { API_BASE } from "./api";
+import { API_BASE, storeAuthToken } from "./api";
 import {
   describeFirebaseIdToken,
   isPlausibleFirebaseIdToken,
@@ -16,16 +16,14 @@ import {
 } from "./firebaseAuthDebug";
 
 function storeAuthSession({ token, user, remember = true }) {
-  const tokenStorage = remember ? localStorage : sessionStorage;
-  const otherTokenStorage = remember ? sessionStorage : localStorage;
+  const userStorage = remember ? localStorage : sessionStorage;
+  const otherUserStorage = remember ? sessionStorage : localStorage;
 
-  localStorage.setItem("token", token);
-  tokenStorage.setItem("token", token);
-  otherTokenStorage.removeItem("token");
+  storeAuthToken(token);
 
   const serializedUser = JSON.stringify(user);
-  tokenStorage.setItem("user", serializedUser);
-  otherTokenStorage.removeItem("user");
+  userStorage.setItem("user", serializedUser);
+  otherUserStorage.removeItem("user");
 
   window.dispatchEvent(
     new StorageEvent("storage", { key: "token", newValue: token })
