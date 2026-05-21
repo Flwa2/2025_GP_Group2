@@ -2,8 +2,9 @@ services:
   - type: web
     name: wecast
     env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --timeout 300 --graceful-timeout 60
+    # apt.txt installs ffmpeg on Render native Python; build step verifies binaries
+    buildCommand: pip install -r requirements.txt && ffmpeg -version && ffprobe -version
+    startCommand: gunicorn app:app --timeout 300 --graceful-timeout 60 --workers 1
     envVars:
       - key: OPENAI_API_KEY
         sync: false

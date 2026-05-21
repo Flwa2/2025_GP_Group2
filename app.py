@@ -364,32 +364,63 @@ load_dotenv(dotenv_path=_ENV_PATH, override=False)
 import boto3
 from botocore.client import Config
 
-# Get ffmpeg & ffprobe paths from .env
-ffmpeg_path = os.getenv("FFMPEG_PATH")
-ffprobe_path = os.getenv("FFPROBE_PATH")
+FFMPEG_EXECUTABLE = None
+FFPROBE_EXECUTABLE = None
 
-print("DEBUG ffmpeg_path:", ffmpeg_path)
-print("DEBUG ffprobe_path:", ffprobe_path)
 
-# If the paths exist, configure pydub AND PATH
-if ffmpeg_path and os.path.exists(ffmpeg_path):
-    AudioSegment.converter = ffmpeg_path
-    ffmpeg_dir = os.path.dirname(ffmpeg_path)
-    os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
-else:
-    print("WARNING: ffmpeg_path missing or invalid")
+def _command_is_executable(command):
+    if not command or not os.path.isfile(command):
+        return False
+    try:
+        result = subprocess.run(
+            [command, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
-if ffprobe_path and os.path.exists(ffprobe_path):
-    AudioSegment.ffprobe = ffprobe_path
-    ffprobe_dir = os.path.dirname(ffprobe_path)
-    if ffprobe_dir not in os.environ.get("PATH", ""):
-        os.environ["PATH"] = ffprobe_dir + os.pathsep + os.environ.get("PATH", "")
-else:
-    print("WARNING: ffprobe_path missing or invalid")
 
-print("DEBUG AudioSegment.converter:", getattr(AudioSegment, "converter", None))
-print("DEBUG AudioSegment.ffprobe:", getattr(AudioSegment, "ffprobe", None))
-print("DEBUG PATH starts with:", os.environ["PATH"].split(os.pathsep)[0])
+def _configure_ffmpeg_binaries():
+    """Resolve ffmpeg/ffprobe from env, PATH, or Render apt packages."""
+    global FFMPEG_EXECUTABLE, FFPROBE_EXECUTABLE
+
+    env_ffmpeg = (os.getenv("FFMPEG_PATH") or "").strip()
+    env_ffprobe = (os.getenv("FFPROBE_PATH") or "").strip()
+
+    ffmpeg_candidates = [env_ffmpeg, which("ffmpeg"), "/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+    ffprobe_candidates = [env_ffprobe, which("ffprobe"), "/usr/bin/ffprobe", "/usr/local/bin/ffprobe"]
+
+    ffmpeg_bin = next((c for c in ffmpeg_candidates if _command_is_executable(c)), None)
+    ffprobe_bin = next((c for c in ffprobe_candidates if _command_is_executable(c)), None)
+
+    print("ffmpeg:", ffmpeg_bin, flush=True)
+    print("ffprobe:", ffprobe_bin, flush=True)
+
+    if ffmpeg_bin:
+        AudioSegment.converter = ffmpeg_bin or which("ffmpeg")
+        ffmpeg_dir = os.path.dirname(ffmpeg_bin)
+        if ffmpeg_dir:
+            os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+    else:
+        print("WARNING: ffmpeg not found on PATH or FFMPEG_PATH", flush=True)
+
+    if ffprobe_bin:
+        AudioSegment.ffprobe = ffprobe_bin or which("ffprobe")
+        ffprobe_dir = os.path.dirname(ffprobe_bin)
+        if ffprobe_dir and ffprobe_dir not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = ffprobe_dir + os.pathsep + os.environ.get("PATH", "")
+    else:
+        print("WARNING: ffprobe not found on PATH or FFPROBE_PATH", flush=True)
+
+    FFMPEG_EXECUTABLE = ffmpeg_bin
+    FFPROBE_EXECUTABLE = ffprobe_bin
+    return ffmpeg_bin, ffprobe_bin
+
+
+_configure_ffmpeg_binaries()
 
 
 app.secret_key = app.config["SECRET_KEY"]
@@ -3822,10 +3853,23 @@ def chars_to_words(text: str, ch_starts: list, ch_ends: list):
 
     return words
 
-def eleven_tts_with_timestamps(text: str, voice_id: str, model_id: str = "eleven_multilingual_v2"):
+def _decode_base64_to_file(b64_string, output_path):
+    """Decode base64 MP3 to disk in chunks to avoid a second full-RAM copy."""
+    chunk_chars = 4 * 1024 * 1024
+    with open(output_path, "wb") as output_file:
+        for offset in range(0, len(b64_string), chunk_chars):
+            output_file.write(base64.b64decode(b64_string[offset : offset + chunk_chars]))
+
+
+def eleven_tts_with_timestamps(
+    text: str,
+    voice_id: str,
+    model_id: str = "eleven_multilingual_v2",
+    output_path=None,
+):
     """
-    Returns: (audio_bytes, word_timings_for_this_segment)
-    word timings are relative to segment start (0.0)
+    Returns: (audio_bytes_or_none, word_timings_for_this_segment)
+    When output_path is set, audio is written to disk and None is returned for bytes.
     """
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/with-timestamps"
     headers = {
@@ -3843,25 +3887,39 @@ def eleven_tts_with_timestamps(text: str, voice_id: str, model_id: str = "eleven
     if not r.ok:
         raise RuntimeError(f"ElevenLabs error {r.status_code}: {r.text[:300]}")
 
-    data = r.json()
+    try:
+        data = r.json()
+    finally:
+        r.close()
     audio_b64 = data.get("audio_base64")
     if not audio_b64:
         raise RuntimeError("Missing audio_base64 in ElevenLabs response.")
 
-    audio_bytes = base64.b64decode(audio_b64)
-
     alignment = data.get("alignment") or {}
     ch_starts = alignment.get("character_start_times_seconds") or []
     ch_ends = alignment.get("character_end_times_seconds") or []
-
-    # Convert char timings to words using the exact same text we sent
     words = chars_to_words(text, ch_starts, ch_ends)
+    del data, alignment, ch_starts, ch_ends
 
+    if output_path:
+        _decode_base64_to_file(audio_b64, output_path)
+        del audio_b64
+        gc.collect()
+        return None, words
+
+    audio_bytes = base64.b64decode(audio_b64)
+    del audio_b64
+    gc.collect()
     return audio_bytes, words
 
 @app.get("/api/health")
 def health():
-    return jsonify(status="ok")
+    return jsonify(
+        status="ok",
+        ffmpeg=FFMPEG_EXECUTABLE,
+        ffprobe=FFPROBE_EXECUTABLE,
+        ffmpeg_ready=_audio_ffmpeg_ready(),
+    )
 
 
 def _json_safe_voice_labels(labels: dict) -> dict:
@@ -7255,18 +7313,50 @@ def _audio_memory_log(stage, **details):
     print("Audio memory:", " ".join(parts), flush=True)
 
 
+def _audio_ffmpeg_ready():
+    return bool(FFMPEG_EXECUTABLE and FFPROBE_EXECUTABLE)
+
+
 def _resolve_ffmpeg_executable():
+    if FFMPEG_EXECUTABLE and os.path.isfile(FFMPEG_EXECUTABLE):
+        return FFMPEG_EXECUTABLE
     configured = (getattr(AudioSegment, "converter", None) or os.getenv("FFMPEG_PATH") or "").strip()
     if configured and os.path.isfile(configured):
         return configured
-    return which("ffmpeg") or "ffmpeg"
+    discovered = which("ffmpeg")
+    if discovered:
+        return discovered
+    raise RuntimeError("ffmpeg not installed/configured")
 
 
 def _resolve_ffprobe_executable():
+    if FFPROBE_EXECUTABLE and os.path.isfile(FFPROBE_EXECUTABLE):
+        return FFPROBE_EXECUTABLE
     configured = (getattr(AudioSegment, "ffprobe", None) or os.getenv("FFPROBE_PATH") or "").strip()
     if configured and os.path.isfile(configured):
         return configured
-    return which("ffprobe") or "ffprobe"
+    discovered = which("ffprobe")
+    if discovered:
+        return discovered
+    raise RuntimeError("ffprobe not installed/configured")
+
+
+def _estimate_mp3_duration_seconds(path, bitrate_kbps=128):
+    try:
+        size_bytes = os.path.getsize(path)
+    except OSError:
+        return 0.0
+    if size_bytes <= 0:
+        return 0.0
+    return max(0.0, (size_bytes * 8) / (bitrate_kbps * 1000))
+
+
+def _probe_mp3_duration_seconds(path):
+    try:
+        return _ffprobe_duration_seconds(path)
+    except Exception as probe_error:
+        print(f"WARN ffprobe duration fallback: {probe_error}", flush=True)
+        return _estimate_mp3_duration_seconds(path)
 
 
 def _ffprobe_duration_seconds(path):
@@ -7334,27 +7424,45 @@ def _ffmpeg_concat_mp3_files(segment_paths, output_path):
         for segment_path in segment_paths:
             list_file.write(f"file '{_escape(os.path.abspath(segment_path))}'\n")
 
-    cmd = [
-        ffmpeg,
-        "-y",
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        list_path,
-        "-c:a",
-        "libmp3lame",
-        "-b:a",
-        "128k",
-        "-ar",
-        "44100",
-        "-ac",
-        "1",
-        output_path,
-    ]
+    def _run_concat(extra_args):
+        return subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                list_path,
+                *extra_args,
+                output_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+
     _audio_memory_log("ffmpeg_concat_start", segment_count=len(segment_paths))
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    result = _run_concat(["-c", "copy"])
+    if result.returncode != 0:
+        print(
+            "WARN ffmpeg concat copy failed, re-encoding:",
+            (result.stderr or result.stdout or "").strip()[:200],
+            flush=True,
+        )
+        result = _run_concat(
+            [
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "128k",
+                "-ar",
+                "44100",
+                "-ac",
+                "1",
+            ]
+        )
     try:
         os.remove(list_path)
     except OSError:
@@ -7371,6 +7479,9 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
     Disk-streamed synthesis: one segment file at a time, ffmpeg concat at the end.
     Avoids holding every TTS/music clip in RAM (prevents Render worker SIGKILL/OOM).
     """
+    if not _audio_ffmpeg_ready():
+        return False, "ffmpeg not installed/configured"
+
     music_index = 0
     script = (script or "").strip()
     if not script:
@@ -7428,10 +7539,7 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
                         music=selected_music,
                         segment_count=len(segment_paths),
                     )
-                    try:
-                        timeline_offset += _ffprobe_duration_seconds(music_path)
-                    except Exception as duration_error:
-                        print(f"WARN music duration probe failed: {duration_error}")
+                    timeline_offset += _probe_mp3_duration_seconds(music_path)
                     gc.collect()
                     continue
 
@@ -7453,10 +7561,11 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
                     chars=len(tts_text),
                 )
                 try:
-                    audio_bytes, segment_words = eleven_tts_with_timestamps(
+                    _, segment_words = eleven_tts_with_timestamps(
                         text=tts_text,
                         voice_id=voice_id,
                         model_id="eleven_multilingual_v2",
+                        output_path=segment_path,
                     )
                 except Exception as exc:
                     return False, str(exc)
@@ -7464,12 +7573,8 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
                 _audio_memory_log(
                     "tts_request_done",
                     index=index,
-                    bytes=len(audio_bytes or b""),
+                    bytes=os.path.getsize(segment_path),
                 )
-
-                with open(segment_path, "wb") as segment_file:
-                    segment_file.write(audio_bytes)
-                del audio_bytes
                 gc.collect()
 
                 segment_paths.append(segment_path)
@@ -7479,10 +7584,7 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
                         float(w.get("end") or 0.0) for w in segment_words
                     )
                 else:
-                    try:
-                        segment_duration = _ffprobe_duration_seconds(segment_path)
-                    except Exception as duration_error:
-                        print(f"WARN speech duration probe failed: {duration_error}")
+                    segment_duration = _probe_mp3_duration_seconds(segment_path)
 
                 for w in segment_words:
                     word_timeline.append(
@@ -7562,13 +7664,20 @@ def api_audio():
 
         ok, result = synthesize_audio_from_script(script, podcast_id)
         if not ok:
+            error_message = (
+                result if isinstance(result, str) else "Audio generation failed."
+            )
+            is_ffmpeg = error_message == "ffmpeg not installed/configured"
             return _apply_cors_headers(
                 _api_json_response(
                     {
-                        "error": result if isinstance(result, str) else "Audio generation failed.",
-                        "code": "audio_generation_failed",
+                        "ok": False,
+                        "error": error_message,
+                        "code": "ffmpeg_not_configured"
+                        if is_ffmpeg
+                        else "audio_generation_failed",
                     },
-                    status=400,
+                    status=503 if is_ffmpeg else 400,
                 )
             )
 
