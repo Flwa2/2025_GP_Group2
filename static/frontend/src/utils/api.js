@@ -1,3 +1,6 @@
+import { onAuthStateChanged } from "firebase/auth";
+import { auth } from "../firebaseClient";
+
 const DEFAULT_DEV_API_BASE_URL = "http://localhost:5000";
 const DEFAULT_PROD_API_BASE_URL = "https://wecast.onrender.com";
 
@@ -89,16 +92,68 @@ async function bootstrapAuthTokenFromSession() {
         const data = contentType.includes("application/json")
           ? await res.json()
           : {};
-        if (!res.ok || !data?.token) return "";
+        if (!res.ok || !data?.token) return bootstrapAuthTokenFromFirebase();
         return storeAuthToken(data.token);
       })
-      .catch(() => "")
+      .catch(() => bootstrapAuthTokenFromFirebase())
       .finally(() => {
         authTokenBootstrapPromise = null;
       });
   }
 
   return authTokenBootstrapPromise;
+}
+
+async function bootstrapAuthTokenFromFirebase() {
+  try {
+    const firebaseUser = await getFirebaseUserForAuthBootstrap();
+    if (!firebaseUser?.getIdToken) return "";
+
+    const idToken = await firebaseUser.getIdToken(true);
+    if (!idToken) return "";
+
+    const res = await fetch(`${API_BASE}/api/firebase-email-login`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idToken }),
+    });
+    const contentType = res.headers.get("content-type") || "";
+    const data = contentType.includes("application/json")
+      ? await res.json()
+      : {};
+    if (!res.ok || !data?.token) return "";
+    return storeAuthToken(data.token);
+  } catch {
+    return "";
+  }
+}
+
+function getFirebaseUserForAuthBootstrap() {
+  if (auth?.currentUser) return Promise.resolve(auth.currentUser);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (user) => {
+      if (settled) return;
+      settled = true;
+      resolve(user || null);
+    };
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      (user) => {
+        unsubscribe();
+        finish(user);
+      },
+      () => {
+        unsubscribe();
+        finish(null);
+      }
+    );
+    window.setTimeout(() => {
+      unsubscribe();
+      finish(auth?.currentUser || null);
+    }, 1500);
+  });
 }
 
 /** Merge Authorization Bearer + any extra headers (skip Content-Type for FormData). */
@@ -130,12 +185,22 @@ export async function apiFetch(path, options = {}) {
   const isFormData =
     typeof FormData !== "undefined" && body instanceof FormData;
   const headers = await getAuthHeadersForRequest(optionHeaders || {});
+  const token = String(headers.Authorization || "").replace(/^Bearer\s+/i, "");
+  const url = `${API_BASE}${path}`;
 
   if (isFormData) {
     delete headers["Content-Type"];
   }
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  if (import.meta.env.DEV && typeof console !== "undefined") {
+    console.log("[apiFetch auth]", {
+      url,
+      hasToken: Boolean(token),
+      tokenPreview: token ? token.slice(0, 12) : null,
+    });
+  }
+
+  const res = await fetch(url, {
     credentials: "include",
     ...rest,
     body,

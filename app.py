@@ -5022,6 +5022,20 @@ def api_finalize_post(podcast_id):
 @app.post("/api/podcasts/<podcast_id>/cover/generate")
 def api_cover_generate(podcast_id):
     _log_api_auth_context("cover_generate", podcast_id=podcast_id)
+    identity = get_current_user_identity()
+    print(
+        "cover_generate_auth_debug",
+        {
+            "has_cookie": bool(request.cookies),
+            "has_authorization": bool(request.headers.get("Authorization")),
+            "session_keys": list(session.keys()),
+            "identity": {
+                "email": _mask_email(identity.get("email") or ""),
+                "firebaseUidPresent": bool(identity.get("firebaseUid")),
+            },
+        },
+        flush=True,
+    )
     user_id, err = _require_login_user(podcast_id)
     if err:
         return err
