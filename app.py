@@ -4638,6 +4638,8 @@ def _log_api_auth_context(route_name: str, podcast_id: str = "", failure_reason:
     print(
         "API auth",
         f"route={route_name}",
+        f"method={request.method}",
+        f"route_hit=yes",
         f"origin={origin or '<none>'}",
         f"cookie_present={'yes' if cookie_names else 'no'}",
         f"cookies={cookie_names}",
@@ -4652,6 +4654,26 @@ def _log_api_auth_context(route_name: str, podcast_id: str = "", failure_reason:
         f"owner_id={owner_id[:48] if owner_id else '<none>'}",
         f"episode_owner={str(episode_owner)[:48] if episode_owner else '<none>'}",
         f"failure={failure_reason or '<none>'}",
+        flush=True,
+    )
+
+
+def _log_request_json_context(route_name: str):
+    payload = request.get_json(silent=True) or {}
+    safe_payload = {}
+    for key, value in payload.items():
+        if key.lower() in {"token", "authorization", "password", "secret"}:
+            safe_payload[key] = "<redacted>"
+        elif isinstance(value, str):
+            safe_payload[key] = value[:200]
+        else:
+            safe_payload[key] = value
+
+    print(
+        "API request body",
+        f"route={route_name}",
+        f"method={request.method}",
+        f"body={safe_payload}",
         flush=True,
     )
 
@@ -4903,9 +4925,7 @@ def _persist_cover_to_storage_and_doc(podcast_id: str, cover_b64: str, mime_type
 
     return cover_url, storage_path, thumb_b64, persist_error
 
-@app.get("/api/podcasts/<podcast_id>/finalize")
-def api_finalize_get(podcast_id):
-    _log_api_auth_context("finalize_get", podcast_id=podcast_id)
+def _finalize_payload_for_podcast(podcast_id):
     user_id, err = _require_login_user(podcast_id)
     if err:
         return err
@@ -4938,6 +4958,19 @@ def api_finalize_get(podcast_id):
         coverGenerationLimit=cover_limit_state.get("limit", COVER_GENERATION_MAX_PER_PODCAST),
         coverGenerationRemaining=cover_limit_state.get("remaining", 0),
     )
+
+
+@app.get("/api/podcasts/<podcast_id>/finalize")
+def api_finalize_get(podcast_id):
+    _log_api_auth_context("finalize_get", podcast_id=podcast_id)
+    return _finalize_payload_for_podcast(podcast_id)
+
+
+@app.post("/api/podcasts/<podcast_id>/finalize")
+def api_finalize_post(podcast_id):
+    _log_api_auth_context("finalize_post", podcast_id=podcast_id)
+    _log_request_json_context("finalize_post")
+    return _finalize_payload_for_podcast(podcast_id)
 
 @app.post("/api/podcasts/<podcast_id>/cover/generate")
 def api_cover_generate(podcast_id):

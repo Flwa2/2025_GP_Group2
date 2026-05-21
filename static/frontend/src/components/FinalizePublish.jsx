@@ -76,7 +76,11 @@ export default function FinalizePublish() {
   async function loadFinalize() {
     setLoading(true);
     try {
-      const data = await apiFetch(`/api/podcasts/${podcastId}/finalize`);
+      const data = await apiFetch(`/api/podcasts/${podcastId}/finalize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "load_finalize" }),
+      });
       setTitle(data.title || "");
       setSavedTitle(data.title || "");
 
