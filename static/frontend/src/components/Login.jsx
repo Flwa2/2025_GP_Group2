@@ -23,6 +23,12 @@ import {
   signInWithEmailAndPassword,
   signOut,
 } from "firebase/auth";
+import {
+  formatFirebaseAuthError,
+  logFirebaseAuthAttempt,
+  maskEmail,
+  userMessageForFirebaseAuthError,
+} from "../utils/firebaseAuthDebug";
 
 const REMEMBERED_LOGIN_KEY = "rememberedLoginIdentifier";
 const GENERIC_LOGIN_FAILURE_MESSAGE = "Email or password is incorrect.";
@@ -71,14 +77,13 @@ function mapLoginError(error) {
   if (code === "email_not_verified") {
     return "Please verify your email first before logging in.";
   }
+  if (code.startsWith("auth/")) {
+    return userMessageForFirebaseAuthError(error);
+  }
   if (
     code === "wrong_password" ||
     code === "account_not_found" ||
-    code === "provider_mismatch" ||
-    code === "auth/wrong-password" ||
-    code === "auth/user-not-found" ||
-    code === "auth/invalid-credential" ||
-    code === "auth/invalid-login-credentials"
+    code === "provider_mismatch"
   ) {
     return GENERIC_LOGIN_FAILURE_MESSAGE;
   }
@@ -340,10 +345,17 @@ export default function Login() {
       const resolvedEmail = normalizeEmail(
         resolvedIdentifier.email || normalizedIdentifier
       );
-      console.debug("[WeCast auth] login strategy resolved", {
+      logFirebaseAuthAttempt("login strategy resolved", {
         loginStrategy,
-        resolvedEmail,
+        resolvedEmail: maskEmail(resolvedEmail),
         usingEmail,
+        hasPasswordProvider: resolvedIdentifier.hasPasswordProvider,
+        hasPasswordHash: resolvedIdentifier.hasPasswordHash,
+        emailVerified: resolvedIdentifier.emailVerified,
+        backendRoute:
+          loginStrategy === "legacy_password"
+            ? "/api/login"
+            : "/api/firebase-email-login",
       });
       const firebaseEmail =
         loginStrategy === "legacy_password" ? "" : resolvedEmail;
@@ -355,6 +367,11 @@ export default function Login() {
       if (firebaseEmail) {
         try {
           ensureFirebaseClientReady();
+          logFirebaseAuthAttempt("Firebase signInWithEmailAndPassword", {
+            email: maskEmail(firebaseEmail),
+            authDomain: auth?.app?.options?.authDomain || "",
+            projectId: auth?.app?.options?.projectId || "",
+          });
           const credential = await signInWithEmailAndPassword(
             auth,
             firebaseEmail,
@@ -376,7 +393,9 @@ export default function Login() {
           setPendingVerificationEmail("");
 
           const idToken = await firebaseUser.getIdToken(true);
-          console.debug("[WeCast auth] Firebase sign-in succeeded, exchanging session");
+          logFirebaseAuthAttempt("Firebase sign-in succeeded, exchanging session", {
+            email: maskEmail(firebaseEmail),
+          });
           const firebaseRes = await fetch(`${API_BASE}/api/firebase-email-login`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -405,13 +424,22 @@ export default function Login() {
             throw apiError;
           }
 
-          console.debug("[WeCast auth] backend session created via firebase-email-login");
+          logFirebaseAuthAttempt("backend session created via firebase-email-login", {
+            ok: true,
+          });
           storeAuthenticatedSession(firebaseData, normalizedIdentifier);
           redirectAfterAuth();
           return;
         } catch (firebaseError) {
+          const firebaseInfo = formatFirebaseAuthError(firebaseError);
+          logFirebaseAuthAttempt("Firebase sign-in failed", firebaseInfo);
+          if (loginStrategy === "firebase_email") {
+            const message = userMessageForFirebaseAuthError(firebaseError);
+            const err = new Error(message);
+            err.code = firebaseInfo.code || "auth/invalid-credential";
+            throw err;
+          }
           const code = firebaseError?.code || "";
-          console.debug("[WeCast auth] Firebase sign-in failed", { code });
           const shouldFallback =
             code === "auth/user-not-found" ||
             code === "auth/invalid-credential" ||
@@ -425,8 +453,8 @@ export default function Login() {
         }
       }
 
-      console.debug("[WeCast auth] attempting legacy /api/login", {
-        backendIdentifier,
+      logFirebaseAuthAttempt("attempting legacy /api/login", {
+        backendIdentifier: maskEmail(backendIdentifier),
       });
       const res = await fetch(`${API_BASE}/api/login`, {
         method: "POST",
@@ -476,14 +504,15 @@ export default function Login() {
 
       sessionStorage.removeItem("wecast:pendingVerificationEmail");
       setPendingVerificationEmail("");
-      console.debug("[WeCast auth] backend session created via /api/login");
+      logFirebaseAuthAttempt("backend session created via /api/login", { ok: true });
       storeAuthenticatedSession(data, normalizedIdentifier);
       redirectAfterAuth();
     } catch (err) {
       console.error("LOGIN NETWORK ERROR:", err);
-      console.debug("[WeCast auth] login failed", {
+      logFirebaseAuthAttempt("login failed", {
         code: err?.code || "",
         message: err?.message || "",
+        firebaseDetail: err?.code?.startsWith?.("auth/") ? formatFirebaseAuthError(err) : undefined,
       });
       showErrorMessage(mapLoginError(err));
     } finally {

@@ -9,9 +9,15 @@ import {
 } from "lucide-react";
 import {
   applyActionCode,
+  confirmPasswordReset,
   signOut,
   verifyPasswordResetCode,
 } from "firebase/auth";
+import {
+  formatFirebaseAuthError,
+  logFirebaseAuthAttempt,
+  maskEmail,
+} from "../utils/firebaseAuthDebug";
 import { useTranslation } from "react-i18next";
 import { auth } from "../firebaseClient";
 import { API_BASE } from "../utils/api";
@@ -464,25 +470,33 @@ export default function EmailAction() {
     try {
       let resolvedEmail = details?.email || "";
       if (isFirebaseResetMode) {
-        console.debug("[WeCast auth] password reset submit", {
-          mode: "firebase_oob",
+        logFirebaseAuthAttempt("password reset submit (firebase client confirm)", {
           hasOobCode: Boolean(oobCode),
+          authDomain: auth?.app?.options?.authDomain || "",
+          projectId: auth?.app?.options?.projectId || "",
         });
-        const res = await fetch(`${API_BASE}/api/password-reset/firebase-confirm`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({
-            oobCode,
-            newPassword,
-            confirmPassword,
-          }),
-        });
-        const data = await res.json().catch(() => ({}));
-
-        if (!res.ok) {
+        const resetEmail = String(details?.email || "")
+          .trim()
+          .toLowerCase();
+        if (!resetEmail) {
           throw new Error(
-            data?.error ||
+            t(
+              "emailAction.reset.updateFailed",
+              "We couldn't read the account email from this reset link. Open the link again from your email."
+            )
+          );
+        }
+        try {
+          await confirmPasswordReset(auth, oobCode, newPassword);
+          resolvedEmail = resetEmail;
+          logFirebaseAuthAttempt("password reset client confirm success", {
+            email: maskEmail(resolvedEmail),
+          });
+        } catch (confirmError) {
+          const info = formatFirebaseAuthError(confirmError);
+          logFirebaseAuthAttempt("password reset client confirm failed", info);
+          throw new Error(
+            info.message ||
               t(
                 "emailAction.reset.updateFailed",
                 "We couldn't update your password from this link."
@@ -490,10 +504,34 @@ export default function EmailAction() {
           );
         }
 
-        resolvedEmail = data?.email || resolvedEmail;
-        console.debug("[WeCast auth] password reset success", {
-          mode: "firebase_oob",
-          email: resolvedEmail,
+        const syncRes = await fetch(`${API_BASE}/api/password-reset/firebase-sync`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            email: resolvedEmail || details?.email || "",
+          }),
+        });
+        const syncData = await syncRes.json().catch(() => ({}));
+        if (!syncRes.ok) {
+          logFirebaseAuthAttempt("password reset backend sync failed", {
+            status: syncRes.status,
+            error: syncData?.error || syncData?.message,
+          });
+          throw new Error(
+            syncData?.error ||
+              t(
+                "emailAction.reset.updateFailed",
+                "Password was updated in Firebase, but account sync failed. Try signing in with the new password."
+              )
+          );
+        }
+
+        resolvedEmail = syncData?.email || resolvedEmail;
+        logFirebaseAuthAttempt("password reset complete", {
+          email: maskEmail(resolvedEmail),
+          firebaseVerified: syncData?.firebaseVerified,
+          sessionsRevoked: syncData?.sessionsRevoked,
         });
         await signOut(auth).catch(() => {});
         clearStoredAuth();

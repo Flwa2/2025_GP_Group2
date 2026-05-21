@@ -1506,10 +1506,30 @@ def _firebase_web_api_key():
     return ""
 
 
+def _identity_toolkit_error_body(response):
+    try:
+        return response.json()
+    except Exception:
+        return {"raw": (getattr(response, "text", None) or "")[:500]}
+
+
+def _log_identity_toolkit_error(context, response):
+    body = _identity_toolkit_error_body(response)
+    err_msg = ((body.get("error") or {}).get("message") or "").strip()
+    print(
+        f"Identity Toolkit {context}:",
+        f"status={getattr(response, 'status_code', '?')}",
+        f"message={err_msg or 'unknown'}",
+        flush=True,
+    )
+    return err_msg
+
+
 def _verify_firebase_email_password(email, password):
     """True if Identity Toolkit accepts this email/password (Firebase Auth source of truth)."""
     api_key = _firebase_web_api_key()
     if not api_key:
+        _log_auth_login_step("firebase_password_verify_skipped", reason="missing_api_key")
         return False
     normalized = _normalize_email(email)
     if not normalized or password is None or password == "":
@@ -1532,7 +1552,10 @@ def _verify_firebase_email_password(email, password):
     except Exception as exc:
         print(f"Firebase password verify request failed: {exc}")
         return False
-    return bool(response.ok)
+    if not response.ok:
+        _log_identity_toolkit_error("signInWithPassword", response)
+        return False
+    return True
 
 
 def _password_reset_continue_url():
@@ -5597,13 +5620,13 @@ def api_firebase_password_reset_confirm():
         return jsonify(error="We couldn't update your password from this link."), 502
 
     if not response.ok:
+        toolkit_message = _log_identity_toolkit_error("resetPassword", response)
         error_message, status_code = _firebase_reset_password_error(response)
-        print(
-            "Firebase password reset confirm failed:",
-            f"status={response.status_code}",
-            flush=True,
+        _log_password_reset_step(
+            "firebase_confirm_failed",
+            status=response.status_code,
+            toolkitMessage=toolkit_message or "",
         )
-        _log_password_reset_step("firebase_confirm_failed", status=response.status_code)
         return jsonify(error=error_message), status_code
 
     try:
@@ -5663,6 +5686,74 @@ def api_firebase_password_reset_confirm():
     return jsonify(
         ok=True,
         email=resolved_email,
+        confirmationSent=confirmation_sent,
+        sessionsRevoked=tokens_revoked,
+    )
+
+
+@app.post("/api/password-reset/firebase-sync")
+def api_firebase_password_reset_sync():
+    """Sync Firestore after client-side confirmPasswordReset (oob already consumed)."""
+    from firebase_admin import auth as fb_auth
+    from services.email_service import send_password_changed_email
+
+    data = request.get_json(silent=True) or {}
+    resolved_email = _normalize_email(data.get("email") or "")
+    if not is_reasonably_valid_email(resolved_email):
+        return jsonify(error="Valid email is required after password reset."), 400
+
+    _log_password_reset_step("firebase_sync_start", email=resolved_email)
+
+    firebase_state = _firebase_account_state_for_email(resolved_email)
+    if not firebase_state:
+        _log_password_reset_step("firebase_sync_user_not_found", email=resolved_email)
+        return jsonify(error="No Firebase account found for this email."), 404
+    if not firebase_state.get("hasPasswordProvider"):
+        _log_password_reset_step("firebase_sync_no_password_provider", email=resolved_email)
+        return jsonify(
+            error="This account cannot sign in with email/password in Firebase."
+        ), 400
+
+    doc = get_user_doc_by_candidates(resolved_email, email=resolved_email)
+    if doc and doc.exists:
+        doc.reference.set(
+            {
+                "password_hash": firestore.DELETE_FIELD,
+                "authProvider": "password",
+                "failed_attempts": 0,
+                "lock_until": None,
+                "pendingPasswordReset": firestore.DELETE_FIELD,
+                "last_password_reset_completed": datetime.utcnow().isoformat(),
+            },
+            merge=True,
+        )
+    _log_password_reset_step("firebase_sync_firestore_updated", has_doc=bool(doc and doc.exists))
+
+    tokens_revoked = False
+    try:
+        firebase_user = fb_auth.get_user_by_email(resolved_email)
+        fb_auth.revoke_refresh_tokens(firebase_user.uid)
+        tokens_revoked = True
+    except Exception as revoke_error:
+        print(f"Password reset sync session revocation skipped: errorType={type(revoke_error).__name__}")
+
+    confirmation_sent = False
+    try:
+        result = send_password_changed_email(resolved_email)
+        confirmation_sent = bool(result.get("ok"))
+    except Exception as email_error:
+        print(f"Password changed confirmation email failed: {type(email_error).__name__}")
+
+    _log_password_reset_step(
+        "firebase_sync_complete",
+        email=resolved_email,
+        sessionsRevoked=tokens_revoked,
+    )
+
+    return jsonify(
+        ok=True,
+        email=resolved_email,
+        firebaseVerified=True,
         confirmationSent=confirmation_sent,
         sessionsRevoked=tokens_revoked,
     )
@@ -7694,13 +7785,27 @@ def api_auth_resolve_identifier():
                 400,
             )
         email_resolution = resolve_login_strategy_for_email(normalized_email)
+        firebase_state = email_resolution.get("firebaseState") or {}
+        user_data = email_resolution.get("userData") or {}
+        login_strategy = email_resolution.get("loginStrategy") or "firebase_email"
+        _log_auth_login_step(
+            "resolve_identifier",
+            email=normalized_email,
+            loginStrategy=login_strategy,
+            hasPasswordProvider=bool(firebase_state.get("hasPasswordProvider")),
+            hasPasswordHash=bool(user_data.get("password_hash")),
+            emailVerified=bool(firebase_state.get("emailVerified")),
+        )
         return jsonify(
             {
                 "identifierType": "email",
                 "normalizedIdentifier": normalized_email,
                 "email": normalized_email,
-                "loginStrategy": email_resolution.get("loginStrategy") or "firebase_email",
+                "loginStrategy": login_strategy,
                 "authProvider": email_resolution.get("authProvider") or "password",
+                "hasPasswordProvider": bool(firebase_state.get("hasPasswordProvider")),
+                "hasPasswordHash": bool(user_data.get("password_hash")),
+                "emailVerified": bool(firebase_state.get("emailVerified")),
             }
         )
 
