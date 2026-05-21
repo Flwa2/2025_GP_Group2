@@ -270,6 +270,21 @@ def add_cors_headers(response):
     return response
 
 
+@app.errorhandler(500)
+def handle_internal_server_error(error):
+    if request.path.startswith("/api/"):
+        print("API 500 error:", error, flush=True)
+        traceback.print_exc()
+        return _api_json_response(
+            {
+                "error": "Internal server error.",
+                "code": "server_error",
+            },
+            status=500,
+        )
+    raise error
+
+
 # Server-side sessions (JWT is primary; cookies are supplementary for /api/me)
 from services.email_config import is_production as _email_is_production
 
@@ -650,12 +665,30 @@ class AuthFlowError(RuntimeError):
 
 def auth_error_response(code, message, status=400, **extra):
     payload = {
+        "ok": False,
         "code": code,
         "message": message,
         "error": message,
     }
     payload.update(extra)
     return jsonify(payload), status
+
+
+def _api_json_response(payload, status=200):
+    """Always return a JSON object with ok flag for /api auth routes."""
+    body = dict(payload or {})
+    if "ok" not in body:
+        body["ok"] = status < 400 and not body.get("error")
+    response = jsonify(body)
+    response.status_code = status
+    return response
+
+
+def _encode_app_jwt_token(user_email, firebase_uid=""):
+    raw_token = create_token(user_email, user_email, firebase_uid=firebase_uid)
+    if isinstance(raw_token, bytes):
+        return raw_token.decode("utf-8")
+    return str(raw_token or "").strip()
 
 
 def _clean_username(value):
@@ -8410,43 +8443,103 @@ def social_login():
 def firebase_email_login():
     from firebase_admin import auth as fb_auth
 
-    data = request.get_json(silent=True) or {}
-    id_token = (data.get("idToken") or "").strip()
-
-    if not id_token:
-        return jsonify(error="Missing Firebase ID token"), 400
-
-    if not _looks_like_firebase_jwt(id_token):
-        _log_auth_login_step(
-            "firebase_email_login_rejected",
-            reason="malformed_id_token",
-            tokenLength=len(id_token),
-            tokenSegments=len(id_token.split(".")),
-            origin=(request.headers.get("Origin") or "").strip(),
-            userAgent=(request.headers.get("User-Agent") or "")[:80],
-        )
-        return jsonify(
-            error=(
-                "Invalid Firebase ID token format. The client must send a JWT "
-                "from user.getIdToken(), not a placeholder string."
-            ),
-            code="malformed_id_token",
-        ), 400
-
-    _log_auth_login_step(
-        "firebase_email_login_entered",
-        tokenLength=len(id_token),
-        origin=(request.headers.get("Origin") or "").strip(),
-    )
-
     try:
-        decoded = fb_auth.verify_id_token(id_token)
+        data = request.get_json(silent=True) or {}
+        id_token = (data.get("idToken") or "").strip()
+
+        if not id_token:
+            return _api_json_response(
+                {
+                    "error": "Missing Firebase ID token.",
+                    "code": "missing_id_token",
+                },
+                status=400,
+            )
+
+        if not _looks_like_firebase_jwt(id_token):
+            _log_auth_login_step(
+                "firebase_email_login_rejected",
+                reason="malformed_id_token",
+                tokenLength=len(id_token),
+                tokenSegments=len(id_token.split(".")),
+                origin=(request.headers.get("Origin") or "").strip(),
+            )
+            return _api_json_response(
+                {
+                    "error": (
+                        "Invalid Firebase ID token format. The client must send a JWT "
+                        "from user.getIdToken(), not a placeholder string."
+                    ),
+                    "code": "malformed_id_token",
+                },
+                status=400,
+            )
+
+        _log_auth_login_step(
+            "firebase_email_login_entered",
+            tokenLength=len(id_token),
+            origin=(request.headers.get("Origin") or "").strip(),
+        )
+
+        try:
+            decoded = fb_auth.verify_id_token(id_token)
+        except fb_auth.InvalidIdTokenError:
+            _log_auth_login_step("firebase_email_login_rejected", reason="invalid_id_token")
+            return _api_json_response(
+                {
+                    "error": "Invalid or expired login token.",
+                    "code": "invalid_token",
+                },
+                status=401,
+            )
+        except fb_auth.ExpiredIdTokenError:
+            _log_auth_login_step("firebase_email_login_rejected", reason="expired_id_token")
+            return _api_json_response(
+                {
+                    "error": "Invalid or expired login token.",
+                    "code": "expired_token",
+                },
+                status=401,
+            )
+        except fb_auth.RevokedIdTokenError:
+            _log_auth_login_step("firebase_email_login_rejected", reason="revoked_id_token")
+            return _api_json_response(
+                {
+                    "error": "Invalid or expired login token.",
+                    "code": "revoked_token",
+                },
+                status=401,
+            )
+        except Exception as verify_error:
+            print("Firebase email login verify_id_token failed:", verify_error, flush=True)
+            traceback.print_exc()
+            _log_auth_login_step(
+                "firebase_email_login_rejected",
+                reason="verify_id_token_failed",
+                errorType=type(verify_error).__name__,
+            )
+            return _api_json_response(
+                {
+                    "error": "Invalid or expired login token.",
+                    "code": "invalid_token",
+                },
+                status=401,
+            )
+
         email = (decoded.get("email") or "").strip().lower()
         name = (data.get("name") or decoded.get("name") or "").strip()
         email_verified = bool(decoded.get("email_verified"))
+        firebase_uid = (decoded.get("uid") or "").strip()
+        sign_in_provider = decoded.get("firebase", {}).get("sign_in_provider", "password")
 
         if not email:
-            return jsonify(error="Unable to read email from Firebase token"), 400
+            return _api_json_response(
+                {
+                    "error": "Unable to read email from Firebase token.",
+                    "code": "missing_email",
+                },
+                status=400,
+            )
 
         if not email_verified:
             return auth_error_response(
@@ -8458,61 +8551,123 @@ def firebase_email_login():
                 pendingVerification=True,
             )
 
-        sign_in_provider = decoded.get("firebase", {}).get("sign_in_provider", "password")
-        final_data = _upsert_firebase_user_profile(
+        existing_doc = get_user_doc_by_candidates(
+            email,
+            firebase_uid=firebase_uid,
             email=email,
-            display_name=name,
-            auth_provider="password",
-            email_verified=email_verified,
-            firebase_uid=decoded.get("uid") or "",
-            mark_login=True,
         )
+        if existing_doc and existing_doc.exists:
+            existing_data = existing_doc.to_dict() or {}
+            if _is_user_account_deleted(existing_data):
+                _log_auth_login_step(
+                    "firebase_email_login_rejected",
+                    reason="account_deleted",
+                    email=email,
+                )
+                return _api_json_response(
+                    {
+                        "error": "This account has been deleted.",
+                        "code": "account_deleted",
+                    },
+                    status=403,
+                )
 
-        firebase_uid = (decoded.get("uid") or "").strip()
-        token = create_token(email, email, firebase_uid=firebase_uid)
+        try:
+            final_data = _upsert_firebase_user_profile(
+                email=email,
+                display_name=name,
+                auth_provider="password",
+                email_verified=email_verified,
+                firebase_uid=firebase_uid,
+                mark_login=True,
+            )
+        except AuthFlowError as auth_error:
+            _log_auth_login_step(
+                "firebase_email_login_rejected",
+                reason=auth_error.code,
+            )
+            return auth_error_response(
+                auth_error.code,
+                auth_error.message,
+                auth_error.status,
+                **auth_error.extra,
+            )
+        except Exception as profile_error:
+            print("Firebase email login profile upsert failed:", profile_error, flush=True)
+            traceback.print_exc()
+            _log_auth_login_step(
+                "firebase_email_login_failed",
+                reason="profile_upsert_failed",
+                errorType=type(profile_error).__name__,
+            )
+            return _api_json_response(
+                {
+                    "error": "Could not load your account profile. Please try again.",
+                    "code": "profile_sync_failed",
+                },
+                status=500,
+            )
+
+        try:
+            app_token = _encode_app_jwt_token(email, firebase_uid=firebase_uid)
+        except Exception as token_error:
+            print("Firebase email login JWT creation failed:", token_error, flush=True)
+            traceback.print_exc()
+            return _api_json_response(
+                {
+                    "error": "Could not create an application session token.",
+                    "code": "session_token_failed",
+                },
+                status=500,
+            )
+
+        if not app_token:
+            return _api_json_response(
+                {
+                    "error": "Could not create an application session token.",
+                    "code": "session_token_failed",
+                },
+                status=500,
+            )
+
         session["user_id"] = email
         session["firebase_uid"] = firebase_uid
         session.modified = True
 
-        user_payload = _session_user_payload(final_data, email)
+        user_payload = _json_safe_firestore_value(_session_user_payload(final_data, email))
         user_payload["authProvider"] = "password"
+
         _log_auth_login_step(
             "firebase_email_login_success",
             email=email,
             email_verified=email_verified,
             authProvider=user_payload.get("authProvider"),
             signInProvider=sign_in_provider,
-            tokenPresent=bool(token),
+            tokenPresent=bool(app_token),
         )
 
-        return jsonify(
-            message="Login successful",
-            token=token,
-            user=user_payload,
-        )
-    except AuthFlowError as auth_error:
-        _log_auth_login_step(
-            "firebase_email_login_rejected",
-            reason=auth_error.code,
-        )
-        return auth_error_response(
-            auth_error.code,
-            auth_error.message,
-            auth_error.status,
-            **auth_error.extra,
+        return _api_json_response(
+            {
+                "message": "Login successful",
+                "token": app_token,
+                "user": user_payload,
+            },
+            status=200,
         )
     except Exception as e:
-        print("Firebase email login error:", e)
+        print("Firebase email login unhandled error:", e, flush=True)
+        traceback.print_exc()
         _log_auth_login_step(
             "firebase_email_login_failed",
             errorType=type(e).__name__,
         )
-        return jsonify(
-            error=(
-                "We couldn't verify your Firebase sign-in. Make sure the backend "
-                "Firebase service account matches the frontend Firebase project."
-            )
-        ), 401
+        return _api_json_response(
+            {
+                "error": "Login failed due to a server error. Please try again.",
+                "code": "server_error",
+            },
+            status=500,
+        )
 
 
 def _podcast_share_url(podcast_id):

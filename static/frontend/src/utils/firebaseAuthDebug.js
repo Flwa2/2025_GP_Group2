@@ -40,6 +40,30 @@ export function isPlausibleFirebaseIdToken(token) {
   return parts.every((part) => part.length > 0);
 }
 
+export async function readApiJsonResponse(response) {
+  const contentType = String(response?.headers?.get?.("content-type") || "").toLowerCase();
+  const rawText = await response.text();
+  let data = {};
+  if (rawText) {
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      data = {};
+    }
+  }
+  return {
+    data,
+    rawText,
+    contentType,
+    parsed: rawText ? Object.keys(data).length > 0 : false,
+  };
+}
+
+export function hasValidLoginSessionPayload(data) {
+  const payload = data || {};
+  return Boolean(payload.token && payload.user);
+}
+
 export function describeFirebaseIdToken(token) {
   const value = String(token || "").trim();
   const parts = value.split(".");

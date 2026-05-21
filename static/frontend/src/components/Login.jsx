@@ -26,9 +26,11 @@ import {
 import {
   describeFirebaseIdToken,
   formatFirebaseAuthError,
+  hasValidLoginSessionPayload,
   isPlausibleFirebaseIdToken,
   logFirebaseAuthAttempt,
   maskEmail,
+  readApiJsonResponse,
   userMessageForFirebaseAuthError,
 } from "../utils/firebaseAuthDebug";
 
@@ -433,25 +435,31 @@ export default function Login() {
             body: JSON.stringify({ idToken: firebaseIdToken }),
           });
 
-          let firebaseData = {};
-          try {
-            firebaseData = await firebaseRes.json();
-          } catch {
-            firebaseData = {};
-          }
+          const {
+            data: firebaseData,
+            rawText: firebaseRawText,
+            contentType: responseContentType,
+            parsed: responseParsed,
+          } = await readApiJsonResponse(firebaseRes);
 
-          const responseContentType = String(
-            firebaseRes.headers.get("content-type") || ""
-          ).toLowerCase();
+          logFirebaseAuthAttempt("firebase-email-login response", {
+            status: firebaseRes.status,
+            contentType: responseContentType,
+            parsed: responseParsed,
+            ok: firebaseData?.ok,
+            hasToken: Boolean(firebaseData?.token),
+            hasUser: Boolean(firebaseData?.user),
+            code: firebaseData?.code,
+            error: firebaseData?.error || firebaseData?.message,
+            bodyPreview: firebaseRawText ? firebaseRawText.slice(0, 180) : "<empty>",
+          });
 
           if (!firebaseRes.ok) {
-            logFirebaseAuthAttempt("firebase-email-login failed", {
-              status: firebaseRes.status,
-              contentType: responseContentType,
-              error: firebaseData?.error || firebaseData?.message,
-              code: firebaseData?.code,
-            });
-            const apiError = buildApiError(firebaseData, "Login failed.");
+            const apiError = buildApiError(
+              firebaseData,
+              firebaseData?.error ||
+                `Login failed (server ${firebaseRes.status}).`
+            );
             if (apiError.code === "email_not_verified") {
               await signOut(auth).catch(() => {});
               setVerificationPendingState(
@@ -464,18 +472,14 @@ export default function Login() {
             throw apiError;
           }
 
-          if (!firebaseData?.token || !firebaseData?.user) {
-            logFirebaseAuthAttempt("firebase-email-login invalid payload", {
-              status: firebaseRes.status,
-              contentType: responseContentType,
-              hasToken: Boolean(firebaseData?.token),
-              hasUser: Boolean(firebaseData?.user),
-              keys: Object.keys(firebaseData || {}),
-            });
+          if (!responseParsed || !hasValidLoginSessionPayload(firebaseData)) {
+            const looksLikeHtml = (firebaseRawText || "").trim().startsWith("<");
             throw new Error(
               firebaseData?.error ||
                 firebaseData?.message ||
-                "Server returned an empty email login response. Check Render logs for firebase_email_login."
+                (looksLikeHtml
+                  ? `Backend returned HTML instead of JSON. Confirm API_BASE is https://wecast.onrender.com (got request to ${API_BASE}).`
+                  : "Server returned an empty or invalid login response. Check Render logs for firebase_email_login.")
             );
           }
 
