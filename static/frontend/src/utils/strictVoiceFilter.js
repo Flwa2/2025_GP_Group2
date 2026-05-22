@@ -11,6 +11,7 @@ import {
   strictAccentDecision,
   strictLanguageDecision,
   voiceDebugLabel,
+  voiceMatchesLanguageForAvailability,
 } from "./strictVoiceMetadata";
 
 const voiceSearchHaystack = (voice) => {
@@ -53,10 +54,13 @@ export const strictVoiceMatchesLanguageAccent = (voice, { language = "", accent 
   const selectedGender = normalizeGenderToken(gender);
 
   const langDecision = strictLanguageDecision(voice, selectedLanguage);
-  if (!langDecision.pass) {
+  const langOk =
+    langDecision.pass ||
+    (selectedLanguage && voiceMatchesLanguageForAvailability(voice, selectedLanguage));
+  if (!langOk) {
     return {
       pass: false,
-      reason: langDecision.reason,
+      reason: langDecision.reason || "language-mismatch",
       normalizedLanguage: langDecision.normalizedLanguages,
       normalizedAccent: detectStructuredVoiceAccents(voice, selectedLanguage),
       selectedLanguage,

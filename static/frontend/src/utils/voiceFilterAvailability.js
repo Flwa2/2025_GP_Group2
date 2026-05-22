@@ -1,8 +1,22 @@
 import { normalizeLanguageFilterValue } from "../components/voiceFilterLanguage";
-import { ARABIC_ACCENT_ALIASES, ENGLISH_ACCENT_ALIASES, normalizeAccentToken } from "./voiceAccentConstants";
+import {
+  ARABIC_ACCENT_ALIASES,
+  ARABIC_GENERAL_DISPLAY,
+  ENGLISH_ACCENT_ALIASES,
+  normalizeAccentToken,
+} from "./voiceAccentConstants";
 import { normalizeGenderToken } from "./voiceGender";
-import { strictAccentDecision, strictLanguageDecision } from "./strictVoiceMetadata";
+import {
+  sampleVoiceLanguageAccentMetadata,
+  strictAccentDecision,
+  strictLanguageDecision,
+  voiceDebugLabel,
+  voiceMatchesLanguageForAvailability,
+} from "./strictVoiceMetadata";
 import { strictVoiceMatchesLanguageAccent, shouldLogStrictVoiceFilter } from "./strictVoiceFilter";
+
+/** Bump when accent availability logic changes (visible in [ARABIC ACCENT OPTIONS] logs). */
+export const VOICE_FILTER_BUILD_TAG = "arabic-accent-v3-5ab0bfe+";
 
 const uniqueSortedDisplay = (displays) =>
   Array.from(new Set(displays.map((x) => String(x).trim()).filter(Boolean))).sort((a, b) =>
@@ -14,7 +28,11 @@ const ACCENT_ALIASES_BY_LANGUAGE = {
   en: ENGLISH_ACCENT_ALIASES,
 };
 
-let accentAvailabilityCache = { catalogKey: "", map: null };
+const ARABIC_DIALECT_DISPLAYS = ARABIC_ACCENT_ALIASES.filter((a) => a.token !== "neutral").map(
+  (a) => a.display
+);
+
+let accentAvailabilityCache = { catalogKey: "", map: null, arabicVoiceCount: 0 };
 
 const catalogCacheKey = (voices) => {
   const list = voices || [];
@@ -26,11 +44,22 @@ const catalogCacheKey = (voices) => {
 
 /** Invalidate when voice catalog is replaced (e.g. after fetch). */
 export const invalidateAccentAvailabilityCache = () => {
-  accentAvailabilityCache = { catalogKey: "", map: null };
+  accentAvailabilityCache = { catalogKey: "", map: null, arabicVoiceCount: 0 };
+};
+
+export const countVoicesMatchingLanguageForAvailability = (voices, language) => {
+  const lang = normalizeLanguageFilterValue(language);
+  if (!lang) return 0;
+  let count = 0;
+  for (const voice of voices || []) {
+    if (voiceMatchesLanguageForAvailability(voice, lang)) count += 1;
+  }
+  return count;
 };
 
 /**
- * One pass per catalog: count voices per language+accent (gender excluded — accent list is not gender-scoped).
+ * One pass per catalog: count voices per language+accent (gender excluded).
+ * Uses relaxed language match so Arabic labels without BCP-47 still count.
  */
 export const getAccentAvailabilityMap = (voices) => {
   const key = catalogCacheKey(voices);
@@ -39,11 +68,12 @@ export const getAccentAvailabilityMap = (voices) => {
   }
 
   const map = new Map();
+  let arabicVoiceCount = 0;
 
   for (const voice of voices || []) {
     for (const lang of Object.keys(ACCENT_ALIASES_BY_LANGUAGE)) {
-      const langDecision = strictLanguageDecision(voice, lang);
-      if (!langDecision.pass) continue;
+      if (!voiceMatchesLanguageForAvailability(voice, lang)) continue;
+      if (lang === "ar") arabicVoiceCount += 1;
 
       for (const alias of ACCENT_ALIASES_BY_LANGUAGE[lang]) {
         if (alias.token === "neutral") continue;
@@ -55,8 +85,21 @@ export const getAccentAvailabilityMap = (voices) => {
     }
   }
 
-  accentAvailabilityCache = { catalogKey: key, map };
+  accentAvailabilityCache = { catalogKey: key, map, arabicVoiceCount };
   return map;
+};
+
+export const getCachedArabicVoiceCount = (voices) => {
+  getAccentAvailabilityMap(voices);
+  return accentAvailabilityCache.arabicVoiceCount || 0;
+};
+
+const buildArabicAccentOptions = (voices) => {
+  const arabicVoiceCount = countVoicesMatchingLanguageForAvailability(voices, "ar");
+  if (!arabicVoiceCount) return [];
+
+  // Catalog has Arabic voices → always offer dialect labels + Arabic General (filtering uses safe fallbacks per accent).
+  return uniqueSortedDisplay([...ARABIC_DIALECT_DISPLAYS, ARABIC_GENERAL_DISPLAY]);
 };
 
 export const buildAvailableAccentOptionsForLanguage = (
@@ -65,6 +108,11 @@ export const buildAvailableAccentOptionsForLanguage = (
   defaultLanguage = "en"
 ) => {
   const normalizedLanguage = normalizeLanguageFilterValue(language || defaultLanguage);
+
+  if (normalizedLanguage === "ar") {
+    return buildArabicAccentOptions(voices);
+  }
+
   const aliases = ACCENT_ALIASES_BY_LANGUAGE[normalizedLanguage] || [];
   if (!aliases.length) return [];
 
@@ -78,6 +126,45 @@ export const buildAvailableAccentOptionsForLanguage = (
   }
 
   return uniqueSortedDisplay(displays);
+};
+
+/**
+ * Temporary production debug — logs when Arabic filter modal opens.
+ */
+export const logArabicAccentOptionsDebug = ({
+  context = "",
+  voices = [],
+  computedAccentOptions = [],
+  stateAccentOptionsByLanguage = {},
+  catalogSource = "",
+} = {}) => {
+  if (typeof console === "undefined" || typeof console.info !== "function") return;
+
+  const totalVoices = (voices || []).length;
+  const arabicVoicesCount = countVoicesMatchingLanguageForAvailability(voices, "ar");
+  const strictArabicCount = (voices || []).filter((v) => strictLanguageDecision(v, "ar").pass).length;
+  const arabicSamples = (voices || [])
+    .filter((v) => voiceMatchesLanguageForAvailability(v, "ar"))
+    .slice(0, 8)
+    .map(sampleVoiceLanguageAccentMetadata);
+
+  const availability = getAccentAvailabilityMap(voices);
+  const dialectCounts = Object.fromEntries(
+    ARABIC_DIALECT_DISPLAYS.map((display) => [display, availability.get(`ar|${display}`) || 0])
+  );
+
+  console.info("[ARABIC ACCENT OPTIONS]", {
+    buildTag: VOICE_FILTER_BUILD_TAG,
+    context,
+    catalogSource,
+    totalVoices,
+    arabicVoicesCount,
+    strictArabicLanguagePassCount: strictArabicCount,
+    computedArabicAccentOptions: computedAccentOptions,
+    stateAccentOptionsAr: stateAccentOptionsByLanguage?.ar || [],
+    dialectVoiceCounts: dialectCounts,
+    sampleArabicVoiceMetadata: arabicSamples,
+  });
 };
 
 /** True when only language + accent + gender are active (no tone/pitch/age/category/search). */
@@ -95,7 +182,8 @@ export const getAccentMatchTierFromReason = (reason = "") => {
   if (
     r.endsWith("-accent-phrase-fallback") ||
     r.endsWith("-generic-fallback") ||
-    r.endsWith("-language-pool-fallback")
+    r.endsWith("-language-pool-fallback") ||
+    r.endsWith("-general-language-pool-fallback")
   ) {
     return "fallback";
   }

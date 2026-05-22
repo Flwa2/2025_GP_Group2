@@ -35,7 +35,11 @@ import {
   hasActiveModalVoiceFilters,
 } from "../utils/voiceFilterModal";
 import { getStrictFilteredVoicePool } from "../utils/strictVoicePool";
-import { invalidateAccentAvailabilityCache } from "../utils/voiceFilterAvailability";
+import {
+  buildAvailableAccentOptionsForLanguage,
+  invalidateAccentAvailabilityCache,
+  logArabicAccentOptionsDebug,
+} from "../utils/voiceFilterAvailability";
 import {
   appliedFiltersFromModalDone,
   appliedVoiceFiltersForSpeakerGender,
@@ -624,10 +628,9 @@ export default function EditPodcast() {
   const [voices, setVoices] = useState([]);
   const accentOptionsByLanguage = useMemo(() => {
     if (!voices.length) return { ar: [], en: [] };
-    return {
-      ar: buildAccentOptionsForLanguage(voices, "ar", DEFAULT_VOICE_LANGUAGE),
-      en: buildAccentOptionsForLanguage(voices, "en", DEFAULT_VOICE_LANGUAGE),
-    };
+    const ar = buildAccentOptionsForLanguage(voices, "ar", DEFAULT_VOICE_LANGUAGE);
+    const en = buildAccentOptionsForLanguage(voices, "en", DEFAULT_VOICE_LANGUAGE);
+    return { ar, en };
   }, [voices]);
   const [loadingVoices, setLoadingVoices] = useState(true);
   const [speakerVoiceFilters, setSpeakerVoiceFilters] = useState({});
@@ -2487,7 +2490,20 @@ const exportScript = async (format = "pdf") => {
           speakers[idx]
         );
         const languageStrictPool = getStrictFilteredVoicePool(voices, langOnlyApplied);
-        const accentOptions = accentOptionsByLanguage[selectedLanguage] || [];
+        const accentOptions =
+          selectedLanguage === "ar"
+            ? buildAccentOptionsForLanguage(voices, "ar", DEFAULT_VOICE_LANGUAGE)
+            : accentOptionsByLanguage[selectedLanguage] || [];
+
+        if (selectedLanguage === "ar") {
+          logArabicAccentOptionsDebug({
+            context: "Edit/activeFilterModal",
+            voices,
+            computedAccentOptions: accentOptions,
+            stateAccentOptionsAr: accentOptionsByLanguage.ar,
+            catalogSource: "editVoices",
+          });
+        }
         const ageOptions = collectVoiceAgeOptions([
           ...VOICE_AGE_BUCKETS.map((age) => ({ age })),
           ...languageStrictPool,
@@ -2522,6 +2538,8 @@ const exportScript = async (format = "pdf") => {
               }));
             }}
             accentOptions={accentOptions}
+            catalogVoices={voices}
+            accentOptionsSource={`Edit/speaker-${idx}`}
             ageOptions={ageOptions}
             categoryOptions={categoryOptions}
             isRTL={isRTL}

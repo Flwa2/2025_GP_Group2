@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import Modal from "./Modal";
 import VoiceFilterSelect from "./VoiceFilterSelect";
@@ -27,6 +27,8 @@ export default function VoiceFiltersModal({
   onDone,
   preview = null,
   previewSlot = null,
+  catalogVoices = [],
+  accentOptionsSource = "",
   normalizeCategoryLabelKey = (value) =>
     String(value || "")
       .trim()
@@ -73,6 +75,17 @@ const translateCategory = (value) =>
   const rawSelectedLanguage = filters?.language || DEFAULT_VOICE_LANGUAGE;
   const selectedLanguage = normalizeLanguageFilterValue(rawSelectedLanguage);
   const visibleAccentOptions = accentOptions;
+
+  useEffect(() => {
+    if (!open || selectedLanguage !== "ar") return;
+    logArabicAccentOptionsDebug({
+      context: `VoiceFiltersModal/${accentOptionsSource || "unknown"}`,
+      voices: catalogVoices,
+      computedAccentOptions: accentOptions,
+      catalogSource: accentOptionsSource,
+    });
+  }, [open, selectedLanguage, accentOptions, catalogVoices, accentOptionsSource]);
+
   const languageOptions = uniqueLanguageOptions();
   const toneOptions = TONE_FILTER_VALUES;
   const pitchOptions = PITCH_VALUES;

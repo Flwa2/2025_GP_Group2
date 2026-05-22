@@ -64,7 +64,11 @@ import {
 } from "../utils/createDraftSession";
 import { normalizeGenderToken, isNeutralGenderValue } from "../utils/voiceGender";
 import { getStrictFilteredVoicePool } from "../utils/strictVoicePool";
-import { invalidateAccentAvailabilityCache } from "../utils/voiceFilterAvailability";
+import {
+    buildAvailableAccentOptionsForLanguage,
+    invalidateAccentAvailabilityCache,
+    logArabicAccentOptionsDebug,
+} from "../utils/voiceFilterAvailability";
 import {
     appliedFiltersFromModalDone,
     buildAppliedVoiceFiltersForSpeaker,
@@ -2404,12 +2408,18 @@ const exportScript = async (format = "pdf") => {
                                                                         : [];
                                                                     const stableOptionVoices = languageStrictPool;
                                                                     const accentOptions =
-                                                                        voiceAccentOptionsByLanguage[selectedLanguage] ||
-                                                                        buildAccentOptionsForLanguage(
-                                                                            catalogForModal,
-                                                                            selectedLanguage,
-                                                                            DEFAULT_VOICE_LANGUAGE
-                                                                        );
+                                                                        selectedLanguage === "ar"
+                                                                            ? buildAccentOptionsForLanguage(
+                                                                                  catalogForModal,
+                                                                                  "ar",
+                                                                                  DEFAULT_VOICE_LANGUAGE
+                                                                              )
+                                                                            : voiceAccentOptionsByLanguage[selectedLanguage] ||
+                                                                              buildAccentOptionsForLanguage(
+                                                                                  catalogForModal,
+                                                                                  selectedLanguage,
+                                                                                  DEFAULT_VOICE_LANGUAGE
+                                                                              );
                                                                     const categoryOptions = roleCategoryOptionsForVoices(stableOptionVoices);
                                                                     const ageOptions = collectVoiceAgeOptions([
                                                                         ...VOICE_AGE_BUCKETS.map((age) => ({ age })),
@@ -2430,6 +2440,25 @@ const exportScript = async (format = "pdf") => {
                                                                         if (!a.gender) {
                                                                             modalPatch.gender = speakerGenderTok || "__all__";
                                                                         }
+                                                                        const catalogForFilters =
+                                                                            getCachedVoiceCatalog() || librarySeedVoices;
+                                                                        const arAccentOptions = buildAvailableAccentOptionsForLanguage(
+                                                                            catalogForFilters,
+                                                                            "ar"
+                                                                        );
+                                                                        logArabicAccentOptionsDebug({
+                                                                            context: "Create/openFilter",
+                                                                            voices: catalogForFilters,
+                                                                            computedAccentOptions: arAccentOptions,
+                                                                            stateAccentOptionsByLanguage: voiceAccentOptionsByLanguage,
+                                                                            catalogSource: getCachedVoiceCatalog()?.length
+                                                                                ? "cachedCatalog"
+                                                                                : "librarySeedVoices",
+                                                                        });
+                                                                        setVoiceAccentOptionsByLanguage((prev) => ({
+                                                                            ...prev,
+                                                                            ar: arAccentOptions,
+                                                                        }));
                                                                         setSpeakerVoiceFilters((prev) => ({
                                                                             ...prev,
                                                                             [i]: {
@@ -2456,6 +2485,8 @@ const exportScript = async (format = "pdf") => {
                                                                             filters={f}
                                                                             onFiltersChange={(next) => setF(next)}
                                                                             accentOptions={accentOptions}
+                                                                            catalogVoices={catalogForModal}
+                                                                            accentOptionsSource={`Create/speaker-${i}`}
                                                                             ageOptions={ageOptions}
                                                                             categoryOptions={categoryOptions}
                                                                             isRTL={isRTL}

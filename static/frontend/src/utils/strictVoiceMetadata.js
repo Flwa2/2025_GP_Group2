@@ -709,6 +709,40 @@ const canUseEnglishLanguagePoolFallback = (voice, accentToken) => {
 };
 
 const proveArabicAccent = (voice, accentToken) => {
+  if (accentToken === "arabic-general") {
+    const allLocales = collectStructuredLocales(voice);
+    if (!voiceMatchesLanguageForAvailability(voice, "ar")) {
+      return {
+        pass: false,
+        reason: "not-arabic-for-general",
+        normalizedAccents: [],
+        locales: allLocales,
+      };
+    }
+    if (hasBlockedStructuredPhrase(voice)) {
+      return {
+        pass: false,
+        reason: "blocked-structured-phrase",
+        normalizedAccents: [],
+        locales: allLocales,
+      };
+    }
+    if (hasConflictingLocalesForLanguage(voice, "ar")) {
+      return {
+        pass: false,
+        reason: "conflicting-non-arabic-locale",
+        normalizedAccents: [],
+        locales: allLocales,
+      };
+    }
+    return {
+      pass: true,
+      reason: "arabic-general-language-pool-fallback",
+      normalizedAccents: ["arabic-general"],
+      locales: collectStructuredArabicLocaleTags(voice),
+    };
+  }
+
   const requiredLocales = ARABIC_ACCENT_REQUIRED_LOCALES[accentToken];
   if (!requiredLocales) {
     return { pass: false, reason: "unsupported-arabic-accent", normalizedAccents: [], locales: [] };
@@ -867,3 +901,33 @@ export const strictAccentDecision = (voice, selectedLanguage, selectedAccent) =>
 
 export const voiceDebugLabel = (voice) =>
   voice?.name || voice?.displayName || voice?.providerVoiceId || voice?.voiceId || voice?.id || "unknown voice";
+
+/** Relaxed Arabic/English check for accent dropdown availability (catalog labels without BCP-47). */
+export const voiceMatchesLanguageForAvailability = (voice, selectedLanguage) => {
+  const selected = normalizeLanguageFilterValue(selectedLanguage);
+  if (!selected) return true;
+
+  const strict = strictLanguageDecision(voice, selected);
+  if (strict.pass) return true;
+
+  if (hasBlockedStructuredPhrase(voice)) return false;
+  if (hasConflictingLocalesForLanguage(voice, selected)) return false;
+
+  const { codes } = detectStructuredVoiceLanguages(voice);
+  if (codes.includes(selected) && isExclusiveLanguage(codes, selected)) return true;
+
+  for (const value of collectStructuredFieldValues(voice)) {
+    if (normalizeLanguageFilterValue(value) === selected) return true;
+  }
+
+  return false;
+};
+
+export const sampleVoiceLanguageAccentMetadata = (voice) => ({
+  name: voiceDebugLabel(voice),
+  language: voice?.language || voice?.labels?.language || "",
+  languages: voice?.languages || [],
+  locale: voice?.locale || voice?.labels?.locale || "",
+  accent: voice?.accent || voice?.labels?.accent || "",
+  languageAccents: voice?.languageAccents || voice?.languageAccentPairs || [],
+});

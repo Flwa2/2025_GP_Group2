@@ -167,7 +167,11 @@ export const CANONICAL_ACCENT_LOOKUP = {
   spain: "spanish",
   "latin american spanish": "spanish",
   castilian: "spanish",
+  "arabic general": "arabic-general",
 };
+
+export const ARABIC_GENERAL_DISPLAY = "Arabic General";
+export const ARABIC_GENERAL_TOKEN = "arabic-general";
 
 const stripArabicAccentLabelPrefix = (display) =>
   String(display || "")
@@ -207,4 +211,7 @@ export const normalizeAccentToken = (value) => {
 };
 
 export const ENGLISH_ACCENT_TOKENS = new Set(ENGLISH_ACCENT_ALIASES.map((alias) => alias.token));
-export const ARABIC_DIALECT_ACCENT_TOKENS = new Set(ARABIC_ACCENT_ALIASES.map((alias) => alias.token));
+export const ARABIC_DIALECT_ACCENT_TOKENS = new Set([
+  ...ARABIC_ACCENT_ALIASES.map((alias) => alias.token),
+  ARABIC_GENERAL_TOKEN,
+]);
