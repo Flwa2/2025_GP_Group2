@@ -48,16 +48,16 @@ services:
         value: "0"
       - key: AUDIO_SKIP_GPT_CHAPTERS
         value: "1"
-      - key: RENDER_AUDIO_MAX_WORDS
-        value: "400"
-      - key: RENDER_AUDIO_MAX_SPEAKERS
-        value: "2"
-      - key: RENDER_AUDIO_MAX_SEGMENTS
-        value: "25"
-      - key: RENDER_AUDIO_MAX_TTS_CHARS
-        value: "1500"
-      - key: RENDER_AUDIO_MAX_DURATION_SEC
-        value: "300"
+      - key: WECAST_AUDIO_MAX_WORDS
+        value: "1200"
+      - key: WECAST_AUDIO_MAX_SPEAKERS
+        value: "3"
+      - key: WECAST_AUDIO_MAX_SEGMENTS
+        value: "50"
+      - key: WECAST_AUDIO_MAX_TTS_CHARS
+        value: "5000"
+      - key: WECAST_AUDIO_MAX_DURATION
+        value: "600"
       - key: WECAST_AUDIO_TTS_FORMAT
         value: mp3_44100_64
   - type: static

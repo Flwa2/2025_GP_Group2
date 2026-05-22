@@ -195,6 +195,7 @@ export default function Login() {
     }
 
     if (data.token) {
+      localStorage.setItem("token", data.token);
       storeAuthToken(data.token);
     }
 

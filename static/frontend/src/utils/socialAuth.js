@@ -19,6 +19,7 @@ function storeAuthSession({ token, user, remember = true }) {
   const userStorage = remember ? localStorage : sessionStorage;
   const otherUserStorage = remember ? sessionStorage : localStorage;
 
+  localStorage.setItem("token", token);
   storeAuthToken(token);
 
   const serializedUser = JSON.stringify(user);

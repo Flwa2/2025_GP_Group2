@@ -13,11 +13,16 @@ import {
   PencilLine,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import {
-  apiFetch,
-  ensureAuthTokenForApi,
-  getStoredAuthToken,
-} from "../utils/api";
+import { apiFetch, getStoredAuthToken } from "../utils/api";
+
+function coverPayloadHasImage(data) {
+  if (!data || data.ok === false) return false;
+  const b64 = String(data.coverArtBase64 || "").trim();
+  const url = String(data.coverUrl || "").trim();
+  if (b64.length > 100) return true;
+  if (url.startsWith("http://") || url.startsWith("https://")) return true;
+  return false;
+}
 
 function Notice({ notice, noticeType }) {
   if (!notice) return null;
@@ -68,19 +73,28 @@ export default function FinalizePublish() {
   const [coverGenerationLimit, setCoverGenerationLimit] = useState(2);
 
   const hasUnsavedTitle = title.trim() !== savedTitle.trim();
-  const hasCover = !!coverB64;
+  const hasCover =
+    coverPayloadHasImage({
+      coverArtBase64: coverB64,
+      coverUrl: coverMeta?.coverUrl,
+    }) || false;
   const coverGenerationLimitReached =
     coverGenerationLimit > 0 && coverGenerationCount >= coverGenerationLimit;
 
   const coverSrc = useMemo(() => {
-    if (!coverB64) return null;
-    return `data:${coverMime};base64,${coverB64}`;
-  }, [coverB64, coverMime]);
+    if (coverB64) {
+      return `data:${coverMime};base64,${coverB64}`;
+    }
+    const url = String(coverMeta?.coverUrl || "").trim();
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      return url;
+    }
+    return null;
+  }, [coverB64, coverMime, coverMeta]);
 
   async function loadFinalize() {
     setLoading(true);
     try {
-      await ensureAuthTokenForApi();
       const data = await apiFetch(`/api/podcasts/${podcastId}/finalize`, {
         method: "GET",
       });
@@ -103,14 +117,7 @@ export default function FinalizePublish() {
 
   useEffect(() => {
     if (!podcastId) return;
-    (async () => {
-      try {
-        await ensureAuthTokenForApi();
-      } catch {
-        // loadFinalize surfaces auth errors
-      }
-      loadFinalize();
-    })();
+    loadFinalize();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [podcastId]);
 
@@ -155,26 +162,34 @@ export default function FinalizePublish() {
     setBusy(true);
     setBusyText(hasCover ? "Regenerating cover art..." : "Generating cover art...");
     try {
-      const token = await ensureAuthTokenForApi(true);
-      if (!token) {
+      if (!getStoredAuthToken()) {
         setNotice("Please log in again to generate cover art.");
         setNoticeType("error");
         return;
       }
-      if (!getStoredAuthToken()) {
-        setNotice("Session token missing. Please log in again.");
-        setNoticeType("error");
-        return;
-      }
+
       const resp = await apiFetch(`/api/podcasts/${podcastId}/cover/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: title.trim() }),
       });
 
-      setCoverB64(resp.coverArtBase64);
-      setCoverMime("image/png");
-      setCoverMeta({ source: "AI generated" });
+      if (!coverPayloadHasImage(resp)) {
+        setNotice(
+          resp?.error ||
+            "Cover art was not generated. Please try again or upload an image."
+        );
+        setNoticeType("error");
+        return;
+      }
+
+      setCoverB64(resp.coverArtBase64 || null);
+      setCoverMime(resp.mimeType || resp.coverArtMeta?.mimeType || "image/png");
+      setCoverMeta({
+        ...(resp.meta || resp.coverArtMeta || {}),
+        source: "AI generated",
+        coverUrl: resp.coverUrl || "",
+      });
       setCoverGenerationCount(Number(resp.coverGenerationCount || coverGenerationCount + 1));
       setCoverGenerationLimit(Number(resp.coverGenerationLimit || coverGenerationLimit));
 
@@ -186,7 +201,11 @@ export default function FinalizePublish() {
         setNoticeType("success");
       }
     } catch (e) {
-      setNotice(e?.message || "Failed to generate cover.");
+      const msg =
+        e?.code === "auth_identity_missing" || e?.status === 401
+          ? "Please log in again."
+          : e?.message || "Failed to generate cover.";
+      setNotice(msg);
       setNoticeType("error");
     } finally {
       setBusy(false);
@@ -222,7 +241,12 @@ export default function FinalizePublish() {
     setBusy(true);
     setBusyText("Uploading cover art...");
     try {
-      await ensureAuthTokenForApi();
+      if (!getStoredAuthToken()) {
+        setNotice("Please log in again to upload cover art.");
+        setNoticeType("error");
+        return;
+      }
+
       const fd = new FormData();
       fd.append("file", file);
 
@@ -231,9 +255,19 @@ export default function FinalizePublish() {
         body: fd,
       });
 
-      setCoverB64(resp.coverArtBase64);
+      if (!coverPayloadHasImage(resp)) {
+        setNotice(resp?.error || "Cover upload did not return image data.");
+        setNoticeType("error");
+        return;
+      }
+
+      setCoverB64(resp.coverArtBase64 || null);
       setCoverMime(resp.mimeType || "image/png");
-      setCoverMeta(resp.meta || { source: "Uploaded" });
+      setCoverMeta({
+        ...(resp.meta || {}),
+        source: "Uploaded",
+        coverUrl: resp.coverUrl || "",
+      });
 
       if (resp.warning) {
         setNotice(resp.warning);
@@ -243,7 +277,11 @@ export default function FinalizePublish() {
         setNoticeType("success");
       }
     } catch (e) {
-      setNotice(e?.message || "Failed to upload cover.");
+      const msg =
+        e?.code === "auth_identity_missing" || e?.status === 401
+          ? "Please log in again."
+          : e?.message || "Failed to upload cover.";
+      setNotice(msg);
       setNoticeType("error");
     } finally {
       setBusy(false);

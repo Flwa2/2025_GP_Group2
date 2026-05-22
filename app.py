@@ -454,7 +454,7 @@ def _decode_request_token():
     try:
         return jwt.decode(token, app.config["SECRET_KEY"], algorithms=["HS256"])
     except Exception as e:
-        print("JWT decode failed:", e)
+        print("JWT decode failed:", e, flush=True)
         return None
 
 
@@ -4673,6 +4673,11 @@ def _log_api_auth_context(route_name: str, podcast_id: str = "", failure_reason:
     """Cross-origin auth diagnostics (Render + wecastsa.com)."""
     auth_header = request.headers.get("Authorization", "")
     token_payload = _jwt_auth_payload()
+    jwt_email = ""
+    if token_payload:
+        jwt_email = _normalize_email(
+            token_payload.get("email") or token_payload.get("user_id") or ""
+        )
     identity = get_current_user_identity()
     origin = (request.headers.get("Origin") or "").strip()
     cookie_names = sorted(request.cookies.keys())
@@ -4703,6 +4708,8 @@ def _log_api_auth_context(route_name: str, podcast_id: str = "", failure_reason:
         f"auth_header={'yes' if auth_header else 'no'}",
         f"bearer={'yes' if auth_header.startswith('Bearer ') else 'no'}",
         f"jwt={'yes' if token_payload else 'no'}",
+        f"jwt_decoded={'yes' if token_payload else 'no'}",
+        f"jwt_email={_mask_email(jwt_email) if jwt_email else '<none>'}",
         f"session_keys={sorted(session.keys())}",
         f"session_user={'yes' if session.get('user_id') else 'no'}",
         f"session_uid={'yes' if session.get('firebase_uid') else 'no'}",
@@ -5110,7 +5117,7 @@ def api_cover_generate(podcast_id):
 
     pdata, err = _assert_podcast_owner(podcast_id, user_id)
     if err:
-        return err
+        return _apply_cors_headers(err[0]), err[1]
 
     payload = request.get_json(silent=True) or {}
     limit_ok, limit_state = _cover_generation_limit_status(pdata)
@@ -5145,16 +5152,48 @@ def api_cover_generate(podcast_id):
     try:
         b64 = _generate_cover_b64(prompt, size="1024x1024")
     except Exception as e:
-        print("Cover generation error:", e)
-        return jsonify(error=f"Failed to generate cover art: {str(e)}"), 500
+        print("Cover generation error:", e, flush=True)
+        traceback.print_exc()
+        return _apply_cors_headers(
+            _api_json_response(
+                {
+                    "ok": False,
+                    "code": "cover_generation_failed",
+                    "error": f"Failed to generate cover art: {str(e)}",
+                },
+                status=500,
+            )
+        )
+
+    if not b64 or len(str(b64).strip()) < 100:
+        return _apply_cors_headers(
+            _api_json_response(
+                {
+                    "ok": False,
+                    "code": "cover_generation_failed",
+                    "error": "Cover image generation returned empty data.",
+                },
+                status=500,
+            )
+        )
 
     try:
         cover_url, storage_path, thumb_b64, persist_error = _persist_cover_to_storage_and_doc(
             podcast_id, b64, "image/png"
         )
     except Exception as e:
-        print("Cover persist error:", e)
-        return jsonify(error="Cover generated but failed to persist."), 500
+        print("Cover persist error:", e, flush=True)
+        traceback.print_exc()
+        return _apply_cors_headers(
+            _api_json_response(
+                {
+                    "ok": False,
+                    "code": "cover_generation_failed",
+                    "error": "Cover generated but failed to save.",
+                },
+                status=500,
+            )
+        )
 
     cover_generation_count = int(limit_state.get("count") or 0) + 1
     cover_generation_limit = int(limit_state.get("limit") or COVER_GENERATION_MAX_PER_PODCAST)
@@ -5191,16 +5230,32 @@ def api_cover_generate(podcast_id):
                 merge=True,
             )
 
-    return jsonify(
-        ok=True,
-        podcastId=podcast_id,
-        coverArtBase64=b64,
-        coverUrl=cover_url,
-        coverThumbB64=thumb_b64,
-        coverGenerationCount=cover_generation_count,
-        coverGenerationLimit=cover_generation_limit,
-        coverGenerationRemaining=max(0, cover_generation_limit - cover_generation_count),
-        warning=("Cover thumbnail saved; storage URL unavailable." if persist_error else ""),
+    return _apply_cors_headers(
+        _api_json_response(
+            {
+                "podcastId": podcast_id,
+                "coverArtBase64": b64,
+                "coverUrl": cover_url,
+                "coverThumbB64": thumb_b64,
+                "coverArtMeta": {
+                    "generatedAt": datetime.utcnow().isoformat(),
+                    "source": "openai",
+                    "mimeType": "image/png",
+                    "storagePath": storage_path,
+                    "coverUrl": cover_url,
+                },
+                "coverGenerationCount": cover_generation_count,
+                "coverGenerationLimit": cover_generation_limit,
+                "coverGenerationRemaining": max(
+                    0, cover_generation_limit - cover_generation_count
+                ),
+                "warning": (
+                    "Cover thumbnail saved; storage URL unavailable."
+                    if persist_error
+                    else ""
+                ),
+            }
+        )
     )
 
 @app.post("/api/podcast/<podcast_id>/update")
@@ -7605,11 +7660,39 @@ AUDIO_TTS_OUTPUT_FORMAT = os.getenv("WECAST_AUDIO_TTS_FORMAT", "mp3_44100_64")
 AUDIO_FFMPEG_BITRATE = "64k"
 AUDIO_FFMPEG_SAMPLE_RATE = "44100"
 AUDIO_FFMPEG_CHANNELS = "1"
-RENDER_AUDIO_MAX_WORDS = int(os.getenv("RENDER_AUDIO_MAX_WORDS", "400"))
-RENDER_AUDIO_MAX_SPEAKERS = int(os.getenv("RENDER_AUDIO_MAX_SPEAKERS", "2"))
-RENDER_AUDIO_MAX_SEGMENTS = int(os.getenv("RENDER_AUDIO_MAX_SEGMENTS", "25"))
-RENDER_AUDIO_MAX_TTS_CHARS = int(os.getenv("RENDER_AUDIO_MAX_TTS_CHARS", "1500"))
-RENDER_AUDIO_MAX_DURATION_SEC = float(os.getenv("RENDER_AUDIO_MAX_DURATION_SEC", "300"))
+
+
+def _audio_env_int(primary_name: str, legacy_name: str, fallback: int) -> int:
+    for name in (primary_name, legacy_name):
+        raw_value = os.getenv(name)
+        if raw_value is None or str(raw_value).strip() == "":
+            continue
+        try:
+            return int(raw_value)
+        except (TypeError, ValueError):
+            print(f"Invalid audio limit env {name}={raw_value!r}; using fallback.", flush=True)
+            continue
+    return fallback
+
+
+def _audio_env_float(primary_name: str, legacy_name: str, fallback: float) -> float:
+    for name in (primary_name, legacy_name):
+        raw_value = os.getenv(name)
+        if raw_value is None or str(raw_value).strip() == "":
+            continue
+        try:
+            return float(raw_value)
+        except (TypeError, ValueError):
+            print(f"Invalid audio limit env {name}={raw_value!r}; using fallback.", flush=True)
+            continue
+    return fallback
+
+
+WECAST_AUDIO_MAX_WORDS = _audio_env_int("WECAST_AUDIO_MAX_WORDS", "RENDER_AUDIO_MAX_WORDS", 400)
+WECAST_AUDIO_MAX_SPEAKERS = _audio_env_int("WECAST_AUDIO_MAX_SPEAKERS", "RENDER_AUDIO_MAX_SPEAKERS", 2)
+WECAST_AUDIO_MAX_SEGMENTS = _audio_env_int("WECAST_AUDIO_MAX_SEGMENTS", "RENDER_AUDIO_MAX_SEGMENTS", 25)
+WECAST_AUDIO_MAX_TTS_CHARS = _audio_env_int("WECAST_AUDIO_MAX_TTS_CHARS", "RENDER_AUDIO_MAX_TTS_CHARS", 1500)
+WECAST_AUDIO_MAX_DURATION_SEC = _audio_env_float("WECAST_AUDIO_MAX_DURATION", "RENDER_AUDIO_MAX_DURATION_SEC", 300)
 AUDIO_SKIP_GPT_CHAPTERS = os.getenv("AUDIO_SKIP_GPT_CHAPTERS", "1").strip().lower() in (
     "1",
     "true",
@@ -7669,10 +7752,10 @@ def _audio_api_json_error(message, code, status=400):
 
 def _validate_render_audio_limits(script: str, segments: list):
     word_count = len(re.findall(r"\S+", script or ""))
-    if word_count > RENDER_AUDIO_MAX_WORDS:
+    if word_count > WECAST_AUDIO_MAX_WORDS:
         return (
             False,
-            f"Script has {word_count} words; maximum allowed is {RENDER_AUDIO_MAX_WORDS} on this server.",
+            f"Script has {word_count} words; maximum allowed is {WECAST_AUDIO_MAX_WORDS} on this server.",
         )
 
     speech_segments = [
@@ -7680,18 +7763,18 @@ def _validate_render_audio_limits(script: str, segments: list):
         for speaker, text in segments
         if (speaker or "").strip().lower() != "__music__" and (text or "").strip()
     ]
-    if len(speech_segments) > RENDER_AUDIO_MAX_SEGMENTS:
+    if len(speech_segments) > WECAST_AUDIO_MAX_SEGMENTS:
         return (
             False,
-            f"Script has {len(speech_segments)} speech segments; maximum allowed is {RENDER_AUDIO_MAX_SEGMENTS}.",
+            f"Script has {len(speech_segments)} speech segments; maximum allowed is {WECAST_AUDIO_MAX_SEGMENTS}.",
         )
 
     speakers = {(speaker or "").strip() for speaker, _text in speech_segments}
     speakers.discard("")
-    if len(speakers) > RENDER_AUDIO_MAX_SPEAKERS:
+    if len(speakers) > WECAST_AUDIO_MAX_SPEAKERS:
         return (
             False,
-            f"Too many speakers ({len(speakers)}); maximum allowed is {RENDER_AUDIO_MAX_SPEAKERS}.",
+            f"Too many speakers ({len(speakers)}); maximum allowed is {WECAST_AUDIO_MAX_SPEAKERS}.",
         )
 
     for speaker, text in speech_segments:
@@ -7699,19 +7782,19 @@ def _validate_render_audio_limits(script: str, segments: list):
             tts_len = len((text or "").strip())
         else:
             tts_len = len(clean_script_for_tts(text or ""))
-        if tts_len > RENDER_AUDIO_MAX_TTS_CHARS:
+        if tts_len > WECAST_AUDIO_MAX_TTS_CHARS:
             return (
                 False,
                 f"Speech block for {speaker or 'speaker'} is too long ({tts_len} chars); "
-                f"maximum per block is {RENDER_AUDIO_MAX_TTS_CHARS}.",
+                f"maximum per block is {WECAST_AUDIO_MAX_TTS_CHARS}.",
             )
 
     estimated_duration_sec = word_count * 0.45
-    if estimated_duration_sec > RENDER_AUDIO_MAX_DURATION_SEC:
+    if estimated_duration_sec > WECAST_AUDIO_MAX_DURATION_SEC:
         return (
             False,
             f"Estimated audio length (~{int(estimated_duration_sec)}s) exceeds the "
-            f"{int(RENDER_AUDIO_MAX_DURATION_SEC)}s limit for this server.",
+            f"{int(WECAST_AUDIO_MAX_DURATION_SEC)}s limit for this server.",
         )
 
     return True, ""
@@ -8153,11 +8236,11 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
 
             output_path = master_path
             measured_duration = _probe_mp3_duration_seconds(output_path)
-            if measured_duration > RENDER_AUDIO_MAX_DURATION_SEC:
+            if measured_duration > WECAST_AUDIO_MAX_DURATION_SEC:
                 return (
                     False,
                     f"Generated audio ({int(measured_duration)}s) exceeds the "
-                    f"{int(RENDER_AUDIO_MAX_DURATION_SEC)}s server limit.",
+                    f"{int(WECAST_AUDIO_MAX_DURATION_SEC)}s server limit.",
                 )
 
             for w in word_timeline:
@@ -8231,10 +8314,10 @@ def api_audio():
             return _audio_api_json_error("Script is empty.", "empty_script", status=400)
 
         word_count = len(re.findall(r"\S+", script))
-        if word_count > RENDER_AUDIO_MAX_WORDS:
+        if word_count > WECAST_AUDIO_MAX_WORDS:
             _audio_stage_log("api_failure", reason="word_limit", word_count=word_count)
             return _audio_api_json_error(
-                f"Script has {word_count} words; maximum allowed is {RENDER_AUDIO_MAX_WORDS} on this server.",
+                f"Script has {word_count} words; maximum allowed is {WECAST_AUDIO_MAX_WORDS} on this server.",
                 "audio_limit_exceeded",
                 status=400,
             )
@@ -9643,6 +9726,7 @@ def firebase_email_login():
 
         return _api_json_response(
             {
+                "ok": True,
                 "message": "Login successful",
                 "token": app_token,
                 "user": user_payload,
