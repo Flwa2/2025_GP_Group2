@@ -4979,21 +4979,23 @@ def _validate_image_file(image_path: str, min_size: int = 512):
 def _build_cover_prompt(title: str, style: str, language: str, description: str, extra: str = ""):
     lang_hint = "Arabic" if language == "ar" else "English"
 
-    # no text on image (title is shown in UI, not baked into art)
+    # The episode title is rendered by the UI, not baked into the image.
     return f"""
-Create a professional podcast cover art image.
+Create a polished square podcast cover artwork.
 
 Context:
-- Episode title: "{title}"
+- Episode title for context only, not for rendering in the image: "{title}"
 - Podcast style: {style or "Conversational"}
 - Language context: {lang_hint}
 
 Design requirements:
 - Square composition (1:1), podcast-platform friendly
-- Modern, clean, high contrast, minimal clutter
-- A single strong focal concept + abstract shapes related to the topic
-- Do NOT include readable text, letters, numbers, logos, or watermarks
-- Avoid photorealistic faces; prefer abstract/illustrative/graphic styles
+- Crisp, premium, editorial artwork with clean edges and clear focal hierarchy
+- A single strong visual concept related to the topic, supported by abstract shapes, symbols, lighting, and color
+- No readable text, no title words, no lettering, no numbers, no fake typography, no signage, no labels, no logos, no watermarks
+- Avoid text-like marks or glyphs that could look like distorted words
+- Avoid photorealistic faces; prefer refined illustration, cinematic abstract art, or high-quality graphic design
+- Keep the center visually strong and leave breathing room around the edges for platform cropping
 
 Topic description:
 {description[:1200]}
@@ -5078,8 +5080,9 @@ def _generate_cover_file(prompt: str, output_path: str, size: str = "1024x1024")
         "model": "gpt-image-1",
         "prompt": prompt,
         "size": size,
-        "quality": "low",
+        "quality": "medium",
         "output_format": "jpeg",
+        "output_compression": 92,
     }
 
     _memory_log("openai_image_request_before", size=size)
@@ -5405,6 +5408,9 @@ def api_cover_generate(podcast_id):
             "generatedAt": datetime.utcnow().isoformat(),
             "source": "openai",
             "mimeType": "image/jpeg",
+            "size": "1024x1024",
+            "quality": "medium",
+            "outputCompression": 92,
             "storagePath": storage_path,
             "coverUrl": cover_url,
             "persistError": persist_error,
@@ -5426,13 +5432,14 @@ def api_cover_generate(podcast_id):
         _api_json_response(
             {
                 "podcastId": podcast_id,
-                "coverArtBase64": "",
                 "coverUrl": cover_url,
-                "coverThumbB64": thumb_b64,
                 "coverArtMeta": {
                     "generatedAt": datetime.utcnow().isoformat(),
                     "source": "openai",
                     "mimeType": "image/jpeg",
+                    "size": "1024x1024",
+                    "quality": "medium",
+                    "outputCompression": 92,
                     "storagePath": storage_path,
                     "coverUrl": cover_url,
                 },

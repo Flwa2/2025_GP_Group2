@@ -24,6 +24,13 @@ function coverPayloadHasImage(data) {
   return false;
 }
 
+function cacheBustedCoverUrl(url, stamp) {
+  const cleanUrl = String(url || "").trim();
+  if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) return null;
+  if (!stamp) return cleanUrl;
+  return `${cleanUrl}${cleanUrl.includes("?") ? "&" : "?"}v=${encodeURIComponent(stamp)}`;
+}
+
 function Notice({ notice, noticeType }) {
   if (!notice) return null;
 
@@ -86,10 +93,7 @@ export default function FinalizePublish() {
       return `data:${coverMime};base64,${coverB64}`;
     }
     const url = String(coverMeta?.coverUrl || "").trim();
-    if (url.startsWith("http://") || url.startsWith("https://")) {
-      return url;
-    }
-    return null;
+    return cacheBustedCoverUrl(url, coverMeta?.generatedAt || coverMeta?.uploadedAt || coverMeta?.storagePath);
   }, [coverB64, coverMime, coverMeta]);
 
   async function loadFinalize() {
@@ -183,7 +187,7 @@ export default function FinalizePublish() {
         return;
       }
 
-      setCoverB64(resp.coverArtBase64 || null);
+      setCoverB64(null);
       setCoverMime(resp.mimeType || resp.coverArtMeta?.mimeType || "image/png");
       setCoverMeta({
         ...(resp.meta || resp.coverArtMeta || {}),
