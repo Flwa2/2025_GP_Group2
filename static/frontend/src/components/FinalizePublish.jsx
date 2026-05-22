@@ -18,15 +18,56 @@ import { apiFetch, getStoredAuthToken } from "../utils/api";
 function coverPayloadHasImage(data) {
   if (!data || data.ok === false) return false;
   const b64 = String(data.coverArtBase64 || "").trim();
-  const url = String(data.coverUrl || "").trim();
+  const url = resolveCoverUrl(data);
   if (b64.length > 100) return true;
-  if (url.startsWith("http://") || url.startsWith("https://")) return true;
+  if (url) return true;
   return false;
+}
+
+function isUsableImageUrl(url) {
+  const cleanUrl = String(url || "").trim();
+  return cleanUrl.startsWith("http://") || cleanUrl.startsWith("https://");
+}
+
+function resolveCoverUrl(data) {
+  const meta = data?.coverArtMeta || data?.meta || {};
+  const candidates = [
+    data?.coverUrl,
+    data?.publicUrl,
+    data?.signedUrl,
+    data?.imageUrl,
+    data?.resolvedCoverUrl,
+    data?.url,
+    meta.coverUrl,
+    meta.publicUrl,
+    meta.signedUrl,
+    meta.imageUrl,
+    meta.resolvedCoverUrl,
+    meta.storageUrl,
+    meta.url,
+  ];
+  return candidates.find(isUsableImageUrl) || "";
+}
+
+function preloadCoverImage(url) {
+  return new Promise((resolve, reject) => {
+    if (!isUsableImageUrl(url)) {
+      reject(new Error("Cover image URL is missing."));
+      return;
+    }
+    const img = new Image();
+    img.onload = () => resolve(url);
+    img.onerror = () => reject(new Error("Generated cover image could not be loaded. Please try again or upload an image."));
+    img.src = cacheBustedCoverUrl(url, Date.now());
+  });
 }
 
 function cacheBustedCoverUrl(url, stamp) {
   const cleanUrl = String(url || "").trim();
-  if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) return null;
+  if (!isUsableImageUrl(cleanUrl)) return null;
+  if (cleanUrl.includes("X-Amz-Signature") || cleanUrl.includes("X-Amz-Credential")) {
+    return cleanUrl;
+  }
   if (!stamp) return cleanUrl;
   return `${cleanUrl}${cleanUrl.includes("?") ? "&" : "?"}v=${encodeURIComponent(stamp)}`;
 }
@@ -93,6 +134,7 @@ export default function FinalizePublish() {
     coverPayloadHasImage({
       coverArtBase64: coverB64,
       coverUrl: coverMeta?.coverUrl,
+      coverArtMeta: coverMeta,
     }) || false;
   const coverGenerationLimitReached =
     coverGenerationLimit > 0 && coverGenerationCount >= coverGenerationLimit;
@@ -101,7 +143,7 @@ export default function FinalizePublish() {
     if (coverB64) {
       return `data:${coverMime};base64,${coverB64}`;
     }
-    const url = String(coverMeta?.coverUrl || "").trim();
+    const url = resolveCoverUrl({ coverUrl: coverMeta?.coverUrl, coverArtMeta: coverMeta });
     return cacheBustedCoverUrl(url, coverMeta?.generatedAt || coverMeta?.uploadedAt || coverMeta?.storagePath);
   }, [coverB64, coverMime, coverMeta]);
 
@@ -150,8 +192,12 @@ export default function FinalizePublish() {
       setTitle(data.title || "");
       setSavedTitle(data.title || "");
 
-      setCoverB64(data.coverArtBase64 || null);
-      const meta = data.coverArtMeta || {};
+      const loadedCoverUrl = resolveCoverUrl(data);
+      const meta = {
+        ...(data.coverArtMeta || {}),
+        coverUrl: loadedCoverUrl,
+      };
+      setCoverB64(loadedCoverUrl ? null : data.coverArtBase64 || null);
       setCoverMeta(meta);
       setCoverMime(meta.mimeType || "image/png");
       setCoverGenerationCount(Number(data.coverGenerationCount || 0));
@@ -230,8 +276,17 @@ export default function FinalizePublish() {
       if (!coverPayloadHasImage(resp)) {
         setNotice(
           resp?.error ||
-            "Cover art was not generated. Please try again or upload an image."
+            "Cover art was generated, but no displayable image URL was returned. Please try again or upload an image."
         );
+        setNoticeType("error");
+        return;
+      }
+
+      const generatedCoverUrl = resolveCoverUrl(resp);
+      try {
+        await preloadCoverImage(generatedCoverUrl);
+      } catch (imageError) {
+        setNotice(imageError?.message || "Generated cover image could not be loaded. Please try again or upload an image.");
         setNoticeType("error");
         return;
       }
@@ -241,7 +296,7 @@ export default function FinalizePublish() {
       setCoverMeta({
         ...(resp.meta || resp.coverArtMeta || {}),
         source: "AI generated",
-        coverUrl: resp.coverUrl || "",
+        coverUrl: generatedCoverUrl,
       });
       setCoverGenerationCount(Number(resp.coverGenerationCount || coverGenerationCount + 1));
       setCoverGenerationLimit(Number(resp.coverGenerationLimit || coverGenerationLimit));
@@ -314,12 +369,23 @@ export default function FinalizePublish() {
         return;
       }
 
+      const uploadedCoverUrl = resolveCoverUrl(resp);
+      if (uploadedCoverUrl) {
+        try {
+          await preloadCoverImage(uploadedCoverUrl);
+        } catch (imageError) {
+          setNotice(imageError?.message || "Uploaded cover image could not be loaded. Please try again.");
+          setNoticeType("error");
+          return;
+        }
+      }
+
       setCoverB64(resp.coverArtBase64 || null);
       setCoverMime(resp.mimeType || "image/png");
       setCoverMeta({
         ...(resp.meta || {}),
         source: "Uploaded",
-        coverUrl: resp.coverUrl || "",
+        coverUrl: uploadedCoverUrl,
       });
 
       if (resp.warning) {

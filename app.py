@@ -5261,10 +5261,35 @@ def _finalize_payload_for_podcast(podcast_id):
     if err:
         return err
 
+    resolved_pdata = resolve_podcast_media_urls(
+        pdata,
+        include_audio=False,
+        include_cover=True,
+        prefer_long_lived=True,
+    )
+    persisted_cover_url = (
+        resolved_pdata.get("coverUrl")
+        or pdata.get("coverUrl")
+        or pdata.get("publicUrl")
+        or pdata.get("coverPublicUrl")
+        or ""
+    )
+    persisted_cover_path = pdata.get("coverPath") or ""
+
     draft = _get_draft_for(podcast_id)
     cover_b64 = draft.get("coverArtBase64")
     cover_meta = draft.get("coverArtMeta") or {}
-    if not cover_b64 and pdata.get("coverThumbB64"):
+    if persisted_cover_url:
+        cover_meta = {
+            **cover_meta,
+            "source": cover_meta.get("source") or "Saved cover",
+            "mimeType": cover_meta.get("mimeType") or pdata.get("coverMimeType") or "image/jpeg",
+            "coverUrl": cover_meta.get("coverUrl") or persisted_cover_url,
+            "publicUrl": cover_meta.get("publicUrl") or persisted_cover_url,
+            "storagePath": cover_meta.get("storagePath") or persisted_cover_path,
+        }
+        cover_b64 = cover_b64 or ""
+    elif not cover_b64 and pdata.get("coverThumbB64"):
         cover_b64 = pdata.get("coverThumbB64")
         cover_meta = {
             "source": "Saved cover",
@@ -5279,6 +5304,9 @@ def _finalize_payload_for_podcast(podcast_id):
         ok=True,
         podcastId=podcast_id,
         title=title,
+        coverUrl=persisted_cover_url,
+        publicUrl=persisted_cover_url,
+        coverPath=persisted_cover_path,
         coverArtBase64=cover_b64,
         coverArtMeta=cover_meta,
         coverGenerationCount=cover_limit_state.get("count", 0),
@@ -5389,6 +5417,18 @@ def api_cover_generate(podcast_id):
                     status=500,
                 )
             )
+
+    if not cover_url:
+        return _apply_cors_headers(
+            _api_json_response(
+                {
+                    "ok": False,
+                    "code": "cover_url_missing",
+                    "error": "Cover image was generated and saved, but no display URL was returned. Please try again.",
+                },
+                status=500,
+            )
+        )
 
     cover_generation_count = int(limit_state.get("count") or 0) + 1
     cover_generation_limit = int(limit_state.get("limit") or COVER_GENERATION_MAX_PER_PODCAST)
