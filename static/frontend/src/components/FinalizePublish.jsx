@@ -31,6 +31,15 @@ function cacheBustedCoverUrl(url, stamp) {
   return `${cleanUrl}${cleanUrl.includes("?") ? "&" : "?"}v=${encodeURIComponent(stamp)}`;
 }
 
+function isFinalizeAuthHydrationError(error) {
+  return error?.status === 401 || error?.code === "auth_identity_missing";
+}
+
+function finalizeAuthLog(details) {
+  if (typeof console === "undefined") return;
+  console.log("[Finalize auth]", details);
+}
+
 function Notice({ notice, noticeType }) {
   if (!notice) return null;
 
@@ -96,12 +105,48 @@ export default function FinalizePublish() {
     return cacheBustedCoverUrl(url, coverMeta?.generatedAt || coverMeta?.uploadedAt || coverMeta?.storagePath);
   }, [coverB64, coverMime, coverMeta]);
 
+  async function fetchFinalizeWithAuthRetry() {
+    const token = getStoredAuthToken();
+    const hasToken = Boolean(token);
+    const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+
+    finalizeAuthLog({ hasToken });
+    finalizeAuthLog({ requestStarted: true, hasToken });
+
+    if (!hasToken) {
+      const err = new Error("Please log in again.");
+      err.status = 401;
+      err.code = "auth_identity_missing";
+      throw err;
+    }
+
+    try {
+      return await apiFetch(`/api/podcasts/${podcastId}/finalize`, {
+        method: "GET",
+        headers: authHeaders,
+      });
+    } catch (firstError) {
+      if (!isFinalizeAuthHydrationError(firstError)) {
+        throw firstError;
+      }
+
+      const retryToken = getStoredAuthToken();
+      if (!retryToken) {
+        throw firstError;
+      }
+
+      finalizeAuthLog({ retryAfter401: true, hasToken: true });
+      return apiFetch(`/api/podcasts/${podcastId}/finalize`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${retryToken}` },
+      });
+    }
+  }
+
   async function loadFinalize() {
     setLoading(true);
     try {
-      const data = await apiFetch(`/api/podcasts/${podcastId}/finalize`, {
-        method: "GET",
-      });
+      const data = await fetchFinalizeWithAuthRetry();
       setTitle(data.title || "");
       setSavedTitle(data.title || "");
 
@@ -112,7 +157,11 @@ export default function FinalizePublish() {
       setCoverGenerationCount(Number(data.coverGenerationCount || 0));
       setCoverGenerationLimit(Number(data.coverGenerationLimit || 2));
     } catch (e) {
-      setNotice(e?.message || "Failed to load page.");
+      const msg =
+        isFinalizeAuthHydrationError(e)
+          ? "Please log in again."
+          : e?.message || "Failed to load page.";
+      setNotice(msg);
       setNoticeType("error");
     } finally {
       setLoading(false);
