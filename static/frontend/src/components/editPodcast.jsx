@@ -31,15 +31,19 @@ import VoiceFiltersModal from "./VoiceFiltersModal";
 import { useVoiceFilterModalPreview } from "../hooks/useVoiceFilterModalPreview";
 import {
   DEFAULT_MODAL_VOICE_FILTERS,
+  filtersModalToApplied,
   getSafeModalGenderFilter,
   hasActiveModalVoiceFilters,
 } from "../utils/voiceFilterModal";
-import { getStrictFilteredVoicePool } from "../utils/strictVoicePool";
+import { invalidateAccentAvailabilityCache } from "../utils/voiceFilterAvailability";
 import {
-  buildAvailableAccentOptionsForLanguage,
-  invalidateAccentAvailabilityCache,
-  logArabicAccentOptionsDebug,
-} from "../utils/voiceFilterAvailability";
+  appliedFiltersCacheKey,
+  getCachedAccentOptionsForLanguage,
+  getCachedModalDerivedOptions,
+  getCachedStrictFilteredVoicePool,
+  invalidateVoiceFilterComputeCache,
+} from "../utils/voiceFilterComputeCache";
+import { catalogCacheKey } from "../utils/voiceCatalogCacheKey";
 import {
   appliedFiltersFromModalDone,
   appliedVoiceFiltersForSpeakerGender,
@@ -48,7 +52,6 @@ import {
   logStrictDropdownFinal,
   modalFiltersFromApplied,
   pickVoiceIdFromFilteredPool,
-  refineVoicesForSpeakerModalFilters,
 } from "../utils/voiceSpeakerFilterApply";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
@@ -71,7 +74,6 @@ import {
 } from "../utils/voiceTonePitchFilters";
 import {
   accentDisplaysForLanguageFromVoice,
-  buildAccentOptionsForLanguage,
   languageMatchesVoice,
 } from "../utils/voiceAccentFilters";
 import { ensureVoiceLibraryCatalog } from "../utils/voiceLibraryCache";
@@ -628,9 +630,10 @@ export default function EditPodcast() {
   const [voices, setVoices] = useState([]);
   const accentOptionsByLanguage = useMemo(() => {
     if (!voices.length) return { ar: [], en: [] };
-    const ar = buildAccentOptionsForLanguage(voices, "ar", DEFAULT_VOICE_LANGUAGE);
-    const en = buildAccentOptionsForLanguage(voices, "en", DEFAULT_VOICE_LANGUAGE);
-    return { ar, en };
+    return {
+      ar: getCachedAccentOptionsForLanguage(voices, "ar", DEFAULT_VOICE_LANGUAGE),
+      en: getCachedAccentOptionsForLanguage(voices, "en", DEFAULT_VOICE_LANGUAGE),
+    };
   }, [voices]);
   const [loadingVoices, setLoadingVoices] = useState(true);
   const [speakerVoiceFilters, setSpeakerVoiceFilters] = useState({});
@@ -952,6 +955,7 @@ useEffect(() => {
         }
 
         invalidateAccentAvailabilityCache();
+        invalidateVoiceFilterComputeCache();
         setVoices(raw);
       } catch (e) {
         console.error("Failed to load voices", e);
@@ -1011,7 +1015,7 @@ useEffect(() => {
         appliedOverride ||
         speakerVoiceAppliedFilters[speakerIndex] ||
         appliedVoiceFiltersForSpeakerGender(speaker);
-      const pool = getStrictFilteredVoicePool(voices, applied);
+      const pool = getCachedStrictFilteredVoicePool(voices, applied);
       speakerFilteredPoolsRef.current[speakerIndex] = pool;
       return pool;
     },
@@ -1063,8 +1067,44 @@ useEffect(() => {
     if (activeFilterSpeaker === null) return 0;
     const speaker = speakers?.[activeFilterSpeaker];
     const draft = speakerVoiceFilters[activeFilterSpeaker] || DEFAULT_MODAL_VOICE_FILTERS;
-    return refineVoicesForSpeakerModalFilters(voices, draft, speaker).length;
+    const applied = buildAppliedVoiceFiltersForSpeaker(filtersModalToApplied(draft), speaker);
+    return getCachedStrictFilteredVoicePool(voices, applied).length;
   }, [activeFilterSpeaker, speakerVoiceFilters, speakers, voices]);
+
+  const activeModalDraftKey = useMemo(() => {
+    if (activeFilterSpeaker === null) return "";
+    const f = speakerVoiceFilters[activeFilterSpeaker] || DEFAULT_MODAL_VOICE_FILTERS;
+    return JSON.stringify(filtersModalToApplied(f));
+  }, [activeFilterSpeaker, speakerVoiceFilters]);
+
+  const activeModalBundle = useMemo(() => {
+    if (activeFilterSpeaker === null) return null;
+    if (!voices.length) {
+      return { accentOptions: [], ageOptions: [], categoryOptions: [] };
+    }
+    const idx = activeFilterSpeaker;
+    const f = speakerVoiceFilters[idx] || DEFAULT_MODAL_VOICE_FILTERS;
+    const langOnlyApplied = buildAppliedVoiceFiltersForSpeaker({ ...f, accent: "" }, speakers[idx]);
+    const langKey = appliedFiltersCacheKey(langOnlyApplied);
+    const languagePool = getCachedStrictFilteredVoicePool(voices, langOnlyApplied);
+    const selectedLanguage = normalizeLanguageFilterValue(f.language || DEFAULT_VOICE_LANGUAGE);
+    const accentOptions =
+      accentOptionsByLanguage[selectedLanguage] ||
+      getCachedAccentOptionsForLanguage(voices, selectedLanguage, DEFAULT_VOICE_LANGUAGE);
+    const { ageOptions, categoryOptions } = getCachedModalDerivedOptions(
+      languagePool,
+      `${catalogCacheKey(voices)}|derived:${langKey}`
+    );
+    return { accentOptions, ageOptions, categoryOptions };
+  }, [activeFilterSpeaker, activeModalDraftKey, voices, speakers, speakerVoiceFilters, accentOptionsByLanguage]);
+
+  const activeFilterSpeakerGenderReset = useMemo(() => {
+    if (activeFilterSpeaker === null) return "__all__";
+    const speakerGenderRaw = String(speakers[activeFilterSpeaker]?.gender || "")
+      .trim()
+      .toLowerCase();
+    return speakerGenderRaw === "female" || speakerGenderRaw === "male" ? speakerGenderRaw : "__all__";
+  }, [activeFilterSpeaker, speakers]);
 
   const editVoiceFilterPreview = useVoiceFilterModalPreview({
     enabled: activeFilterSpeaker !== null,
@@ -2481,42 +2521,11 @@ const exportScript = async (format = "pdf") => {
       </div>
       </main>
 
-      {activeFilterSpeaker !== null && (() => {
-        const idx = activeFilterSpeaker;
-        const f = speakerVoiceFilters[idx] || DEFAULT_MODAL_VOICE_FILTERS;
-        const selectedLanguage = normalizeLanguageFilterValue(f.language || DEFAULT_VOICE_LANGUAGE);
-        const langOnlyApplied = buildAppliedVoiceFiltersForSpeaker(
-          { ...f, accent: "" },
-          speakers[idx]
-        );
-        const languageStrictPool = getStrictFilteredVoicePool(voices, langOnlyApplied);
-        const accentOptions =
-          selectedLanguage === "ar"
-            ? buildAccentOptionsForLanguage(voices, "ar", DEFAULT_VOICE_LANGUAGE)
-            : accentOptionsByLanguage[selectedLanguage] || [];
-
-        if (selectedLanguage === "ar") {
-          logArabicAccentOptionsDebug({
-            context: "Edit/activeFilterModal",
-            voices,
-            computedAccentOptions: accentOptions,
-            stateAccentOptionsAr: accentOptionsByLanguage.ar,
-            catalogSource: "editVoices",
-          });
-        }
-        const ageOptions = collectVoiceAgeOptions([
-          ...VOICE_AGE_BUCKETS.map((age) => ({ age })),
-          ...languageStrictPool,
-        ]);
-        const categoryOptions = roleCategoryOptionsForVoices(languageStrictPool);
-        const speakerGenderRaw = String(speakers[idx]?.gender || "").trim().toLowerCase();
-        const speakerGenderReset =
-          speakerGenderRaw === "female" || speakerGenderRaw === "male" ? speakerGenderRaw : "__all__";
-
-        return (
+      {activeFilterSpeaker !== null && (
           <VoiceFiltersModal
             open
             onClose={() => {
+              const idx = activeFilterSpeaker;
               setSpeakerVoiceFilters((prev) => ({
                 ...prev,
                 [idx]: modalFiltersFromApplied(
@@ -2526,8 +2535,9 @@ const exportScript = async (format = "pdf") => {
               }));
               setActiveFilterSpeaker(null);
             }}
-            filters={f}
+            filters={speakerVoiceFilters[activeFilterSpeaker] || DEFAULT_MODAL_VOICE_FILTERS}
             onFiltersChange={(next) => {
+              const idx = activeFilterSpeaker;
               setSpeakerVoiceFilters((prev) => ({
                 ...prev,
                 [idx]: { ...(prev[idx] || DEFAULT_MODAL_VOICE_FILTERS), ...next },
@@ -2537,16 +2547,17 @@ const exportScript = async (format = "pdf") => {
                 [idx]: VOICE_PAGE_SIZE,
               }));
             }}
-            accentOptions={accentOptions}
+            accentOptions={activeModalBundle?.accentOptions || []}
             catalogVoices={voices}
-            accentOptionsSource={`Edit/speaker-${idx}`}
-            ageOptions={ageOptions}
-            categoryOptions={categoryOptions}
+            accentOptionsSource={`Edit/speaker-${activeFilterSpeaker}`}
+            ageOptions={activeModalBundle?.ageOptions || []}
+            categoryOptions={activeModalBundle?.categoryOptions || []}
             isRTL={isRTL}
             normalizeCategoryLabelKey={normalizeCategoryLabelKey}
             formatVoiceCategoryLabel={formatVoiceCategoryLabel}
             onClear={() => {
-              const cleared = { ...DEFAULT_MODAL_VOICE_FILTERS, gender: speakerGenderReset };
+              const idx = activeFilterSpeaker;
+              const cleared = { ...DEFAULT_MODAL_VOICE_FILTERS, gender: activeFilterSpeakerGenderReset };
               const applied = appliedFiltersFromModalDone(cleared, speakers[idx]);
               setSpeakerVoiceFilters((prev) => ({ ...prev, [idx]: cleared }));
               setSpeakerVoiceAppliedFilters((prev) => ({ ...prev, [idx]: applied }));
@@ -2564,6 +2575,7 @@ const exportScript = async (format = "pdf") => {
               setSpeakerVoiceVisibleCounts((prev) => ({ ...prev, [idx]: VOICE_PAGE_SIZE }));
             }}
             onDone={(sanitized) => {
+              const idx = activeFilterSpeaker;
               const applied = appliedFiltersFromModalDone(sanitized, speakers[idx]);
               setSpeakerVoiceFilters((prev) => ({
                 ...prev,
@@ -2586,8 +2598,7 @@ const exportScript = async (format = "pdf") => {
             }}
             preview={editVoiceFilterPreview}
           />
-        );
-      })()}
+      )}
 
       {/* Exit Warning Modal */}
       {showExitWarning && (

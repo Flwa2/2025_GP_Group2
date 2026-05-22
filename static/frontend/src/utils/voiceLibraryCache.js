@@ -1,5 +1,6 @@
 import { VOICE_AGE_BUCKETS } from "./voiceAgeFilters";
 import { ARABIC_ACCENT_OPTIONS, ENGLISH_ACCENT_OPTIONS } from "./voiceAccentFilters";
+import { invalidateVoiceFilterComputeCache } from "./voiceFilterComputeCache";
 
 const CACHE_STORAGE_KEY = "wecast:voiceCatalog:v2";
 const CACHE_TTL_MS = 30 * 60 * 1000;
@@ -49,6 +50,7 @@ export function getCachedVoiceCatalog() {
 export function clearVoiceLibraryCache() {
   memoryCatalog = null;
   loadPromise = null;
+  invalidateVoiceFilterComputeCache();
   try {
     sessionStorage.removeItem(CACHE_STORAGE_KEY);
   } catch {
@@ -118,6 +120,7 @@ export async function ensureVoiceLibraryCatalog(loaders) {
 
   const stored = readStorageCache();
   if (stored?.length) {
+    invalidateVoiceFilterComputeCache();
     memoryCatalog = stored;
     return memoryCatalog;
   }
@@ -147,6 +150,7 @@ export async function ensureVoiceLibraryCatalog(loaders) {
       }
       const merged = mergeVoicesById(seedItems, accountItems);
       if (merged.length) {
+        invalidateVoiceFilterComputeCache();
         memoryCatalog = merged;
         writeStorageCache(merged);
         return merged;
@@ -157,7 +161,10 @@ export async function ensureVoiceLibraryCatalog(loaders) {
         try {
           const fallback = await loaders.fetchFallbackVoices();
           memoryCatalog = Array.isArray(fallback) ? fallback : [];
-          if (memoryCatalog.length) writeStorageCache(memoryCatalog);
+          if (memoryCatalog.length) {
+            invalidateVoiceFilterComputeCache();
+            writeStorageCache(memoryCatalog);
+          }
           return memoryCatalog;
         } catch {
           /* fall through */

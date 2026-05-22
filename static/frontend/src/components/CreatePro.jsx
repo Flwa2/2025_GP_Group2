@@ -54,7 +54,6 @@ import {
 } from "../utils/voiceTonePitchFilters";
 import {
     accentDisplaysForLanguageFromVoice,
-    buildAccentOptionsForLanguage,
     languageMatchesVoice,
 } from "../utils/voiceAccentFilters";
 import {
@@ -63,12 +62,15 @@ import {
     syncCreateDraftLease,
 } from "../utils/createDraftSession";
 import { normalizeGenderToken, isNeutralGenderValue } from "../utils/voiceGender";
-import { getStrictFilteredVoicePool } from "../utils/strictVoicePool";
+import { invalidateAccentAvailabilityCache } from "../utils/voiceFilterAvailability";
 import {
-    buildAvailableAccentOptionsForLanguage,
-    invalidateAccentAvailabilityCache,
-    logArabicAccentOptionsDebug,
-} from "../utils/voiceFilterAvailability";
+    appliedFiltersCacheKey,
+    getCachedAccentOptionsForLanguage,
+    getCachedModalDerivedOptions,
+    getCachedStrictFilteredVoicePool,
+    invalidateVoiceFilterComputeCache,
+} from "../utils/voiceFilterComputeCache";
+import { catalogCacheKey } from "../utils/voiceCatalogCacheKey";
 import {
     appliedFiltersFromModalDone,
     buildAppliedVoiceFiltersForSpeaker,
@@ -614,10 +616,11 @@ const loadSharedVoiceCatalog = useCallback(async () => {
 useEffect(() => {
     if (!librarySeedVoices.length) return;
     invalidateAccentAvailabilityCache();
+    invalidateVoiceFilterComputeCache();
     const next = {};
     for (const language of VOICE_LANGUAGE_OPTIONS) {
         const normalizedLanguage = normalizeLanguageFilterValue(language);
-        const options = buildAccentOptionsForLanguage(librarySeedVoices, normalizedLanguage);
+        const options = getCachedAccentOptionsForLanguage(librarySeedVoices, normalizedLanguage);
         if (options.length) next[normalizedLanguage] = options;
     }
     setVoiceAccentOptionsByLanguage(next);
@@ -686,7 +689,7 @@ const applyVoiceLibraryForSpeaker = useCallback(
         }));
         try {
             const catalog = await loadSharedVoiceCatalog();
-            const refined = getStrictFilteredVoicePool(catalog, builtApplied);
+            const refined = getCachedStrictFilteredVoicePool(catalog, builtApplied);
             setPaginatedFilteredVoiceLibrary(speakerIndex, refined);
             if (debugContext) {
                 logStrictDropdownFinal(debugContext, builtApplied, refined);
@@ -704,7 +707,7 @@ const applyVoiceLibraryForSpeaker = useCallback(
                 setElevenLabsAuthFailed(true);
             }
             setVoiceLibraryWarning("Unable to load ElevenLabs voices. Showing default voices.");
-            const refinedFallback = getStrictFilteredVoicePool(fallbackItems, builtApplied);
+            const refinedFallback = getCachedStrictFilteredVoicePool(fallbackItems, builtApplied);
             setPaginatedFilteredVoiceLibrary(speakerIndex, refinedFallback, {
                 error: refinedFallback.length ? null : e.message || String(e),
             });
@@ -732,6 +735,7 @@ useEffect(() => {
             const items = await loadSharedVoiceCatalog();
             if (!cancelled) {
                 invalidateAccentAvailabilityCache();
+                invalidateVoiceFilterComputeCache();
                 setLibrarySeedVoices(items);
                 if (!items.length) {
                     setVoiceLibraryWarning("Unable to load ElevenLabs voices. Showing default voices.");
@@ -799,6 +803,50 @@ const openFilterDraftKey = useMemo(() => {
     return JSON.stringify(filtersModalToApplied(speakerVoiceFilters[openFilterSpeakerIdx] || {}));
 }, [openFilterSpeakerIdx, speakerVoiceFilters]);
 
+const openModalBundle = useMemo(() => {
+    if (openFilterSpeakerIdx < 0) return null;
+    const catalog = getCachedVoiceCatalog() || librarySeedVoices;
+    if (!catalog.length) {
+        return {
+            catalog: [],
+            accentOptions: [],
+            ageOptions: [],
+            categoryOptions: [],
+            loadingCatalog: true,
+        };
+    }
+    const f = speakerVoiceFilters[openFilterSpeakerIdx] || DEFAULT_MODAL_VOICE_FILTERS;
+    const speaker = speakers[openFilterSpeakerIdx];
+    const langOnlyApplied = {
+        ...buildAppliedVoiceFiltersForSpeaker(filtersModalToApplied(f), speaker),
+        accent: "",
+    };
+    const langKey = appliedFiltersCacheKey(langOnlyApplied);
+    const languagePool = getCachedStrictFilteredVoicePool(catalog, langOnlyApplied);
+    const selectedLanguage = normalizeLanguageFilterValue(f.language || DEFAULT_VOICE_LANGUAGE);
+    const accentOptions =
+        voiceAccentOptionsByLanguage[selectedLanguage] ||
+        getCachedAccentOptionsForLanguage(catalog, selectedLanguage, DEFAULT_VOICE_LANGUAGE);
+    const { ageOptions, categoryOptions } = getCachedModalDerivedOptions(
+        languagePool,
+        `${catalogCacheKey(catalog)}|derived:${langKey}`
+    );
+    return {
+        catalog,
+        accentOptions,
+        ageOptions,
+        categoryOptions,
+        loadingCatalog: false,
+    };
+}, [
+    openFilterSpeakerIdx,
+    openFilterDraftKey,
+    librarySeedVoices,
+    speakerVoiceFilters,
+    speakers,
+    voiceAccentOptionsByLanguage,
+]);
+
 useEffect(() => {
     if (openFilterSpeakerIdx < 0) return;
     const i = openFilterSpeakerIdx;
@@ -818,8 +866,8 @@ useEffect(() => {
             return;
         }
         const accentApplied = { ...applied, accent: "" };
-        const accentPool = getStrictFilteredVoicePool(catalog, accentApplied);
-        const refined = getStrictFilteredVoicePool(catalog, applied);
+        const accentPool = getCachedStrictFilteredVoicePool(catalog, accentApplied);
+        const refined = getCachedStrictFilteredVoicePool(catalog, applied);
         if (normalizeLanguageFilterValue(accentApplied.language) === "ar") {
             const accentValues = uniqueSortedDisplay(
                 accentPool
@@ -2391,42 +2439,12 @@ const exportScript = async (format = "pdf") => {
                                                                         }));
                                                                     };
 
-                                                                    const selectedLanguage = normalizeLanguageFilterValue(f.language || DEFAULT_VOICE_LANGUAGE);
-                                                                    const catalogForModal =
-                                                                        getCachedVoiceCatalog() || librarySeedVoices;
-                                                                    const langOnlyApplied = {
-                                                                        ...buildAppliedVoiceFiltersForSpeaker(
-                                                                            filtersModalToApplied(f),
-                                                                            speakers[i]
-                                                                        ),
-                                                                        accent: "",
-                                                                    };
-                                                                    const languageStrictPool = f.open
-                                                                        ? getStrictFilteredVoicePool(
-                                                                              catalogForModal,
-                                                                              langOnlyApplied
-                                                                          )
-                                                                        : [];
-                                                                    const stableOptionVoices = languageStrictPool;
-                                                                    const accentOptions =
-                                                                        selectedLanguage === "ar"
-                                                                            ? buildAccentOptionsForLanguage(
-                                                                                  catalogForModal,
-                                                                                  "ar",
-                                                                                  DEFAULT_VOICE_LANGUAGE
-                                                                              )
-                                                                            : voiceAccentOptionsByLanguage[selectedLanguage] ||
-                                                                              buildAccentOptionsForLanguage(
-                                                                                  catalogForModal,
-                                                                                  selectedLanguage,
-                                                                                  DEFAULT_VOICE_LANGUAGE
-                                                                              );
-                                                                    const categoryOptions = roleCategoryOptionsForVoices(stableOptionVoices);
-                                                                    const ageOptions = collectVoiceAgeOptions([
-                                                                        ...VOICE_AGE_BUCKETS.map((age) => ({ age })),
-                                                                        ...libraryFilterOptions.ages.map((age) => ({ age })),
-                                                                        ...stableOptionVoices,
-                                                                    ]);
+                                                                    const isOpenModalSpeaker = f.open && i === openFilterSpeakerIdx;
+                                                                    const modalBundle = isOpenModalSpeaker ? openModalBundle : null;
+                                                                    const catalogForModal = modalBundle?.catalog || [];
+                                                                    const accentOptions = modalBundle?.accentOptions || [];
+                                                                    const ageOptions = modalBundle?.ageOptions || [];
+                                                                    const categoryOptions = modalBundle?.categoryOptions || [];
                                                                     const hasActive = hasActiveModalVoiceFilters(f, safeGenderFilter);
 
                                                                     return (
@@ -2441,29 +2459,10 @@ const exportScript = async (format = "pdf") => {
                                                                         if (!a.gender) {
                                                                             modalPatch.gender = speakerGenderTok || "__all__";
                                                                         }
-                                                                        const catalogForFilters =
-                                                                            getCachedVoiceCatalog() || librarySeedVoices;
-                                                                        const arAccentOptions = buildAvailableAccentOptionsForLanguage(
-                                                                            catalogForFilters,
-                                                                            "ar"
-                                                                        );
-                                                                        logArabicAccentOptionsDebug({
-                                                                            context: "Create/openFilter",
-                                                                            voices: catalogForFilters,
-                                                                            computedAccentOptions: arAccentOptions,
-                                                                            stateAccentOptionsByLanguage: voiceAccentOptionsByLanguage,
-                                                                            catalogSource: getCachedVoiceCatalog()?.length
-                                                                                ? "cachedCatalog"
-                                                                                : "librarySeedVoices",
-                                                                        });
-                                                                        setVoiceAccentOptionsByLanguage((prev) => ({
-                                                                            ...prev,
-                                                                            ar: arAccentOptions,
-                                                                        }));
                                                                         setSpeakerVoiceFilters((prev) => ({
                                                                             ...prev,
                                                                             [i]: {
-                                                                                ...prev[i],
+                                                                                ...(prev[i] || DEFAULT_MODAL_VOICE_FILTERS),
                                                                                 ...modalPatch,
                                                                                 open: true,
                                                                             },

@@ -11,6 +11,8 @@ import {
 import { PITCH_VALUES, TONE_FILTER_VALUES, formatPitchLabel, formatToneLabel } from "../utils/voiceTonePitchFilters";
 import { formatVoiceAgeLabel } from "../utils/voiceAgeFilters";
 import { normalizeAccentToken } from "../utils/voiceAccentFilters";
+import { logArabicAccentOptionsDebug } from "../utils/voiceFilterAvailability";
+import { shouldLogStrictVoiceFilter } from "../utils/strictVoiceFilter";
 import VoiceFilterPreviewCount from "./VoiceFilterPreviewCount";
 
 /** Shared voice filter modal — identical UI on Create Podcast and Edit Podcast. */
@@ -77,7 +79,7 @@ const translateCategory = (value) =>
   const visibleAccentOptions = accentOptions;
 
   useEffect(() => {
-    if (!open || selectedLanguage !== "ar") return;
+    if (!open || selectedLanguage !== "ar" || !shouldLogStrictVoiceFilter()) return;
     logArabicAccentOptionsDebug({
       context: `VoiceFiltersModal/${accentOptionsSource || "unknown"}`,
       voices: catalogVoices,

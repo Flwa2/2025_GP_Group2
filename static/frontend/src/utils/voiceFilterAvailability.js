@@ -14,6 +14,7 @@ import {
   voiceMatchesLanguageForAvailability,
 } from "./strictVoiceMetadata";
 import { strictVoiceMatchesLanguageAccent, shouldLogStrictVoiceFilter } from "./strictVoiceFilter";
+import { catalogCacheKey } from "./voiceCatalogCacheKey";
 
 /** Bump when accent availability logic changes (visible in [ARABIC ACCENT OPTIONS] logs). */
 export const VOICE_FILTER_BUILD_TAG = "arabic-accent-v3-5ab0bfe+";
@@ -33,14 +34,6 @@ const ARABIC_DIALECT_DISPLAYS = ARABIC_ACCENT_ALIASES.filter((a) => a.token !== 
 );
 
 let accentAvailabilityCache = { catalogKey: "", map: null, arabicVoiceCount: 0 };
-
-const catalogCacheKey = (voices) => {
-  const list = voices || [];
-  if (!list.length) return "0";
-  const first = list[0]?.providerVoiceId || list[0]?.id || "";
-  const last = list[list.length - 1]?.providerVoiceId || list[list.length - 1]?.id || "";
-  return `${list.length}:${first}:${last}`;
-};
 
 /** Invalidate when voice catalog is replaced (e.g. after fetch). */
 export const invalidateAccentAvailabilityCache = () => {
