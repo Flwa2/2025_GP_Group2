@@ -647,21 +647,6 @@ const conflictingArabicAccentPhrase = (voice, accentToken) => {
   return "";
 };
 
-const otherArabicDialectLocaleTags = (accentToken) => {
-  const out = new Set();
-  for (const [token, locales] of Object.entries(ARABIC_ACCENT_REQUIRED_LOCALES)) {
-    if (token === accentToken) continue;
-    for (const loc of locales) out.add(loc);
-  }
-  return out;
-};
-
-const hasOtherArabicDialectLocale = (voice, accentToken) => {
-  const other = otherArabicDialectLocaleTags(accentToken);
-  const regional = collectStructuredArabicLocaleTags(voice).filter((tag) => tag.includes("-"));
-  return regional.some((tag) => other.has(tag));
-};
-
 const otherEnglishDialectLocaleTags = (accentToken) => {
   const out = new Set();
   for (const [token, locales] of Object.entries(ENGLISH_ACCENT_LOCALE_REQUIREMENTS)) {
@@ -677,24 +662,11 @@ const hasOtherEnglishDialectLocale = (voice, accentToken) => {
   return regional.some((tag) => other.has(tag));
 };
 
-const canUseGenericArabicAccentFallback = (voice, accentToken) => {
+const canUseArabicLanguagePoolFallback = (voice) => {
   const { codes } = detectStructuredVoiceLanguages(voice);
   if (!codes.includes("ar") || !isExclusiveLanguage(codes, "ar")) return false;
   if (hasBlockedStructuredPhrase(voice)) return false;
   if (hasConflictingLocalesForLanguage(voice, "ar")) return false;
-  if (hasAmbiguousArabicLocales(voice, accentToken)) return false;
-  if (hasOtherArabicDialectLocale(voice, accentToken)) return false;
-  if (conflictingArabicAccentPhrase(voice, accentToken)) return false;
-  return true;
-};
-
-const canUseArabicLanguagePoolFallback = (voice, accentToken) => {
-  const { codes } = detectStructuredVoiceLanguages(voice);
-  if (!codes.includes("ar") || !isExclusiveLanguage(codes, "ar")) return false;
-  if (hasBlockedStructuredPhrase(voice)) return false;
-  if (hasConflictingLocalesForLanguage(voice, "ar")) return false;
-  if (conflictingArabicAccentPhrase(voice, accentToken)) return false;
-  if (hasOtherArabicDialectLocale(voice, accentToken)) return false;
   return true;
 };
 
@@ -769,25 +741,6 @@ const proveArabicAccent = (voice, accentToken) => {
     };
   }
 
-  const otherDialect = conflictingArabicAccentPhrase(voice, accentToken);
-  if (otherDialect) {
-    return {
-      pass: false,
-      reason: `conflicting-arabic-accent-phrase:${otherDialect}`,
-      normalizedAccents: [],
-      locales: allLocales,
-    };
-  }
-
-  if (hasAmbiguousArabicLocales(voice, accentToken)) {
-    return {
-      pass: false,
-      reason: `ambiguous-arabic-locales:${arLocales.join(",")}`,
-      normalizedAccents: [],
-      locales: allLocales,
-    };
-  }
-
   const matchingLocales = arLocales.filter((tag) => requiredLocales.has(tag));
   if (matchingLocales.length) {
     return {
@@ -807,21 +760,31 @@ const proveArabicAccent = (voice, accentToken) => {
     };
   }
 
-  if (canUseGenericArabicAccentFallback(voice, accentToken)) {
-    return {
-      pass: true,
-      reason: `arabic-${accentToken}-generic-fallback`,
-      normalizedAccents: [accentToken],
-      locales: arLocales,
-    };
-  }
-
-  if (canUseArabicLanguagePoolFallback(voice, accentToken)) {
+  if (canUseArabicLanguagePoolFallback(voice)) {
     return {
       pass: true,
       reason: `arabic-${accentToken}-language-pool-fallback`,
       normalizedAccents: [accentToken],
       locales: arLocales,
+    };
+  }
+
+  const otherDialect = conflictingArabicAccentPhrase(voice, accentToken);
+  if (otherDialect) {
+    return {
+      pass: false,
+      reason: `conflicting-arabic-accent-phrase:${otherDialect}`,
+      normalizedAccents: [],
+      locales: allLocales,
+    };
+  }
+
+  if (hasAmbiguousArabicLocales(voice, accentToken)) {
+    return {
+      pass: false,
+      reason: `ambiguous-arabic-locales:${arLocales.join(",")}`,
+      normalizedAccents: [],
+      locales: allLocales,
     };
   }
 

@@ -1,7 +1,6 @@
 import { normalizeLanguageFilterValue } from "../components/voiceFilterLanguage";
 import {
   ARABIC_ACCENT_ALIASES,
-  ARABIC_GENERAL_DISPLAY,
   ENGLISH_ACCENT_ALIASES,
   normalizeAccentToken,
 } from "./voiceAccentConstants";
@@ -10,14 +9,13 @@ import {
   sampleVoiceLanguageAccentMetadata,
   strictAccentDecision,
   strictLanguageDecision,
-  voiceDebugLabel,
   voiceMatchesLanguageForAvailability,
 } from "./strictVoiceMetadata";
 import { strictVoiceMatchesLanguageAccent, shouldLogStrictVoiceFilter } from "./strictVoiceFilter";
 import { catalogCacheKey } from "./voiceCatalogCacheKey";
 
 /** Bump when accent availability logic changes (visible in [ARABIC ACCENT OPTIONS] logs). */
-export const VOICE_FILTER_BUILD_TAG = "arabic-accent-v3-5ab0bfe+";
+export const VOICE_FILTER_BUILD_TAG = "arabic-accent-v4-safe-arabic-pool";
 
 const uniqueSortedDisplay = (displays) =>
   Array.from(new Set(displays.map((x) => String(x).trim()).filter(Boolean))).sort((a, b) =>
@@ -91,8 +89,7 @@ const buildArabicAccentOptions = (voices) => {
   const arabicVoiceCount = countVoicesMatchingLanguageForAvailability(voices, "ar");
   if (!arabicVoiceCount) return [];
 
-  // Catalog has Arabic voices → always offer dialect labels + Arabic General (filtering uses safe fallbacks per accent).
-  return uniqueSortedDisplay([...ARABIC_DIALECT_DISPLAYS, ARABIC_GENERAL_DISPLAY]);
+  return ARABIC_DIALECT_DISPLAYS;
 };
 
 export const buildAvailableAccentOptionsForLanguage = (

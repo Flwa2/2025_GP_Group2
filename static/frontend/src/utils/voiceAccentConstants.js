@@ -60,27 +60,6 @@ export const ARABIC_ACCENT_ALIASES = [
     localePatterns: [/\bar[-_\s]?eg\b/i],
   },
   {
-    token: "arabic-standard",
-    display: "Standard Arabic",
-    keywords: [
-      "standard arabic",
-      "modern standard arabic",
-      "modern standard",
-      "msa",
-      "fusha",
-      "fus-ha",
-      "classical arabic",
-    ],
-    patterns: [
-      /\bstandard\s+arabic\b/i,
-      /\bmodern\s+standard\s+arabic\b/i,
-      /\bmodern\s+standard\b/i,
-      /\bmsa\b/i,
-      /\bfusha\b/i,
-      /\bclassical\s+arabic\b/i,
-    ],
-  },
-  {
     token: "arabic-levantine",
     display: "Levantine",
     keywords: [
@@ -100,6 +79,27 @@ export const ARABIC_ACCENT_ALIASES = [
       /\bpalestinian\b/i,
     ],
     localePatterns: [/\bar[-_\s]?(lb|sy|jo|ps)\b/i],
+  },
+  {
+    token: "arabic-standard",
+    display: "Standard Arabic",
+    keywords: [
+      "standard arabic",
+      "modern standard arabic",
+      "modern standard",
+      "msa",
+      "fusha",
+      "fus-ha",
+      "classical arabic",
+    ],
+    patterns: [
+      /\bstandard\s+arabic\b/i,
+      /\bmodern\s+standard\s+arabic\b/i,
+      /\bmodern\s+standard\b/i,
+      /\bmsa\b/i,
+      /\bfusha\b/i,
+      /\bclassical\s+arabic\b/i,
+    ],
   },
 ];
 
