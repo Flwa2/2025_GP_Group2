@@ -5,7 +5,14 @@ import {
   filtersModalToApplied,
 } from "./voiceFilterModal";
 import { normalizeGenderToken } from "./voiceGender";
-import { clientRefineLibraryVoices } from "./voiceLibraryRefine";
+import {
+  firstVoiceIdFromStrictPool,
+  getStrictFilteredVoicePool,
+  getVoiceDisplayNameFromPoolItem,
+  getVoiceIdFromPoolItem,
+  logStrictDropdownFinal,
+  pickVoiceIdFromStrictPool,
+} from "./strictVoicePool";
 
 export const emptyAppliedSpeakerVoiceFilters = () => ({
   search: "",
@@ -49,9 +56,9 @@ export const buildAppliedVoiceFiltersForSpeaker = (modalFilters, speaker = {}) =
   });
 };
 
-/** Client-side voice list for a speaker using Create-aligned filter rules. */
+/** Strict voice list for modal preview + dropdown (single source of truth). */
 export const refineVoicesForSpeakerModalFilters = (voices, modalFilters, speaker = {}) =>
-  clientRefineLibraryVoices(voices, buildAppliedVoiceFiltersForSpeaker(modalFilters, speaker));
+  getStrictFilteredVoicePool(voices, buildAppliedVoiceFiltersForSpeaker(modalFilters, speaker));
 
 /** Seed modal draft state from applied filters (e.g. when opening the filters modal). */
 export const modalFiltersFromApplied = (applied, speaker = {}) => {
@@ -63,11 +70,8 @@ export const modalFiltersFromApplied = (applied, speaker = {}) => {
   return { ...DEFAULT_MODAL_VOICE_FILTERS, ...patch };
 };
 
-export const getVoiceIdFromItem = (voice) =>
-  voice?.providerVoiceId || voice?.id || voice?.docId || "";
-
-export const getVoiceDisplayNameFromItem = (voice) =>
-  voice?.name || voice?.displayName || voice?.providerVoiceId || voice?.id || "Unnamed voice";
+export const getVoiceIdFromItem = getVoiceIdFromPoolItem;
+export const getVoiceDisplayNameFromItem = getVoiceDisplayNameFromPoolItem;
 
 /** Build applied filters from modal Done payload + speaker card gender. */
 export const appliedFiltersFromModalDone = (sanitizedModal, speaker = {}) =>
@@ -76,31 +80,10 @@ export const appliedFiltersFromModalDone = (sanitizedModal, speaker = {}) =>
     speaker
   );
 
-export const pickVoiceIdFromFilteredPool = (currentVoiceId, pool) => {
-  const current = String(currentVoiceId || "").trim();
-  if (!current) return "";
-  const ids = new Set((pool || []).map(getVoiceIdFromItem).filter(Boolean));
-  return ids.has(current) ? current : "";
-};
+export const pickVoiceIdFromFilteredPool = pickVoiceIdFromStrictPool;
+export const firstVoiceIdFromPool = firstVoiceIdFromStrictPool;
 
-export const firstVoiceIdFromPool = (pool) => {
-  const first = (pool || []).find((voice) => getVoiceIdFromItem(voice));
-  return first ? getVoiceIdFromItem(first) : "";
-};
+/** @deprecated Use logStrictDropdownFinal */
+export const logVoiceDropdownDebug = logStrictDropdownFinal;
 
-/** Visible console log after filter Done (always on, per product debug request). */
-export const logVoiceDropdownDebug = (context, applied, pool) => {
-  if (typeof console === "undefined" || typeof console.info !== "function") return;
-  const names = (pool || [])
-    .map(getVoiceDisplayNameFromItem)
-    .filter(Boolean)
-    .slice(0, 10);
-  console.info("[WeCast voice dropdown]", {
-    context,
-    selectedLanguage: applied?.language || "",
-    selectedAccent: applied?.accent || "",
-    selectedGender: applied?.gender || "",
-    dropdownOptionCount: (pool || []).length,
-    firstTenDropdownVoiceNames: names,
-  });
-};
+export { getStrictFilteredVoicePool, logStrictDropdownFinal };

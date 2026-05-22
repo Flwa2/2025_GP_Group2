@@ -63,12 +63,12 @@ import {
     syncCreateDraftLease,
 } from "../utils/createDraftSession";
 import { normalizeGenderToken, isNeutralGenderValue } from "../utils/voiceGender";
-import { clientRefineLibraryVoices } from "../utils/voiceLibraryRefine";
+import { getStrictFilteredVoicePool } from "../utils/strictVoicePool";
 import {
     appliedFiltersFromModalDone,
     buildAppliedVoiceFiltersForSpeaker,
     firstVoiceIdFromPool,
-    logVoiceDropdownDebug,
+    logStrictDropdownFinal,
     modalFiltersFromApplied,
     pickVoiceIdFromFilteredPool,
 } from "../utils/voiceSpeakerFilterApply";
@@ -641,7 +641,7 @@ const applyVoiceLibraryForSpeaker = useCallback(
         }));
         try {
             const catalog = await loadSharedVoiceCatalog();
-            const refined = clientRefineLibraryVoices(catalog, builtApplied);
+            const refined = getStrictFilteredVoicePool(catalog, builtApplied);
             speakerRefinedVoicesRef.current[speakerIndex] = refined;
             setSpeakerVoiceLibrary((prev) => ({
                 ...prev,
@@ -656,7 +656,7 @@ const applyVoiceLibraryForSpeaker = useCallback(
                 },
             }));
             if (debugContext) {
-                logVoiceDropdownDebug(debugContext, builtApplied, refined);
+                logStrictDropdownFinal(debugContext, builtApplied, refined);
             }
             return refined;
         } catch (e) {
@@ -671,7 +671,7 @@ const applyVoiceLibraryForSpeaker = useCallback(
                 setElevenLabsAuthFailed(true);
             }
             setVoiceLibraryWarning("Unable to load ElevenLabs voices. Showing default voices.");
-            const refinedFallback = clientRefineLibraryVoices(fallbackItems, builtApplied);
+            const refinedFallback = getStrictFilteredVoicePool(fallbackItems, builtApplied);
             speakerRefinedVoicesRef.current[speakerIndex] = refinedFallback;
             setSpeakerVoiceLibrary((prev) => ({
                 ...prev,
@@ -686,7 +686,7 @@ const applyVoiceLibraryForSpeaker = useCallback(
                 },
             }));
             if (debugContext) {
-                logVoiceDropdownDebug(debugContext, builtApplied, refinedFallback);
+                logStrictDropdownFinal(debugContext, builtApplied, refinedFallback);
             }
             return refinedFallback;
         }
@@ -816,8 +816,8 @@ useEffect(() => {
             return;
         }
         const accentApplied = { ...applied, accent: "" };
-        const accentPool = clientRefineLibraryVoices(catalog, accentApplied);
-        const refined = clientRefineLibraryVoices(catalog, applied);
+        const accentPool = getStrictFilteredVoicePool(catalog, accentApplied);
+        const refined = getStrictFilteredVoicePool(catalog, applied);
         if (normalizeLanguageFilterValue(accentApplied.language) === "ar") {
             const accentValues = uniqueSortedDisplay(
                 accentPool
@@ -2386,23 +2386,20 @@ const exportScript = async (format = "pdf") => {
                                                                     };
 
                                                                     const selectedLanguage = normalizeLanguageFilterValue(f.language || DEFAULT_VOICE_LANGUAGE);
-                                                                    const modalAccentItems = Array.isArray(modalLibraryPreview[i]?.accentItems)
-                                                                        ? modalLibraryPreview[i].accentItems
-                                                                        : [];
-                                                                    const accentSourceVoices = Array.from(
-                                                                        new Map(
-                                                                            [...modalAccentItems, ...rawPool, ...librarySeedVoices]
-                                                                                .filter(Boolean)
-                                                                                .map((v, idx) => [getVoiceId(v) || `voice-${idx}`, v])
-                                                                        ).values()
+                                                                    const catalogForModal =
+                                                                        getCachedVoiceCatalog() || librarySeedVoices;
+                                                                    const langOnlyApplied = {
+                                                                        ...buildAppliedVoiceFiltersForSpeaker(
+                                                                            filtersModalToApplied(f),
+                                                                            speakers[i]
+                                                                        ),
+                                                                        accent: "",
+                                                                    };
+                                                                    const languageStrictPool = getStrictFilteredVoicePool(
+                                                                        catalogForModal,
+                                                                        langOnlyApplied
                                                                     );
-                                                                    const stableOptionVoices = Array.from(
-                                                                        new Map(
-                                                                            [...librarySeedVoices, ...rawPool, ...accentSourceVoices]
-                                                                                .filter(Boolean)
-                                                                                .map((v, idx) => [getVoiceId(v) || `voice-${idx}`, v])
-                                                                        ).values()
-                                                                    );
+                                                                    const stableOptionVoices = languageStrictPool;
                                                                     const accentOptionsForLanguage = (language) =>
                                                                         buildAccentOptionsForLanguage(
                                                                             stableOptionVoices,

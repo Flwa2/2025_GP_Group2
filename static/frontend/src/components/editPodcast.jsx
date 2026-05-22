@@ -34,13 +34,13 @@ import {
   getSafeModalGenderFilter,
   hasActiveModalVoiceFilters,
 } from "../utils/voiceFilterModal";
-import { clientRefineLibraryVoices } from "../utils/voiceLibraryRefine";
+import { getStrictFilteredVoicePool } from "../utils/strictVoicePool";
 import {
   appliedFiltersFromModalDone,
   appliedVoiceFiltersForSpeakerGender,
   buildAppliedVoiceFiltersForSpeaker,
   firstVoiceIdFromPool,
-  logVoiceDropdownDebug,
+  logStrictDropdownFinal,
   modalFiltersFromApplied,
   pickVoiceIdFromFilteredPool,
   refineVoicesForSpeakerModalFilters,
@@ -999,7 +999,7 @@ useEffect(() => {
         appliedOverride ||
         speakerVoiceAppliedFilters[speakerIndex] ||
         appliedVoiceFiltersForSpeakerGender(speaker);
-      const pool = clientRefineLibraryVoices(voices, applied);
+      const pool = getStrictFilteredVoicePool(voices, applied);
       speakerFilteredPoolsRef.current[speakerIndex] = pool;
       return pool;
     },
@@ -1008,9 +1008,28 @@ useEffect(() => {
 
   useEffect(() => {
     if (!voices.length || !speakers.length) return;
+    const voiceUpdates = [];
     speakers.forEach((speaker, index) => {
-      computeFilteredPoolForSpeaker(index);
+      const pool = computeFilteredPoolForSpeaker(index);
+      const kept = pickVoiceIdFromFilteredPool(speaker.voiceId, pool);
+      const nextId = kept || firstVoiceIdFromPool(pool);
+      if ((speaker.voiceId || "") !== (nextId || "")) {
+        voiceUpdates.push({ index, voiceId: nextId });
+      }
     });
+    if (voiceUpdates.length) {
+      setSpeakers((prev) => {
+        const next = [...prev];
+        voiceUpdates.forEach(({ index, voiceId }) => {
+          next[index] = {
+            ...next[index],
+            voiceId,
+            voiceName: voiceId ? getVoiceNameById(voiceId) : "",
+          };
+        });
+        return next;
+      });
+    }
   }, [voices, speakers, speakerVoiceAppliedFilters, computeFilteredPoolForSpeaker]);
 
   /** Dropdown options = strict filtered pool only (same list as modal count). */
@@ -2454,12 +2473,21 @@ const exportScript = async (format = "pdf") => {
         const idx = activeFilterSpeaker;
         const f = speakerVoiceFilters[idx] || DEFAULT_MODAL_VOICE_FILTERS;
         const selectedLanguage = normalizeLanguageFilterValue(f.language || DEFAULT_VOICE_LANGUAGE);
-        const accentOptions = buildAccentOptionsForLanguage(voices, selectedLanguage, DEFAULT_VOICE_LANGUAGE);
+        const langOnlyApplied = buildAppliedVoiceFiltersForSpeaker(
+          { ...f, accent: "" },
+          speakers[idx]
+        );
+        const languageStrictPool = getStrictFilteredVoicePool(voices, langOnlyApplied);
+        const accentOptions = buildAccentOptionsForLanguage(
+          languageStrictPool,
+          selectedLanguage,
+          DEFAULT_VOICE_LANGUAGE
+        );
         const ageOptions = collectVoiceAgeOptions([
           ...VOICE_AGE_BUCKETS.map((age) => ({ age })),
-          ...voices,
+          ...languageStrictPool,
         ]);
-        const categoryOptions = roleCategoryOptionsForVoices(voices);
+        const categoryOptions = roleCategoryOptionsForVoices(languageStrictPool);
         const speakerGenderRaw = String(speakers[idx]?.gender || "").trim().toLowerCase();
         const speakerGenderReset =
           speakerGenderRaw === "female" || speakerGenderRaw === "male" ? speakerGenderRaw : "__all__";
@@ -2500,7 +2528,7 @@ const exportScript = async (format = "pdf") => {
               setSpeakerVoiceFilters((prev) => ({ ...prev, [idx]: cleared }));
               setSpeakerVoiceAppliedFilters((prev) => ({ ...prev, [idx]: applied }));
               const pool = computeFilteredPoolForSpeaker(idx, applied);
-              logVoiceDropdownDebug("Edit/ClearFilters", applied, pool);
+              logStrictDropdownFinal("Edit/ClearFilters", applied, pool);
               setSpeakers((prev) => {
                 const next = [...prev];
                 const kept = pickVoiceIdFromFilteredPool(next[idx]?.voiceId, pool);
@@ -2520,7 +2548,7 @@ const exportScript = async (format = "pdf") => {
               }));
               setSpeakerVoiceAppliedFilters((prev) => ({ ...prev, [idx]: applied }));
               const pool = computeFilteredPoolForSpeaker(idx, applied);
-              logVoiceDropdownDebug("Edit/Done", applied, pool);
+              logStrictDropdownFinal("Edit/Done", applied, pool);
               setSpeakers((prev) => {
                 const next = [...prev];
                 const kept = pickVoiceIdFromFilteredPool(next[idx]?.voiceId, pool);

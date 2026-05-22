@@ -36,7 +36,7 @@ const normalizeSearchText = (value) =>
     .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ");
 
-/** Normalize BCP-47-ish tags to `en-us`, `en`, `es`, `sv-se`, etc. */
+/** Normalize BCP-47 tags only (`en-us`, `en`, `ar-sa`). Free-text labels return "". */
 export const normalizeLocaleTag = (raw) => {
   const trimmed = String(raw || "").trim().toLowerCase().replace(/_/g, "-");
   if (!trimmed) return "";
@@ -46,7 +46,7 @@ export const normalizeLocaleTag = (raw) => {
     const region = match[2] || "";
     return region ? `${lang}-${region}` : lang;
   }
-  return normalizeSearchText(trimmed).replace(/\s+/g, "-");
+  return "";
 };
 
 /** Language codes that invalidate an English-only filter. */
@@ -173,7 +173,15 @@ const ENGLISH_ACCENT_LOCALE_REQUIREMENTS = {
   british: new Set(["en-gb", "en-uk"]),
   australian: new Set(["en-au"]),
   indian: new Set(["en-in"]),
-  neutral: new Set(["en", "en-us", "en-gb", "en-au", "en-in"]),
+  neutral: new Set(["en", "en-us", "en-gb", "en-uk", "en-au", "en-in"]),
+};
+
+const ARABIC_ACCENT_REQUIRED_LOCALES = {
+  "arabic-saudi": new Set(["ar-sa"]),
+  "arabic-gulf": new Set(["ar-ae", "ar-kw", "ar-qa", "ar-bh", "ar-om"]),
+  "arabic-egyptian": new Set(["ar-eg"]),
+  "arabic-standard": new Set(["ar"]),
+  "arabic-levantine": new Set(["ar-lb", "ar-sy", "ar-jo", "ar-ps"]),
 };
 
 /** Exact accent phrases allowed for English (no regex \bamerican\b on compound strings). */
@@ -267,7 +275,51 @@ export const collectStructuredLocales = (voice) => {
   }
   const top = normalizeLocaleTag(voice?.locale || voice?.labels?.locale);
   if (top) locales.push(top);
+  for (const value of collectStructuredFieldValues(voice)) {
+    const tag = normalizeLocaleTag(value);
+    if (tag) locales.push(tag);
+  }
   return Array.from(new Set(locales));
+};
+
+const localeLanguagePart = (tag) => String(tag || "").split("-")[0];
+
+const collectStructuredEnglishLocaleTags = (voice) =>
+  collectStructuredLocales(voice).filter((tag) => tag === "en" || tag.startsWith("en-"));
+
+const collectStructuredArabicLocaleTags = (voice) =>
+  collectStructuredLocales(voice).filter((tag) => tag === "ar" || tag.startsWith("ar-"));
+
+const hasConflictingLocalesForLanguage = (voice, selected) => {
+  const locales = collectStructuredLocales(voice);
+  const conflicts =
+    selected === "en"
+      ? CONFLICTS_WITH_ENGLISH
+      : selected === "ar"
+        ? CONFLICTS_WITH_ARABIC
+        : null;
+  if (!conflicts) return false;
+  return locales.some((tag) => {
+    const lang = localeLanguagePart(tag);
+    return lang && lang !== selected && conflicts.has(lang);
+  });
+};
+
+const hasAmbiguousEnglishLocales = (voice, accentToken) => {
+  const enLocales = collectStructuredEnglishLocaleTags(voice);
+  if (!enLocales.length) return false;
+  if (!accentToken) {
+    const regional = enLocales.filter((tag) => tag.includes("-"));
+    const uniqueRegional = Array.from(new Set(regional));
+    return uniqueRegional.length > 1;
+  }
+  const required = ENGLISH_ACCENT_LOCALE_REQUIREMENTS[accentToken];
+  if (!required) return true;
+  const matching = enLocales.filter((tag) => required.has(tag));
+  const nonMatching = enLocales.filter((tag) => !required.has(tag));
+  if (!matching.length) return true;
+  if (accentToken !== "neutral" && nonMatching.length) return true;
+  return false;
 };
 
 export const hasBlockedStructuredPhrase = (voice) => {
@@ -383,6 +435,43 @@ export const strictLanguageDecision = (voice, selectedLanguage) => {
     };
   }
 
+  if (hasConflictingLocalesForLanguage(voice, selected)) {
+    return {
+      pass: false,
+      reason: "conflicting-non-primary-locale",
+      normalizedLanguages: codes,
+    };
+  }
+
+  if (selected === "en") {
+    const enLocales = collectStructuredEnglishLocaleTags(voice);
+    if (!enLocales.length) {
+      return {
+        pass: false,
+        reason: "missing-english-locale-proof",
+        normalizedLanguages: codes,
+      };
+    }
+    if (hasAmbiguousEnglishLocales(voice, "")) {
+      return {
+        pass: false,
+        reason: `ambiguous-english-locales:${enLocales.join(",")}`,
+        normalizedLanguages: codes,
+      };
+    }
+  }
+
+  if (selected === "ar") {
+    const arLocales = collectStructuredArabicLocaleTags(voice);
+    if (!arLocales.length) {
+      return {
+        pass: false,
+        reason: "missing-arabic-locale-proof",
+        normalizedLanguages: codes,
+      };
+    }
+  }
+
   return {
     pass: true,
     reason: selected === "en" ? "english-exclusive" : "arabic-exclusive",
@@ -391,55 +480,53 @@ export const strictLanguageDecision = (voice, selectedLanguage) => {
 };
 
 const proveEnglishAccent = (voice, accentToken) => {
-  const profiles = collectLanguageAccentProfilesFromVoice(voice);
-  const enProfiles = profiles.filter((p) => profileLanguageCode(p) === "en");
-  if (!enProfiles.length) {
-    return { pass: false, reason: "no-english-profile", normalizedAccents: [], locales: [] };
-  }
-
   const requiredLocales = ENGLISH_ACCENT_LOCALE_REQUIREMENTS[accentToken];
   if (!requiredLocales) {
     return { pass: false, reason: "unsupported-accent", normalizedAccents: [], locales: [] };
   }
 
-  const profileProofs = [];
-  for (const profile of enProfiles) {
-    const localeTag = normalizeLocaleTag(profile.locale || profile.language);
-    if (!localeTag) continue;
-    if (!requiredLocales.has(localeTag)) continue;
-
-    const accentPhrase = profile.accent ? exactEnglishAccentFromPhrase(profile.accent, accentToken) : "";
-    if (profile.accent && !accentPhrase) {
-      continue;
-    }
-
-    profileProofs.push({ localeTag, accentPhrase: accentPhrase || accentToken });
-  }
-
-  if (!profileProofs.length) {
-    const locales = collectStructuredLocales(voice);
+  const allLocales = collectStructuredLocales(voice);
+  if (hasConflictingLocalesForLanguage(voice, "en")) {
     return {
       pass: false,
-      reason: `missing-required-locale:${accentToken}:${locales.join("|")}`,
+      reason: "conflicting-non-english-locale",
       normalizedAccents: [],
-      locales,
+      locales: allLocales,
     };
   }
 
-  const enLocaleTags = enProfiles
-    .map((p) => normalizeLocaleTag(p.locale || p.language))
-    .filter(Boolean);
-  const uniqueEnLocales = Array.from(new Set(enLocaleTags));
+  if (hasAmbiguousEnglishLocales(voice, accentToken)) {
+    return {
+      pass: false,
+      reason: `ambiguous-english-locales:${collectStructuredEnglishLocaleTags(voice).join(",")}`,
+      normalizedAccents: [],
+      locales: allLocales,
+    };
+  }
 
-  if (accentToken !== "neutral" && uniqueEnLocales.length > 1) {
-    const matchingLocales = profileProofs.map((p) => p.localeTag);
-    const nonMatching = uniqueEnLocales.filter((l) => !matchingLocales.includes(l));
-    if (nonMatching.length) {
+  const enLocales = collectStructuredEnglishLocaleTags(voice);
+  const matchingLocales = enLocales.filter((tag) => requiredLocales.has(tag));
+  if (!matchingLocales.length) {
+    return {
+      pass: false,
+      reason: `missing-required-locale:${accentToken}:${enLocales.join("|")}`,
+      normalizedAccents: [],
+      locales: allLocales,
+    };
+  }
+
+  const profiles = collectLanguageAccentProfilesFromVoice(voice).filter(
+    (p) => profileLanguageCode(p) === "en"
+  );
+  for (const profile of profiles) {
+    if (!profile.accent) continue;
+    const accentPhrase = exactEnglishAccentFromPhrase(profile.accent, accentToken);
+    if (!accentPhrase) {
       return {
         pass: false,
-        reason: `ambiguous-english-locales:${uniqueEnLocales.join(",")}`,
-        normalizedAccents: [accentToken],
-        locales: uniqueEnLocales,
+        reason: `conflicting-english-accent-phrase:${profile.accent}`,
+        normalizedAccents: [],
+        locales: allLocales,
       };
     }
   }
@@ -448,7 +535,7 @@ const proveEnglishAccent = (voice, accentToken) => {
     pass: true,
     reason: `english-${accentToken}-locale-proof`,
     normalizedAccents: [accentToken],
-    locales: profileProofs.map((p) => p.localeTag),
+    locales: matchingLocales,
   };
 };
 
@@ -464,46 +551,39 @@ export const detectStructuredVoiceAccents = (voice, selectedLanguage) => {
 };
 
 const proveArabicAccent = (voice, accentToken) => {
-  const alias = ARABIC_ACCENT_ALIASES.find((entry) => entry.token === accentToken);
-  if (!alias) {
+  const requiredLocales = ARABIC_ACCENT_REQUIRED_LOCALES[accentToken];
+  if (!requiredLocales) {
     return { pass: false, reason: "unsupported-arabic-accent", normalizedAccents: [], locales: [] };
   }
 
-  const profiles = collectLanguageAccentProfilesFromVoice(voice).filter(
-    (p) => profileLanguageCode(p) === "ar"
-  );
-  if (!profiles.length) {
-    return { pass: false, reason: "no-arabic-profile", normalizedAccents: [], locales: [] };
-  }
-
-  const matchingProfiles = profiles.filter((profile) => {
-    const localeRaw = normalizeSearchText(profile.locale || profile.language);
-    if (!localeRaw) return false;
-    return alias.localePatterns?.some((pattern) => pattern.test(localeRaw)) || false;
-  });
-
-  const locales = collectStructuredLocales(voice);
-  if (!matchingProfiles.length) {
+  const allLocales = collectStructuredLocales(voice);
+  if (hasConflictingLocalesForLanguage(voice, "ar")) {
     return {
       pass: false,
-      reason: `missing-arabic-locale:${accentToken}`,
+      reason: "conflicting-non-arabic-locale",
       normalizedAccents: [],
-      locales,
+      locales: allLocales,
     };
   }
 
-  const arLocaleTags = profiles
-    .map((p) => normalizeLocaleTag(p.locale || p.language))
-    .filter((l) => l.startsWith("ar"));
-  const uniqueArLocales = Array.from(new Set(arLocaleTags));
-  const proofLocales = matchingProfiles.map((p) => normalizeLocaleTag(p.locale || p.language));
-  const extraLocales = uniqueArLocales.filter((l) => !proofLocales.includes(l));
-  if (extraLocales.length) {
+  const arLocales = collectStructuredArabicLocaleTags(voice);
+  const matchingLocales = arLocales.filter((tag) => requiredLocales.has(tag));
+  if (!matchingLocales.length) {
     return {
       pass: false,
-      reason: `ambiguous-arabic-locales:${uniqueArLocales.join(",")}`,
-      normalizedAccents: [accentToken],
-      locales: uniqueArLocales,
+      reason: `missing-arabic-locale:${accentToken}:${arLocales.join("|")}`,
+      normalizedAccents: [],
+      locales: allLocales,
+    };
+  }
+
+  const nonMatching = arLocales.filter((tag) => !requiredLocales.has(tag));
+  if (nonMatching.length) {
+    return {
+      pass: false,
+      reason: `ambiguous-arabic-locales:${arLocales.join(",")}`,
+      normalizedAccents: [],
+      locales: allLocales,
     };
   }
 
@@ -511,7 +591,7 @@ const proveArabicAccent = (voice, accentToken) => {
     pass: true,
     reason: `arabic-${accentToken}-locale-proof`,
     normalizedAccents: [accentToken],
-    locales: proofLocales,
+    locales: matchingLocales,
   };
 };
 
