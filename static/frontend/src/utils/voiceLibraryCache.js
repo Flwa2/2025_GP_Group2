@@ -1,8 +1,8 @@
 import { VOICE_AGE_BUCKETS } from "./voiceAgeFilters";
-import { ARABIC_ACCENT_OPTIONS, ENGLISH_ACCENT_OPTIONS } from "./voiceAccentFilters";
+import { ARABIC_ACCENT_ALIASES, ENGLISH_ACCENT_OPTIONS } from "./voiceAccentFilters";
 import { invalidateVoiceFilterComputeCache } from "./voiceFilterComputeCache";
 
-const CACHE_STORAGE_KEY = "wecast:voiceCatalog:v3";
+const CACHE_STORAGE_KEY = "wecast:voiceCatalog:v4";
 const CACHE_TTL_MS = 30 * 60 * 1000;
 
 let memoryCatalog = null;
@@ -88,10 +88,15 @@ async function fetchAllPagesForFilters(fetchPage, applied, maxPages = 8) {
 
 async function expandCatalogWithLanguageAccentBuckets(fetchPage) {
   if (!fetchPage) return [];
+  const arabicAccentRequests = ARABIC_ACCENT_ALIASES.flatMap((alias) =>
+    Array.from(new Set([alias.display, ...(alias.keywords || [])]))
+      .filter(Boolean)
+      .map((accent) => ({ language: "ar", accent }))
+  );
   const accentRequests = [
     { language: "ar" },
     { language: "en" },
-    ...ARABIC_ACCENT_OPTIONS.map((accent) => ({ language: "ar", accent })),
+    ...arabicAccentRequests,
     ...ENGLISH_ACCENT_OPTIONS.map((accent) => ({ language: "en", accent })),
   ];
   const results = await Promise.allSettled(

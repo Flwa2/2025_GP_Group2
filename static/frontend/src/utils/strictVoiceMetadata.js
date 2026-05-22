@@ -4,6 +4,7 @@ import {
   ARABIC_DIALECT_ACCENT_TOKENS,
   normalizeAccentToken,
 } from "./voiceAccentConstants";
+import { curatedArabicDialectTokenForVoice } from "./arabicVoiceDialectMap";
 
 const FACET_SPLIT = /[,;/|]/;
 
@@ -616,6 +617,14 @@ const structuredValueMatchesArabicAlias = (raw, alias, accentToken) => {
   return false;
 };
 
+const structuredAccentValueMatchesArabicAlias = (raw, alias) => {
+  const text = normalizeSearchText(raw);
+  if (!text) return false;
+  if ((alias.keywords || []).includes(text)) return true;
+  if (alias.patterns?.some((pattern) => pattern.test(text))) return true;
+  return false;
+};
+
 const compatibleArabicAccentTokens = (accentToken) =>
   ARABIC_ACCENT_COMPATIBLE_TOKENS[accentToken] || new Set([accentToken]);
 
@@ -624,7 +633,33 @@ const arabicAliasesForAccentToken = (accentToken) => {
   return ARABIC_ACCENT_ALIASES.filter((entry) => compatibleTokens.has(entry.token));
 };
 
+const hasExplicitArabicDialectProof = (voice, accentToken) => {
+  const curatedDialect = curatedArabicDialectTokenForVoice(voice);
+  if (curatedDialect && compatibleArabicAccentTokens(accentToken).has(curatedDialect)) return true;
+
+  const aliases = arabicAliasesForAccentToken(accentToken);
+  if (!aliases.length) return false;
+
+  const topAccentValues = [voice?.accent, voice?.labels?.accent, voice?.labels?.Accent].filter(Boolean);
+  for (const value of topAccentValues) {
+    if (aliases.some((alias) => structuredAccentValueMatchesArabicAlias(value, alias))) {
+      return true;
+    }
+  }
+
+  for (const profile of collectLanguageAccentProfilesFromVoice(voice)) {
+    if (profileLanguageCode(profile) !== "ar") continue;
+    if (aliases.some((alias) => structuredAccentValueMatchesArabicAlias(profile.accent, alias))) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
 const hasStructuredArabicAccentPhrase = (voice, accentToken) => {
+  if (hasExplicitArabicDialectProof(voice, accentToken)) return true;
+
   const aliases = arabicAliasesForAccentToken(accentToken);
   if (!aliases.length) return false;
   for (const value of collectStructuredFieldValues(voice)) {
@@ -634,9 +669,6 @@ const hasStructuredArabicAccentPhrase = (voice, accentToken) => {
   }
   for (const profile of collectLanguageAccentProfilesFromVoice(voice)) {
     if (profileLanguageCode(profile) !== "ar") continue;
-    if (aliases.some((alias) => structuredValueMatchesArabicAlias(profile.accent, alias, alias.token))) {
-      return true;
-    }
     if (aliases.some((alias) => structuredValueMatchesArabicAlias(profile.locale, alias, alias.token))) {
       return true;
     }
@@ -651,7 +683,7 @@ const conflictingArabicAccentPhrase = (voice, accentToken) => {
   const compatibleTokens = compatibleArabicAccentTokens(accentToken);
   for (const alias of ARABIC_ACCENT_ALIASES) {
     if (compatibleTokens.has(alias.token)) continue;
-    if (hasStructuredArabicAccentPhrase(voice, alias.token)) return alias.token;
+    if (hasExplicitArabicDialectProof(voice, alias.token)) return alias.token;
   }
   return "";
 };
@@ -682,40 +714,6 @@ const canUseEnglishLanguagePoolFallback = (voice, accentToken) => {
 };
 
 const proveArabicAccent = (voice, accentToken) => {
-  if (accentToken === "arabic-general") {
-    const allLocales = collectStructuredLocales(voice);
-    if (!voiceMatchesLanguageForAvailability(voice, "ar")) {
-      return {
-        pass: false,
-        reason: "not-arabic-for-general",
-        normalizedAccents: [],
-        locales: allLocales,
-      };
-    }
-    if (hasBlockedStructuredPhrase(voice)) {
-      return {
-        pass: false,
-        reason: "blocked-structured-phrase",
-        normalizedAccents: [],
-        locales: allLocales,
-      };
-    }
-    if (hasConflictingLocalesForLanguage(voice, "ar")) {
-      return {
-        pass: false,
-        reason: "conflicting-non-arabic-locale",
-        normalizedAccents: [],
-        locales: allLocales,
-      };
-    }
-    return {
-      pass: true,
-      reason: "arabic-general-language-pool-fallback",
-      normalizedAccents: ["arabic-general"],
-      locales: collectStructuredArabicLocaleTags(voice),
-    };
-  }
-
   const requiredLocales = ARABIC_ACCENT_REQUIRED_LOCALES[accentToken];
   if (!requiredLocales) {
     return { pass: false, reason: "unsupported-arabic-accent", normalizedAccents: [], locales: [] };
@@ -740,6 +738,15 @@ const proveArabicAccent = (voice, accentToken) => {
       reason: "conflicting-non-arabic-locale",
       normalizedAccents: [],
       locales: allLocales,
+    };
+  }
+
+  if (hasExplicitArabicDialectProof(voice, accentToken)) {
+    return {
+      pass: true,
+      reason: `arabic-${accentToken}-explicit-proof`,
+      normalizedAccents: [accentToken],
+      locales: arLocales,
     };
   }
 

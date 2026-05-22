@@ -54,6 +54,10 @@ const fixtures = {
     name: "Saudi Host",
     languageAccents: [{ language: "ar", locale: "ar-SA", accent: "" }],
   },
+  arabicEgyptian: {
+    name: "Egyptian Host",
+    languageAccents: [{ language: "ar", locale: "ar-EG", accent: "egyptian" }],
+  },
   arabicGenericMale: {
     name: "Omar",
     gender: "male",
@@ -77,9 +81,9 @@ const cases = [
   {
     label: "Arabic + Saudi + Male",
     applied: { language: "ar", accent: "arabic-saudi", gender: "male" },
-    expectNames: ["Omar"],
-    expectAlsoNames: ["Saudi Host"],
+    expectNames: ["Saudi Host"],
   },
+  { label: "Arabic + Egyptian", applied: { language: "ar", accent: "arabic-egyptian" }, expectNames: ["Egyptian Host"] },
   { label: "No lang/accent/gender", applied: {}, expectMin: catalog.length },
 ];
 
