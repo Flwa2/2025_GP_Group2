@@ -154,6 +154,7 @@ export const strictFilterVoicesByLanguageAccent = (
   if (
     !out.length &&
     (selectedLanguage || selectedAccent) &&
+    shouldLogStrictVoiceFilter() &&
     typeof console !== "undefined" &&
     typeof console.info === "function"
   ) {

@@ -8,12 +8,7 @@ import { normalizeGenderToken } from "./voiceGender";
 import { voiceMatchesAge } from "./voiceAgeFilters";
 import { voiceMatchesPitch, voiceMatchesTone } from "./voiceTonePitchFilters";
 import { normalizeCategoryLabelKey, voiceMatchesRoleCategory } from "./voiceRoleCategories";
-import { strictFilterVoicesByLanguageAccent } from "./strictVoiceFilter";
-import {
-  isCoreLanguageAccentGenderFilter,
-  logVoiceFilterAvailability,
-  partitionVoicesByLanguageAccentTier,
-} from "./voiceFilterAvailability";
+import { strictFilterVoicesByLanguageAccent, shouldLogStrictVoiceFilter } from "./strictVoiceFilter";
 
 const voiceSearchHaystack = (voice) => {
   const parts = [voice?.name, voice?.description, voice?.category];
@@ -61,32 +56,8 @@ export const getStrictFilteredVoicePool = (voices, applied = {}) => {
     out = out.filter((voice) => voiceSearchHaystack(voice).includes(q));
   }
 
-  const langAccentGender = { language: lang, accent, gender };
-  let availabilityStats = null;
-
   if (lang || accent || gender) {
-    if (isCoreLanguageAccentGenderFilter(applied) && accent) {
-      const tiered = partitionVoicesByLanguageAccentTier(out, langAccentGender);
-      availabilityStats = {
-        strictCount: tiered.strictCount,
-        fallbackCount: tiered.fallbackCount,
-        finalCount: tiered.finalCount,
-      };
-      out = tiered.pool;
-    } else {
-      out = strictFilterVoicesByLanguageAccent(out, langAccentGender);
-      if (accent) {
-        availabilityStats = {
-          strictCount: out.length,
-          fallbackCount: 0,
-          finalCount: out.length,
-        };
-      }
-    }
-  }
-
-  if (availabilityStats && (lang || accent)) {
-    logVoiceFilterAvailability("getStrictFilteredVoicePool", applied, availabilityStats);
+    out = strictFilterVoicesByLanguageAccent(out, { language: lang, accent, gender });
   }
 
   if (age) {
@@ -115,8 +86,9 @@ export const firstVoiceIdFromStrictPool = (pool) => {
   return first ? getVoiceIdFromPoolItem(first) : "";
 };
 
-/** Always-on debug log after filter modal Done (Create + Edit). */
+/** Debug log after filter modal Done (dev / wecastVoiceFilterDebug=1 only). */
 export const logStrictDropdownFinal = (context, applied, pool) => {
+  if (!shouldLogStrictVoiceFilter()) return;
   if (typeof console === "undefined" || typeof console.info !== "function") return;
   const names = (pool || [])
     .map(getVoiceDisplayNameFromPoolItem)

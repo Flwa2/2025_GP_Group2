@@ -1,16 +1,83 @@
 import { normalizeLanguageFilterValue } from "../components/voiceFilterLanguage";
 import { ARABIC_ACCENT_ALIASES, ENGLISH_ACCENT_ALIASES, normalizeAccentToken } from "./voiceAccentConstants";
+import { normalizeGenderToken } from "./voiceGender";
+import { strictAccentDecision, strictLanguageDecision } from "./strictVoiceMetadata";
+import { strictVoiceMatchesLanguageAccent, shouldLogStrictVoiceFilter } from "./strictVoiceFilter";
 
 const uniqueSortedDisplay = (displays) =>
   Array.from(new Set(displays.map((x) => String(x).trim()).filter(Boolean))).sort((a, b) =>
     a.localeCompare(b, undefined, { sensitivity: "base" })
   );
-import { normalizeGenderToken } from "./voiceGender";
-import { strictVoiceMatchesLanguageAccent } from "./strictVoiceFilter";
 
 const ACCENT_ALIASES_BY_LANGUAGE = {
   ar: ARABIC_ACCENT_ALIASES,
   en: ENGLISH_ACCENT_ALIASES,
+};
+
+let accentAvailabilityCache = { catalogKey: "", map: null };
+
+const catalogCacheKey = (voices) => {
+  const list = voices || [];
+  if (!list.length) return "0";
+  const first = list[0]?.providerVoiceId || list[0]?.id || "";
+  const last = list[list.length - 1]?.providerVoiceId || list[list.length - 1]?.id || "";
+  return `${list.length}:${first}:${last}`;
+};
+
+/** Invalidate when voice catalog is replaced (e.g. after fetch). */
+export const invalidateAccentAvailabilityCache = () => {
+  accentAvailabilityCache = { catalogKey: "", map: null };
+};
+
+/**
+ * One pass per catalog: count voices per language+accent (gender excluded — accent list is not gender-scoped).
+ */
+export const getAccentAvailabilityMap = (voices) => {
+  const key = catalogCacheKey(voices);
+  if (accentAvailabilityCache.catalogKey === key && accentAvailabilityCache.map) {
+    return accentAvailabilityCache.map;
+  }
+
+  const map = new Map();
+
+  for (const voice of voices || []) {
+    for (const lang of Object.keys(ACCENT_ALIASES_BY_LANGUAGE)) {
+      const langDecision = strictLanguageDecision(voice, lang);
+      if (!langDecision.pass) continue;
+
+      for (const alias of ACCENT_ALIASES_BY_LANGUAGE[lang]) {
+        if (alias.token === "neutral") continue;
+        const accentDecision = strictAccentDecision(voice, lang, alias.token);
+        if (!accentDecision.pass) continue;
+        const mapKey = `${lang}|${alias.display}`;
+        map.set(mapKey, (map.get(mapKey) || 0) + 1);
+      }
+    }
+  }
+
+  accentAvailabilityCache = { catalogKey: key, map };
+  return map;
+};
+
+export const buildAvailableAccentOptionsForLanguage = (
+  voices,
+  language,
+  defaultLanguage = "en"
+) => {
+  const normalizedLanguage = normalizeLanguageFilterValue(language || defaultLanguage);
+  const aliases = ACCENT_ALIASES_BY_LANGUAGE[normalizedLanguage] || [];
+  if (!aliases.length) return [];
+
+  const availability = getAccentAvailabilityMap(voices);
+  const displays = [];
+
+  for (const alias of aliases) {
+    if (alias.token === "neutral") continue;
+    const count = availability.get(`${normalizedLanguage}|${alias.display}`) || 0;
+    if (count > 0) displays.push(alias.display);
+  }
+
+  return uniqueSortedDisplay(displays);
 };
 
 /** True when only language + accent + gender are active (no tone/pitch/age/category/search). */
@@ -68,12 +135,7 @@ export const partitionVoicesByLanguageAccentTier = (
   };
 };
 
-export const countVoicesForAccentOption = (
-  voices,
-  language,
-  accentDisplay,
-  { gender = "" } = {}
-) => {
+export const countVoicesForAccentOption = (voices, language, accentDisplay, { gender = "" } = {}) => {
   const lang = normalizeLanguageFilterValue(language);
   const accentToken = normalizeAccentToken(accentDisplay);
   if (!lang || !accentToken) return 0;
@@ -84,29 +146,8 @@ export const countVoicesForAccentOption = (
   }).finalCount;
 };
 
-/**
- * Accent dropdown options derived from catalog — only accents with ≥1 matching voice.
- */
-export const buildAvailableAccentOptionsForLanguage = (
-  voices,
-  language,
-  defaultLanguage = "en",
-  { gender = "" } = {}
-) => {
-  const normalizedLanguage = normalizeLanguageFilterValue(language || defaultLanguage);
-  const aliases = ACCENT_ALIASES_BY_LANGUAGE[normalizedLanguage] || [];
-  const displays = [];
-
-  for (const alias of aliases) {
-    if (alias.token === "neutral") continue;
-    const count = countVoicesForAccentOption(voices, normalizedLanguage, alias.display, { gender });
-    if (count > 0) displays.push(alias.display);
-  }
-
-  return uniqueSortedDisplay(displays);
-};
-
 export const logVoiceFilterAvailability = (context, applied, stats = {}) => {
+  if (!shouldLogStrictVoiceFilter()) return;
   if (typeof console === "undefined" || typeof console.info !== "function") return;
   console.info("[VOICE FILTER AVAILABILITY]", {
     context,

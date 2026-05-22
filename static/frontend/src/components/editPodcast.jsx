@@ -35,6 +35,7 @@ import {
   hasActiveModalVoiceFilters,
 } from "../utils/voiceFilterModal";
 import { getStrictFilteredVoicePool } from "../utils/strictVoicePool";
+import { invalidateAccentAvailabilityCache } from "../utils/voiceFilterAvailability";
 import {
   appliedFiltersFromModalDone,
   appliedVoiceFiltersForSpeakerGender,
@@ -621,6 +622,13 @@ export default function EditPodcast() {
 
   // Voice related - matching CreatePro
   const [voices, setVoices] = useState([]);
+  const accentOptionsByLanguage = useMemo(() => {
+    if (!voices.length) return { ar: [], en: [] };
+    return {
+      ar: buildAccentOptionsForLanguage(voices, "ar", DEFAULT_VOICE_LANGUAGE),
+      en: buildAccentOptionsForLanguage(voices, "en", DEFAULT_VOICE_LANGUAGE),
+    };
+  }, [voices]);
   const [loadingVoices, setLoadingVoices] = useState(true);
   const [speakerVoiceFilters, setSpeakerVoiceFilters] = useState({});
   const [speakerVoiceAppliedFilters, setSpeakerVoiceAppliedFilters] = useState({});
@@ -940,6 +948,7 @@ useEffect(() => {
           console.debug("[WeCast voice filters] Edit age summary", buildVoiceAgeDebugSummary(raw));
         }
 
+        invalidateAccentAvailabilityCache();
         setVoices(raw);
       } catch (e) {
         console.error("Failed to load voices", e);
@@ -2478,14 +2487,7 @@ const exportScript = async (format = "pdf") => {
           speakers[idx]
         );
         const languageStrictPool = getStrictFilteredVoicePool(voices, langOnlyApplied);
-        const speakerGenderTok = normalizeGenderToken(speakers[idx]?.gender);
-        const modalGenderTok =
-          getSafeModalGenderFilter(f.gender) === "__all__"
-            ? speakerGenderTok
-            : normalizeGenderToken(f.gender);
-        const accentOptions = buildAccentOptionsForLanguage(voices, selectedLanguage, DEFAULT_VOICE_LANGUAGE, {
-          gender: modalGenderTok,
-        });
+        const accentOptions = accentOptionsByLanguage[selectedLanguage] || [];
         const ageOptions = collectVoiceAgeOptions([
           ...VOICE_AGE_BUCKETS.map((age) => ({ age })),
           ...languageStrictPool,

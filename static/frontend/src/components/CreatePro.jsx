@@ -64,6 +64,7 @@ import {
 } from "../utils/createDraftSession";
 import { normalizeGenderToken, isNeutralGenderValue } from "../utils/voiceGender";
 import { getStrictFilteredVoicePool } from "../utils/strictVoicePool";
+import { invalidateAccentAvailabilityCache } from "../utils/voiceFilterAvailability";
 import {
     appliedFiltersFromModalDone,
     buildAppliedVoiceFiltersForSpeaker,
@@ -608,15 +609,14 @@ const loadSharedVoiceCatalog = useCallback(async () => {
 
 useEffect(() => {
     if (!librarySeedVoices.length) return;
-    setVoiceAccentOptionsByLanguage((prev) => {
-        const next = { ...prev };
-        for (const language of VOICE_LANGUAGE_OPTIONS) {
-            const normalizedLanguage = normalizeLanguageFilterValue(language);
-            const options = buildAccentOptionsForLanguage(librarySeedVoices, normalizedLanguage);
-            if (options.length) next[normalizedLanguage] = options;
-        }
-        return next;
-    });
+    invalidateAccentAvailabilityCache();
+    const next = {};
+    for (const language of VOICE_LANGUAGE_OPTIONS) {
+        const normalizedLanguage = normalizeLanguageFilterValue(language);
+        const options = buildAccentOptionsForLanguage(librarySeedVoices, normalizedLanguage);
+        if (options.length) next[normalizedLanguage] = options;
+    }
+    setVoiceAccentOptionsByLanguage(next);
 }, [librarySeedVoices]);
 
 const applyVoiceLibraryForSpeaker = useCallback(
@@ -730,6 +730,7 @@ useEffect(() => {
         try {
             const items = await loadSharedVoiceCatalog();
             if (!cancelled) {
+                invalidateAccentAvailabilityCache();
                 setLibrarySeedVoices(items);
                 if (!items.length) {
                     setVoiceLibraryWarning("Unable to load ElevenLabs voices. Showing default voices.");
@@ -2395,24 +2396,20 @@ const exportScript = async (format = "pdf") => {
                                                                         ),
                                                                         accent: "",
                                                                     };
-                                                                    const languageStrictPool = getStrictFilteredVoicePool(
-                                                                        catalogForModal,
-                                                                        langOnlyApplied
-                                                                    );
+                                                                    const languageStrictPool = f.open
+                                                                        ? getStrictFilteredVoicePool(
+                                                                              catalogForModal,
+                                                                              langOnlyApplied
+                                                                          )
+                                                                        : [];
                                                                     const stableOptionVoices = languageStrictPool;
-                                                                    const speakerGenderTok = normalizeGenderToken(speakers?.[i]?.gender);
-                                                                    const modalGenderTok =
-                                                                        safeGenderFilter === "__all__"
-                                                                            ? speakerGenderTok
-                                                                            : normalizeGenderToken(safeGenderFilter);
-                                                                    const accentOptionsForLanguage = (language) =>
+                                                                    const accentOptions =
+                                                                        voiceAccentOptionsByLanguage[selectedLanguage] ||
                                                                         buildAccentOptionsForLanguage(
                                                                             catalogForModal,
-                                                                            language,
-                                                                            DEFAULT_VOICE_LANGUAGE,
-                                                                            { gender: modalGenderTok }
+                                                                            selectedLanguage,
+                                                                            DEFAULT_VOICE_LANGUAGE
                                                                         );
-                                                                    const accentOptions = accentOptionsForLanguage(selectedLanguage);
                                                                     const categoryOptions = roleCategoryOptionsForVoices(stableOptionVoices);
                                                                     const ageOptions = collectVoiceAgeOptions([
                                                                         ...VOICE_AGE_BUCKETS.map((age) => ({ age })),

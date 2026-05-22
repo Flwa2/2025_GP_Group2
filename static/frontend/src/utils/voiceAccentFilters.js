@@ -304,8 +304,9 @@ export const voiceMatchesAccentForLanguage = (voice, language, accentValue) =>
 /**
  * Build accent dropdown options for a language from catalog availability (no hardcoded lists).
  */
-export const buildAccentOptionsForLanguage = (voices, language, defaultLanguage = "en", options = {}) =>
-  buildAvailableAccentOptionsForLanguage(voices, language, defaultLanguage, options);
+/** Accent options from catalog availability (gender not applied — see voiceFilterAvailability). */
+export const buildAccentOptionsForLanguage = (voices, language, defaultLanguage = "en") =>
+  buildAvailableAccentOptionsForLanguage(voices, language, defaultLanguage);
 
 export const countVoicesMatchingAccentForLanguage = (voices, language, accentValue, options = {}) => {
   const normalizedLanguage = normalizeLanguageFilterValue(language);
