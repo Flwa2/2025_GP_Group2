@@ -120,6 +120,7 @@ export const strictFilterVoicesByLanguageAccent = (
   }
 
   const out = [];
+  const rejectSamples = [];
   for (const voice of voices || []) {
     const decision = strictVoiceMatchesLanguageAccent(voice, {
       language: selectedLanguage,
@@ -140,7 +141,35 @@ export const strictFilterVoicesByLanguageAccent = (
         });
       }
       out.push(voice);
+    } else if (rejectSamples.length < 30) {
+      rejectSamples.push({
+        voice: voiceDebugLabel(voice),
+        reason: decision.reason,
+        locales: decision.locales || [],
+        languages: decision.normalizedLanguage || [],
+      });
     }
+  }
+
+  if (
+    !out.length &&
+    (selectedLanguage || selectedAccent) &&
+    typeof console !== "undefined" &&
+    typeof console.info === "function"
+  ) {
+    const reasonCounts = rejectSamples.reduce((acc, row) => {
+      const key = String(row.reason || "unknown");
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    console.info("[STRICT VOICE FILTER EMPTY]", {
+      selectedLanguage,
+      selectedAccent,
+      selectedGender: gender || "",
+      candidateCount: (voices || []).length,
+      reasonCounts,
+      sampleRejections: rejectSamples.slice(0, 15),
+    });
   }
 
   return out;

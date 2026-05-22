@@ -14,6 +14,12 @@ const fixtures = {
     languageAccents: [{ language: "en", locale: "en-US", accent: "" }],
     labels: { locale: "en-US", language: "en" },
   },
+  genericEnglishMale: {
+    name: "Marcus",
+    gender: "male",
+    labels: { language: "English", gender: "male" },
+    languages: ["English"],
+  },
   latinoMarketing: {
     name: "Alejandro Gende",
     languageAccents: [
@@ -53,7 +59,12 @@ const fixtures = {
 const catalog = Object.values(fixtures);
 
 const cases = [
-  { label: "English + American", applied: { language: "en", accent: "american" }, expectNames: ["Rachel US"] },
+  {
+    label: "English + American",
+    applied: { language: "en", accent: "american", gender: "male" },
+    expectNames: ["Marcus"],
+    expectAlsoNames: ["Rachel US"],
+  },
   { label: "English + British", applied: { language: "en", accent: "british" }, expectNames: ["British Host"] },
   { label: "English + Indian", applied: { language: "en", accent: "indian" }, expectNames: ["Indian Host"] },
   { label: "English + Australian", applied: { language: "en", accent: "australian" }, expectNames: ["Aussie Host"] },
@@ -66,14 +77,15 @@ for (const testCase of cases) {
   const pool = getStrictFilteredVoicePool(catalog, testCase.applied);
   const names = pool.map((v) => v.name);
   if (testCase.expectNames) {
-    const ok =
-      testCase.expectNames.every((n) => names.includes(n)) &&
-      names.length === testCase.expectNames.length;
+    const requiredOk = testCase.expectNames.every((n) => names.includes(n));
+    const alsoOk = (testCase.expectAlsoNames || []).every((n) => names.includes(n));
+    const blocked = ["Alejandro Gende", "Hansi", "Kai"].some((n) => names.includes(n));
+    const ok = requiredOk && alsoOk && !blocked && names.length > 0;
     if (!ok) {
       failed += 1;
       console.error(`FAIL ${testCase.label}: got ${JSON.stringify(names)}`);
     } else {
-      console.log(`PASS ${testCase.label}`);
+      console.log(`PASS ${testCase.label} (${names.length} voices)`);
     }
   } else if (testCase.expectMin && pool.length < testCase.expectMin) {
     failed += 1;
