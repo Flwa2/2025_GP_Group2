@@ -2,7 +2,7 @@ import { VOICE_AGE_BUCKETS } from "./voiceAgeFilters";
 import { ARABIC_ACCENT_OPTIONS, ENGLISH_ACCENT_OPTIONS } from "./voiceAccentFilters";
 import { invalidateVoiceFilterComputeCache } from "./voiceFilterComputeCache";
 
-const CACHE_STORAGE_KEY = "wecast:voiceCatalog:v2";
+const CACHE_STORAGE_KEY = "wecast:voiceCatalog:v3";
 const CACHE_TTL_MS = 30 * 60 * 1000;
 
 let memoryCatalog = null;

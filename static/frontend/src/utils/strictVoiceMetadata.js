@@ -592,20 +592,6 @@ const proveEnglishAccent = (voice, accentToken) => {
   };
 };
 
-export const detectStructuredVoiceAccents = (voice, selectedLanguage) => {
-  const lang = normalizeLanguageFilterValue(selectedLanguage);
-  if (lang !== "en") return [];
-  const tokens = [];
-  for (const accentToken of Object.keys(ENGLISH_ACCENT_LOCALE_REQUIREMENTS)) {
-    if (accentToken === "neutral") continue;
-    const proof = proveEnglishAccent(voice, accentToken);
-    if (!proof.pass) continue;
-    if (String(proof.reason || "").endsWith("-generic-fallback")) continue;
-    tokens.push(accentToken);
-  }
-  return tokens;
-};
-
 const hasAmbiguousArabicLocales = (voice, accentToken) => {
   const arLocales = collectStructuredArabicLocaleTags(voice);
   const regional = arLocales.filter((tag) => tag.includes("-"));
@@ -803,6 +789,33 @@ const proveArabicAccent = (voice, accentToken) => {
     normalizedAccents: [],
     locales: allLocales,
   };
+};
+
+export const detectStructuredVoiceAccents = (voice, selectedLanguage) => {
+  const lang = normalizeLanguageFilterValue(selectedLanguage);
+  const tokens = [];
+
+  if (lang === "en") {
+    for (const accentToken of Object.keys(ENGLISH_ACCENT_LOCALE_REQUIREMENTS)) {
+      if (accentToken === "neutral") continue;
+      const proof = proveEnglishAccent(voice, accentToken);
+      if (!proof.pass) continue;
+      if (String(proof.reason || "").endsWith("-generic-fallback")) continue;
+      tokens.push(accentToken);
+    }
+    return tokens;
+  }
+
+  if (lang === "ar") {
+    for (const accentToken of Object.keys(ARABIC_ACCENT_REQUIRED_LOCALES)) {
+      const proof = proveArabicAccent(voice, accentToken);
+      if (!proof.pass) continue;
+      tokens.push(accentToken);
+    }
+    return tokens;
+  }
+
+  return tokens;
 };
 
 export const strictAccentDecision = (voice, selectedLanguage, selectedAccent) => {
