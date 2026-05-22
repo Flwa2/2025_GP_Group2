@@ -64,6 +64,14 @@ import {
 } from "../utils/createDraftSession";
 import { normalizeGenderToken, isNeutralGenderValue } from "../utils/voiceGender";
 import { clientRefineLibraryVoices } from "../utils/voiceLibraryRefine";
+import {
+    appliedFiltersFromModalDone,
+    buildAppliedVoiceFiltersForSpeaker,
+    firstVoiceIdFromPool,
+    logVoiceDropdownDebug,
+    modalFiltersFromApplied,
+    pickVoiceIdFromFilteredPool,
+} from "../utils/voiceSpeakerFilterApply";
 import { ensureVoiceLibraryCatalog, getCachedVoiceCatalog } from "../utils/voiceLibraryCache";
 
 import { API_BASE, getAuthHeaders } from "../utils/api";
@@ -531,9 +539,14 @@ const [speakerVoiceFilters, setSpeakerVoiceFilters] = useState({});
 // { [index]: { open, q, gender, language, category, tone, pitch, accent, age } }
 
 const speakerLibInitRef = useRef(new Set());
+const speakersRef = useRef([]);
 const speakerVoiceLibraryRef = useRef({});
 const speakerVoiceAppliedFiltersRef = useRef({});
 const speakerRefinedVoicesRef = useRef({});
+
+useEffect(() => {
+    speakersRef.current = speakers;
+}, [speakers]);
 
 const getVoiceId = (v) => v?.providerVoiceId || v?.id || v?.docId || "";
 
@@ -607,8 +620,13 @@ useEffect(() => {
 }, [librarySeedVoices]);
 
 const applyVoiceLibraryForSpeaker = useCallback(
-    async (speakerIndex, applied) => {
-        setSpeakerVoiceAppliedFilters((prev) => ({ ...prev, [speakerIndex]: { ...applied } }));
+    async (speakerIndex, applied, { debugContext = "" } = {}) => {
+        const speaker = speakersRef.current?.[speakerIndex];
+        const builtApplied = applied?.language
+            ? applied
+            : buildAppliedVoiceFiltersForSpeaker(applied, speaker);
+
+        setSpeakerVoiceAppliedFilters((prev) => ({ ...prev, [speakerIndex]: { ...builtApplied } }));
         setSpeakerVoiceLibrary((prev) => ({
             ...prev,
             [speakerIndex]: {
@@ -623,22 +641,24 @@ const applyVoiceLibraryForSpeaker = useCallback(
         }));
         try {
             const catalog = await loadSharedVoiceCatalog();
-            const refined = clientRefineLibraryVoices(catalog, applied);
+            const refined = clientRefineLibraryVoices(catalog, builtApplied);
             speakerRefinedVoicesRef.current[speakerIndex] = refined;
-            const pageSize = VOICE_LIBRARY_PAGE_SIZE;
-            const firstPage = refined.slice(0, pageSize);
             setSpeakerVoiceLibrary((prev) => ({
                 ...prev,
                 [speakerIndex]: {
-                    rawItems: firstPage,
-                    hasMore: refined.length > pageSize,
+                    rawItems: refined,
+                    hasMore: false,
                     totalCount: refined.length,
                     loading: false,
-                    nextPage: refined.length > pageSize ? 1 : null,
+                    nextPage: null,
                     error: null,
                     preFiltered: true,
                 },
             }));
+            if (debugContext) {
+                logVoiceDropdownDebug(debugContext, builtApplied, refined);
+            }
+            return refined;
         } catch (e) {
             console.error(e);
             let fallbackItems = [];
@@ -651,19 +671,24 @@ const applyVoiceLibraryForSpeaker = useCallback(
                 setElevenLabsAuthFailed(true);
             }
             setVoiceLibraryWarning("Unable to load ElevenLabs voices. Showing default voices.");
-            speakerRefinedVoicesRef.current[speakerIndex] = fallbackItems;
+            const refinedFallback = clientRefineLibraryVoices(fallbackItems, builtApplied);
+            speakerRefinedVoicesRef.current[speakerIndex] = refinedFallback;
             setSpeakerVoiceLibrary((prev) => ({
                 ...prev,
                 [speakerIndex]: {
-                    rawItems: fallbackItems.slice(0, VOICE_LIBRARY_PAGE_SIZE),
-                    hasMore: fallbackItems.length > VOICE_LIBRARY_PAGE_SIZE,
-                    totalCount: fallbackItems.length,
+                    rawItems: refinedFallback,
+                    hasMore: false,
+                    totalCount: refinedFallback.length,
                     loading: false,
-                    nextPage: fallbackItems.length > VOICE_LIBRARY_PAGE_SIZE ? 1 : null,
-                    error: fallbackItems.length ? null : (e.message || String(e)),
+                    nextPage: null,
+                    error: refinedFallback.length ? null : (e.message || String(e)),
                     preFiltered: true,
                 },
             }));
+            if (debugContext) {
+                logVoiceDropdownDebug(debugContext, builtApplied, refinedFallback);
+            }
+            return refinedFallback;
         }
     },
     [fetchFallbackVoices, loadSharedVoiceCatalog]
@@ -778,7 +803,10 @@ useEffect(() => {
     const t = setTimeout(() => {
         const f = speakerVoiceFilters[i];
         if (!f?.open) return;
-        const applied = filtersModalToApplied(f);
+        const applied = buildAppliedVoiceFiltersForSpeaker(
+            filtersModalToApplied(f),
+            speakers[openFilterSpeakerIdx]
+        );
         const catalog = getCachedVoiceCatalog() || librarySeedVoices;
         if (!catalog.length) {
             setModalLibraryPreview((p) => ({
@@ -2257,15 +2285,13 @@ const exportScript = async (format = "pdf") => {
                                                                             gender: normalizeGenderToken(gender),
                                                                         };
 
-                                                                        // Clear selection until list refreshes; preserve if still valid later.
                                                                         next[i] = {
                                                                             ...next[i],
                                                                             gender,
-                                                                            voiceId: "", // will be re-selected only if still in filtered list
+                                                                            voiceId: "",
                                                                         };
 
-                                                                        // Apply gender to the same voice source used by Select Voice dropdown
-                                                                        applyVoiceLibraryForSpeaker(i, appliedNext);
+                                                                        void applyVoiceLibraryForSpeaker(i, appliedNext);
 
                                                                         return next;
                                                                     });
@@ -2299,27 +2325,21 @@ const exportScript = async (format = "pdf") => {
                                                                 totalCount: 0,
                                                                 nextPage: null,
                                                                 error: null,
+                                                                preFiltered: false,
                                                             };
-                                                            const rawPool = libr.rawItems || [];
-                                                            const catalogSource =
-                                                                getCachedVoiceCatalog()?.length
-                                                                    ? getCachedVoiceCatalog()
-                                                                    : librarySeedVoices?.length
-                                                                      ? librarySeedVoices
-                                                                      : rawPool;
-                                                            const allRefined = clientRefineLibraryVoices(catalogSource, applied);
-                                                            const pageEnd =
-                                                                libr.preFiltered && libr.nextPage != null
-                                                                    ? (libr.nextPage + 1) * VOICE_LIBRARY_PAGE_SIZE
-                                                                    : allRefined.length;
-                                                            const pool = allRefined.slice(0, Math.min(pageEnd, allRefined.length));
+                                                            const pool =
+                                                                libr.preFiltered && !libr.loading
+                                                                    ? speakerRefinedVoicesRef.current[i] ||
+                                                                      libr.rawItems ||
+                                                                      []
+                                                                    : [];
                                                             const poolIds = new Set(pool.map(getVoiceId));
                                                             const currentId = sp.voiceId || "";
-                                                            const safeValue = poolIds.has(currentId) ? currentId : "";
-                                                            const listLoading = libr.loading && rawPool.length === 0;
+                                                            const safeValue = pickVoiceIdFromFilteredPool(currentId, pool);
+                                                            const listLoading = Boolean(libr.loading || !libr.preFiltered);
                                                             const loadFailed = Boolean(!listLoading && libr.error);
                                                             const listEmpty = !listLoading && !loadFailed && pool.length === 0;
-                                                            const hasMoreVoices = Boolean(libr.hasMore && !libr.loading);
+                                                            const hasMoreVoices = false;
                                                             return (
                                                                 <div className="w-full">
                                                                     {listLoading ? (
@@ -2448,7 +2468,21 @@ const exportScript = async (format = "pdf") => {
                                                                                     gender: speakerGenderTok || "__all__",
                                                                                 };
                                                                                 setF(patch);
-                                                                                applyVoiceLibraryForSpeaker(i, filtersModalToApplied(patch));
+                                                                                void applyVoiceLibraryForSpeaker(
+                                                                                    i,
+                                                                                    appliedFiltersFromModalDone(patch, speakers[i]),
+                                                                                    { debugContext: "Create/ClearFilters" }
+                                                                                ).then((pool) => {
+                                                                                    setSpeakers((arr) => {
+                                                                                        const next = [...arr];
+                                                                                        const kept = pickVoiceIdFromFilteredPool(next[i]?.voiceId, pool);
+                                                                                        next[i] = {
+                                                                                            ...next[i],
+                                                                                            voiceId: kept || firstVoiceIdFromPool(pool),
+                                                                                        };
+                                                                                        return next;
+                                                                                    });
+                                                                                });
                                                                             }}
                                                                             onDone={(sanitized) => {
                                                                                 const modalGenderTok = normalizeGenderToken(sanitized.gender);
@@ -2458,22 +2492,29 @@ const exportScript = async (format = "pdf") => {
                                                                                         : modalGenderTok === "male"
                                                                                             ? "Male"
                                                                                             : "";
-                                                                                if (modalGenderLabel) {
+                                                                                const applied = appliedFiltersFromModalDone(sanitized, speakers[i]);
+                                                                                setF({ ...sanitized, open: false });
+                                                                                void applyVoiceLibraryForSpeaker(i, applied, {
+                                                                                    debugContext: "Create/Done",
+                                                                                }).then((pool) => {
                                                                                     setSpeakers((arr) => {
                                                                                         const next = [...arr];
                                                                                         const prev = next[i] || {};
-                                                                                        const prevTok = normalizeGenderToken(prev.gender);
-                                                                                        const genderChanged = prevTok && modalGenderTok && prevTok !== modalGenderTok;
+                                                                                        if (modalGenderLabel) {
+                                                                                            const prevTok = normalizeGenderToken(prev.gender);
+                                                                                            const genderChanged =
+                                                                                                prevTok && modalGenderTok && prevTok !== modalGenderTok;
+                                                                                            prev.gender = modalGenderLabel;
+                                                                                            if (genderChanged) prev.voiceId = "";
+                                                                                        }
+                                                                                        const kept = pickVoiceIdFromFilteredPool(prev.voiceId, pool);
                                                                                         next[i] = {
                                                                                             ...prev,
-                                                                                            gender: modalGenderLabel,
-                                                                                            voiceId: genderChanged ? "" : (prev.voiceId || ""),
+                                                                                            voiceId: kept || firstVoiceIdFromPool(pool),
                                                                                         };
                                                                                         return next;
                                                                                     });
-                                                                                }
-                                                                                setF({ ...sanitized, open: false });
-                                                                                applyVoiceLibraryForSpeaker(i, filtersModalToApplied(sanitized));
+                                                                                });
                                                                             }}
                                                                             preview={modalLibraryPreview[i]}
                                                                         />

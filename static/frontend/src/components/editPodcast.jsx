@@ -36,9 +36,13 @@ import {
 } from "../utils/voiceFilterModal";
 import { clientRefineLibraryVoices } from "../utils/voiceLibraryRefine";
 import {
+  appliedFiltersFromModalDone,
   appliedVoiceFiltersForSpeakerGender,
   buildAppliedVoiceFiltersForSpeaker,
+  firstVoiceIdFromPool,
+  logVoiceDropdownDebug,
   modalFiltersFromApplied,
+  pickVoiceIdFromFilteredPool,
   refineVoicesForSpeakerModalFilters,
 } from "../utils/voiceSpeakerFilterApply";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
@@ -66,6 +70,7 @@ import {
   languageMatchesVoice,
 } from "../utils/voiceAccentFilters";
 import { ensureVoiceLibraryCatalog } from "../utils/voiceLibraryCache";
+import { normalizeGenderToken } from "../utils/voiceGender";
 
 import { API_BASE, apiFetch, getAuthHeaders } from "../utils/api";
 
@@ -629,6 +634,7 @@ export default function EditPodcast() {
   const textareaRef = useRef(null);
   const voicePreviewRef = useRef(null);
   const voicePreviewCacheRef = useRef(new Map());
+  const speakerFilteredPoolsRef = useRef({});
   const [previewLoadingVoiceId, setPreviewLoadingVoiceId] = useState("");
 
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -986,15 +992,35 @@ useEffect(() => {
     });
   }, [speakers]);
 
-  // Voice dropdown uses applied filters only (updated when modal Done/Clear), matching Create.
-  const getFilteredVoicesForSpeaker = useCallback(
-    (speakerIndex) => {
+  const computeFilteredPoolForSpeaker = useCallback(
+    (speakerIndex, appliedOverride) => {
       const speaker = speakers?.[speakerIndex];
       const applied =
-        speakerVoiceAppliedFilters[speakerIndex] || appliedVoiceFiltersForSpeakerGender(speaker);
-      return clientRefineLibraryVoices(voices, applied);
+        appliedOverride ||
+        speakerVoiceAppliedFilters[speakerIndex] ||
+        appliedVoiceFiltersForSpeakerGender(speaker);
+      const pool = clientRefineLibraryVoices(voices, applied);
+      speakerFilteredPoolsRef.current[speakerIndex] = pool;
+      return pool;
     },
     [speakerVoiceAppliedFilters, speakers, voices]
+  );
+
+  useEffect(() => {
+    if (!voices.length || !speakers.length) return;
+    speakers.forEach((speaker, index) => {
+      computeFilteredPoolForSpeaker(index);
+    });
+  }, [voices, speakers, speakerVoiceAppliedFilters, computeFilteredPoolForSpeaker]);
+
+  /** Dropdown options = strict filtered pool only (same list as modal count). */
+  const getFilteredVoicesForSpeaker = useCallback(
+    (speakerIndex) => {
+      const cached = speakerFilteredPoolsRef.current[speakerIndex];
+      if (Array.isArray(cached)) return cached;
+      return computeFilteredPoolForSpeaker(speakerIndex);
+    },
+    [computeFilteredPoolForSpeaker]
   );
 
   const activeModalFilters =
@@ -2038,17 +2064,14 @@ const exportScript = async (format = "pdf") => {
             {speakers.map((speaker, index) => {
               const pool = getFilteredVoicesForSpeaker(index);
               const currentId = speaker.voiceId || "";
-              const selectedVoice =
-                pool.find((voice) => getVoiceId(voice) === currentId) ||
-                voices.find((voice) => getVoiceId(voice) === currentId);
+              const safeValue = pickVoiceIdFromFilteredPool(currentId, pool);
+              const selectedVoice = pool.find((voice) => getVoiceId(voice) === safeValue);
               const selectedVoiceName =
                 getVoiceDisplayName(selectedVoice) ||
                 resolveSpeakerVoiceName(speaker) ||
-                (currentId ? "Selected voice" : "");
-              const safeValue = currentId || "";
+                (safeValue ? "Selected voice" : "");
               const visibleCount = speakerVoiceVisibleCounts[index] || VOICE_PAGE_SIZE;
               const visiblePool = pool.slice(0, visibleCount);
-              const selectedVoiceVisible = currentId && visiblePool.some((voice) => getVoiceId(voice) === currentId);
               const hasMoreVoices = pool.length > visibleCount;
 
               return (
@@ -2089,27 +2112,31 @@ const exportScript = async (format = "pdf") => {
       <select
         value={speaker.gender}
         onChange={(e) => {
+          const gender = e.target.value;
+          const appliedPrev =
+            speakerVoiceAppliedFilters[index] ||
+            appliedVoiceFiltersForSpeakerGender(speakers[index]);
+          const appliedNext = {
+            ...appliedPrev,
+            gender: normalizeGenderToken(gender),
+          };
+          const pool = computeFilteredPoolForSpeaker(index, appliedNext);
+          setSpeakerVoiceAppliedFilters((prev) => ({ ...prev, [index]: appliedNext }));
           setSpeakers((arr) => {
-            const gender = e.target.value;
             const next = [...arr];
-
-            // Voices used by OTHER speakers
             const usedIds = new Set(
-              next
-                .filter((_, idx) => idx !== index)
-                .map((s) => s.voiceId)
-                .filter(Boolean)
+              next.filter((_, idx) => idx !== index).map((s) => s.voiceId).filter(Boolean)
             );
-
-            const voiceId = defaultVoiceForGender(gender, usedIds, voices);
-
+            let voiceId = pickVoiceIdFromFilteredPool(next[index].voiceId, pool);
+            if (!voiceId) {
+              voiceId = pool.map(getVoiceId).find((id) => id && !usedIds.has(id)) || "";
+            }
             next[index] = {
               ...next[index],
               gender,
               voiceId,
               voiceName: getVoiceNameById(voiceId),
             };
-
             return next;
           });
           setSpeakerVoiceVisibleCounts((prev) => ({
@@ -2196,9 +2223,7 @@ const exportScript = async (format = "pdf") => {
                                     return;
                                   }
                                   const newSpeakers = [...speakers];
-                                  const selected =
-                                    pool.find((v) => getVoiceId(v) === newVoice) ||
-                                    voices.find((v) => getVoiceId(v) === newVoice);
+                                  const selected = pool.find((v) => getVoiceId(v) === newVoice);
                                   newSpeakers[index] = {
                                     ...newSpeakers[index],
                                     voiceId: newVoice,
@@ -2213,9 +2238,6 @@ const exportScript = async (format = "pdf") => {
                                 className={`w-full appearance-none pr-10 px-3 py-2 rounded-lg ${studioFieldClass} [color-scheme:light] dark:[color-scheme:dark]`}
                               >
                                 <option value="">Select a voice</option>
-                                {currentId && !selectedVoiceVisible ? (
-                                  <option value={currentId}>{selectedVoiceName}</option>
-                                ) : null}
                                 {visiblePool.map((v) => {
                                   const vid = getVoiceId(v);
                                   const isTaken = speakers.some(
@@ -2233,17 +2255,15 @@ const exportScript = async (format = "pdf") => {
 
 <button
   onClick={() => {
-    const selected =
-      pool.find((v) => getVoiceId(v) === currentId) ||
-      voices.find((v) => getVoiceId(v) === currentId);
-    previewVoice(currentId, selected || null);
+    const selected = pool.find((v) => getVoiceId(v) === safeValue);
+    previewVoice(safeValue, selected || null);
   }}
-  disabled={!currentId || previewLoadingVoiceId === currentId}
+  disabled={!safeValue || previewLoadingVoiceId === safeValue}
   className={`inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-xl border border-purple-500 px-3 py-2 text-sm font-semibold text-purple-600 transition hover:bg-purple-50 disabled:opacity-50 dark:hover:bg-purple-900/20 sm:h-[44px] sm:flex-none sm:px-5 sm:text-base ${isRTL ? "flex-row-reverse" : ""}`}
-  title={previewLoadingVoiceId === currentId ? "Generating preview..." : "Preview voice"}
+  title={previewLoadingVoiceId === safeValue ? "Generating preview..." : "Preview voice"}
 >
   <span>Preview</span>
-  <Play className={`w-4 h-4 ${previewLoadingVoiceId === currentId ? "animate-pulse" : ""}`} />
+  <Play className={`w-4 h-4 ${previewLoadingVoiceId === safeValue ? "animate-pulse" : ""}`} />
 </button>
                           </div>
                           {hasMoreVoices && (
@@ -2476,18 +2496,40 @@ const exportScript = async (format = "pdf") => {
             formatVoiceCategoryLabel={formatVoiceCategoryLabel}
             onClear={() => {
               const cleared = { ...DEFAULT_MODAL_VOICE_FILTERS, gender: speakerGenderReset };
-              const applied = buildAppliedVoiceFiltersForSpeaker(cleared, speakers[idx]);
+              const applied = appliedFiltersFromModalDone(cleared, speakers[idx]);
               setSpeakerVoiceFilters((prev) => ({ ...prev, [idx]: cleared }));
               setSpeakerVoiceAppliedFilters((prev) => ({ ...prev, [idx]: applied }));
+              const pool = computeFilteredPoolForSpeaker(idx, applied);
+              logVoiceDropdownDebug("Edit/ClearFilters", applied, pool);
+              setSpeakers((prev) => {
+                const next = [...prev];
+                const kept = pickVoiceIdFromFilteredPool(next[idx]?.voiceId, pool);
+                next[idx] = {
+                  ...next[idx],
+                  voiceId: kept || firstVoiceIdFromPool(pool),
+                };
+                return next;
+              });
               setSpeakerVoiceVisibleCounts((prev) => ({ ...prev, [idx]: VOICE_PAGE_SIZE }));
             }}
             onDone={(sanitized) => {
-              const applied = buildAppliedVoiceFiltersForSpeaker(sanitized, speakers[idx]);
+              const applied = appliedFiltersFromModalDone(sanitized, speakers[idx]);
               setSpeakerVoiceFilters((prev) => ({
                 ...prev,
                 [idx]: { ...DEFAULT_MODAL_VOICE_FILTERS, ...sanitized },
               }));
               setSpeakerVoiceAppliedFilters((prev) => ({ ...prev, [idx]: applied }));
+              const pool = computeFilteredPoolForSpeaker(idx, applied);
+              logVoiceDropdownDebug("Edit/Done", applied, pool);
+              setSpeakers((prev) => {
+                const next = [...prev];
+                const kept = pickVoiceIdFromFilteredPool(next[idx]?.voiceId, pool);
+                next[idx] = {
+                  ...next[idx],
+                  voiceId: kept || firstVoiceIdFromPool(pool),
+                };
+                return next;
+              });
               setSpeakerVoiceVisibleCounts((prev) => ({ ...prev, [idx]: VOICE_PAGE_SIZE }));
               setActiveFilterSpeaker(null);
             }}

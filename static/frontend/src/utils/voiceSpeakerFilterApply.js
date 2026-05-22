@@ -62,3 +62,45 @@ export const modalFiltersFromApplied = (applied, speaker = {}) => {
   }
   return { ...DEFAULT_MODAL_VOICE_FILTERS, ...patch };
 };
+
+export const getVoiceIdFromItem = (voice) =>
+  voice?.providerVoiceId || voice?.id || voice?.docId || "";
+
+export const getVoiceDisplayNameFromItem = (voice) =>
+  voice?.name || voice?.displayName || voice?.providerVoiceId || voice?.id || "Unnamed voice";
+
+/** Build applied filters from modal Done payload + speaker card gender. */
+export const appliedFiltersFromModalDone = (sanitizedModal, speaker = {}) =>
+  buildAppliedVoiceFiltersForSpeaker(
+    filtersModalToApplied(sanitizedModal || DEFAULT_MODAL_VOICE_FILTERS),
+    speaker
+  );
+
+export const pickVoiceIdFromFilteredPool = (currentVoiceId, pool) => {
+  const current = String(currentVoiceId || "").trim();
+  if (!current) return "";
+  const ids = new Set((pool || []).map(getVoiceIdFromItem).filter(Boolean));
+  return ids.has(current) ? current : "";
+};
+
+export const firstVoiceIdFromPool = (pool) => {
+  const first = (pool || []).find((voice) => getVoiceIdFromItem(voice));
+  return first ? getVoiceIdFromItem(first) : "";
+};
+
+/** Visible console log after filter Done (always on, per product debug request). */
+export const logVoiceDropdownDebug = (context, applied, pool) => {
+  if (typeof console === "undefined" || typeof console.info !== "function") return;
+  const names = (pool || [])
+    .map(getVoiceDisplayNameFromItem)
+    .filter(Boolean)
+    .slice(0, 10);
+  console.info("[WeCast voice dropdown]", {
+    context,
+    selectedLanguage: applied?.language || "",
+    selectedAccent: applied?.accent || "",
+    selectedGender: applied?.gender || "",
+    dropdownOptionCount: (pool || []).length,
+    firstTenDropdownVoiceNames: names,
+  });
+};
