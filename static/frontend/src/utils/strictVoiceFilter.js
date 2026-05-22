@@ -5,6 +5,7 @@ import { voiceMatchesAge } from "./voiceAgeFilters";
 import { voiceMatchesPitch, voiceMatchesTone } from "./voiceTonePitchFilters";
 import { normalizeCategoryLabelKey, voiceMatchesRoleCategory } from "./voiceRoleCategories";
 import {
+  collectStructuredLocales,
   detectStructuredVoiceAccents,
   detectStructuredVoiceLanguages,
   strictAccentDecision,
@@ -36,10 +37,10 @@ export const shouldLogStrictVoiceFilter = () => {
   }
 };
 
-const logStrictVoiceDecision = (row) => {
+const logStrictVoicePass = (row) => {
   if (!shouldLogStrictVoiceFilter() || typeof console === "undefined") return;
   console.debug(
-    `[strictVoiceFilter] voice="${row.voiceName}" normalizedLanguage=${JSON.stringify(row.normalizedLanguage)} normalizedAccent=${JSON.stringify(row.normalizedAccent)} selectedLanguage=${row.selectedLanguage || ""} selectedAccent=${row.selectedAccent || ""} pass=${row.pass} reason=${row.reason}`
+    `[strictVoiceFilter] PASS voice="${row.voiceName}" locale=${JSON.stringify(row.locales)} normalizedLanguage=${JSON.stringify(row.normalizedLanguage)} normalizedAccent=${JSON.stringify(row.normalizedAccent)} selectedLanguage=${row.selectedLanguage || ""} selectedAccent=${row.selectedAccent || ""} reason=${row.reason}`
   );
 };
 
@@ -86,6 +87,7 @@ export const strictVoiceMatchesLanguageAccent = (voice, { language = "", accent 
       reason: accentDecision.reason,
       normalizedLanguage: langDecision.normalizedLanguages,
       normalizedAccent: accentDecision.normalizedAccents,
+      locales: accentDecision.locales || collectStructuredLocales(voice),
       selectedLanguage,
       selectedAccent,
     };
@@ -96,6 +98,7 @@ export const strictVoiceMatchesLanguageAccent = (voice, { language = "", accent 
     reason: selectedAccent ? accentDecision.reason : langDecision.reason,
     normalizedLanguage: langDecision.normalizedLanguages,
     normalizedAccent: accentDecision.normalizedAccents,
+    locales: accentDecision.locales || collectStructuredLocales(voice),
     selectedLanguage,
     selectedAccent,
   };
@@ -107,7 +110,7 @@ export const strictVoiceMatchesLanguageAccent = (voice, { language = "", accent 
 export const strictFilterVoicesByLanguageAccent = (
   voices,
   { language = "", accent = "", gender = "" } = {},
-  { logEachVoice = shouldLogStrictVoiceFilter() } = {}
+  { logPasses = shouldLogStrictVoiceFilter() } = {}
 ) => {
   const selectedLanguage = normalizeLanguageFilterValue(language) || languageForAccentValue(accent);
   const selectedAccent = accent ? normalizeAccentToken(accent) : "";
@@ -124,19 +127,20 @@ export const strictFilterVoicesByLanguageAccent = (
       gender,
     });
 
-    if (logEachVoice) {
-      logStrictVoiceDecision({
-        voiceName: voiceDebugLabel(voice),
-        normalizedLanguage: decision.normalizedLanguage,
-        normalizedAccent: decision.normalizedAccent,
-        selectedLanguage,
-        selectedAccent,
-        pass: decision.pass,
-        reason: decision.reason,
-      });
+    if (decision.pass) {
+      if (logPasses) {
+        logStrictVoicePass({
+          voiceName: voiceDebugLabel(voice),
+          locales: decision.locales,
+          normalizedLanguage: decision.normalizedLanguage,
+          normalizedAccent: decision.normalizedAccent,
+          selectedLanguage,
+          selectedAccent,
+          reason: decision.reason,
+        });
+      }
+      out.push(voice);
     }
-
-    if (decision.pass) out.push(voice);
   }
 
   return out;
