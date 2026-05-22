@@ -15,7 +15,7 @@ import { strictVoiceMatchesLanguageAccent, shouldLogStrictVoiceFilter } from "./
 import { catalogCacheKey } from "./voiceCatalogCacheKey";
 
 /** Bump when accent availability logic changes (visible in [ARABIC ACCENT OPTIONS] logs). */
-export const VOICE_FILTER_BUILD_TAG = "arabic-accent-v4-safe-arabic-pool";
+export const VOICE_FILTER_BUILD_TAG = "arabic-accent-v5-clear-dialect-only";
 
 const uniqueSortedDisplay = (displays) =>
   Array.from(new Set(displays.map((x) => String(x).trim()).filter(Boolean))).sort((a, b) =>
@@ -89,7 +89,8 @@ const buildArabicAccentOptions = (voices) => {
   const arabicVoiceCount = countVoicesMatchingLanguageForAvailability(voices, "ar");
   if (!arabicVoiceCount) return [];
 
-  return ARABIC_DIALECT_DISPLAYS;
+  const availability = getAccentAvailabilityMap(voices);
+  return ARABIC_DIALECT_DISPLAYS.filter((display) => (availability.get(`ar|${display}`) || 0) > 0);
 };
 
 export const buildAvailableAccentOptionsForLanguage = (

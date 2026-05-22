@@ -81,6 +81,33 @@ export const ARABIC_ACCENT_ALIASES = [
     localePatterns: [/\bar[-_\s]?(lb|sy|jo|ps)\b/i],
   },
   {
+    token: "arabic-moroccan",
+    display: "Moroccan",
+    keywords: [
+      "moroccan",
+      "morocco",
+      "maghrebi",
+      "maghreb",
+      "darija",
+      "algerian",
+      "algeria",
+      "tunisian",
+      "tunisia",
+    ],
+    patterns: [
+      /\bmoroccan\b/i,
+      /\bmorocco\b/i,
+      /\bmaghrebi\b/i,
+      /\bmaghreb\b/i,
+      /\bdarija\b/i,
+      /\balgerian\b/i,
+      /\balgeria\b/i,
+      /\btunisian\b/i,
+      /\btunisia\b/i,
+    ],
+    localePatterns: [/\bar[-_\s]?(ma|dz|tn)\b/i],
+  },
+  {
     token: "arabic-standard",
     display: "Standard Arabic",
     keywords: [
