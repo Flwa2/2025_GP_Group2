@@ -623,6 +623,47 @@ useEffect(() => {
     setVoiceAccentOptionsByLanguage(next);
 }, [librarySeedVoices]);
 
+const setPaginatedFilteredVoiceLibrary = useCallback((speakerIndex, refined, { error = null } = {}) => {
+    const list = refined || [];
+    speakerRefinedVoicesRef.current[speakerIndex] = list;
+    const pageSize = VOICE_LIBRARY_PAGE_SIZE;
+    const initialCount = Math.min(pageSize, list.length);
+    setSpeakerVoiceLibrary((prev) => ({
+        ...prev,
+        [speakerIndex]: {
+            rawItems: list.slice(0, initialCount),
+            hasMore: list.length > initialCount,
+            totalCount: list.length,
+            loading: false,
+            nextPage: list.length > initialCount ? 1 : null,
+            error,
+            preFiltered: true,
+        },
+    }));
+}, []);
+
+const appendVoiceLibraryPageForSpeaker = useCallback((speakerIndex) => {
+    const st = speakerVoiceLibraryRef.current[speakerIndex];
+    if (!st?.hasMore || st.nextPage == null || st.loading) return;
+    const refined = speakerRefinedVoicesRef.current[speakerIndex] || [];
+    const page = st.nextPage;
+    const pageSize = VOICE_LIBRARY_PAGE_SIZE;
+    const end = Math.min((page + 1) * pageSize, refined.length);
+    setSpeakerVoiceLibrary((prev) => ({
+        ...prev,
+        [speakerIndex]: {
+            ...(prev[speakerIndex] || {}),
+            rawItems: refined.slice(0, end),
+            hasMore: refined.length > end,
+            totalCount: refined.length,
+            loading: false,
+            nextPage: refined.length > end ? page + 1 : null,
+            error: null,
+            preFiltered: true,
+        },
+    }));
+}, []);
+
 const applyVoiceLibraryForSpeaker = useCallback(
     async (speakerIndex, applied, { debugContext = "" } = {}) => {
         const speaker = speakersRef.current?.[speakerIndex];
@@ -646,19 +687,7 @@ const applyVoiceLibraryForSpeaker = useCallback(
         try {
             const catalog = await loadSharedVoiceCatalog();
             const refined = getStrictFilteredVoicePool(catalog, builtApplied);
-            speakerRefinedVoicesRef.current[speakerIndex] = refined;
-            setSpeakerVoiceLibrary((prev) => ({
-                ...prev,
-                [speakerIndex]: {
-                    rawItems: refined,
-                    hasMore: false,
-                    totalCount: refined.length,
-                    loading: false,
-                    nextPage: null,
-                    error: null,
-                    preFiltered: true,
-                },
-            }));
+            setPaginatedFilteredVoiceLibrary(speakerIndex, refined);
             if (debugContext) {
                 logStrictDropdownFinal(debugContext, builtApplied, refined);
             }
@@ -676,49 +705,17 @@ const applyVoiceLibraryForSpeaker = useCallback(
             }
             setVoiceLibraryWarning("Unable to load ElevenLabs voices. Showing default voices.");
             const refinedFallback = getStrictFilteredVoicePool(fallbackItems, builtApplied);
-            speakerRefinedVoicesRef.current[speakerIndex] = refinedFallback;
-            setSpeakerVoiceLibrary((prev) => ({
-                ...prev,
-                [speakerIndex]: {
-                    rawItems: refinedFallback,
-                    hasMore: false,
-                    totalCount: refinedFallback.length,
-                    loading: false,
-                    nextPage: null,
-                    error: refinedFallback.length ? null : (e.message || String(e)),
-                    preFiltered: true,
-                },
-            }));
+            setPaginatedFilteredVoiceLibrary(speakerIndex, refinedFallback, {
+                error: refinedFallback.length ? null : e.message || String(e),
+            });
             if (debugContext) {
                 logStrictDropdownFinal(debugContext, builtApplied, refinedFallback);
             }
             return refinedFallback;
         }
     },
-    [fetchFallbackVoices, loadSharedVoiceCatalog]
+    [fetchFallbackVoices, loadSharedVoiceCatalog, setPaginatedFilteredVoiceLibrary]
 );
-
-const appendVoiceLibraryPageForSpeaker = useCallback((speakerIndex) => {
-    const st = speakerVoiceLibraryRef.current[speakerIndex];
-    if (!st?.hasMore || st.nextPage == null || st.loading) return;
-    const refined = speakerRefinedVoicesRef.current[speakerIndex] || [];
-    const page = st.nextPage;
-    const pageSize = VOICE_LIBRARY_PAGE_SIZE;
-    const end = (page + 1) * pageSize;
-    setSpeakerVoiceLibrary((prev) => ({
-        ...prev,
-        [speakerIndex]: {
-            ...(prev[speakerIndex] || {}),
-            rawItems: refined.slice(0, end),
-            hasMore: refined.length > end,
-            totalCount: refined.length,
-            loading: false,
-            nextPage: refined.length > end ? page + 1 : null,
-            error: null,
-            preFiltered: true,
-        },
-    }));
-}, []);
 
 useEffect(() => {
     speakerVoiceLibraryRef.current = speakerVoiceLibrary;
@@ -2332,19 +2329,23 @@ const exportScript = async (format = "pdf") => {
                                                                 error: null,
                                                                 preFiltered: false,
                                                             };
-                                                            const pool =
+                                                            const fullPool =
                                                                 libr.preFiltered && !libr.loading
                                                                     ? speakerRefinedVoicesRef.current[i] ||
                                                                       libr.rawItems ||
                                                                       []
                                                                     : [];
-                                                            const poolIds = new Set(pool.map(getVoiceId));
+                                                            const displayPool = libr.rawItems || [];
                                                             const currentId = sp.voiceId || "";
-                                                            const safeValue = pickVoiceIdFromFilteredPool(currentId, pool);
+                                                            const safeValue = pickVoiceIdFromFilteredPool(currentId, fullPool);
+                                                            const selectedInDisplay = displayPool.find(
+                                                                (v) => getVoiceId(v) === safeValue
+                                                            );
                                                             const listLoading = Boolean(libr.loading || !libr.preFiltered);
                                                             const loadFailed = Boolean(!listLoading && libr.error);
-                                                            const listEmpty = !listLoading && !loadFailed && pool.length === 0;
-                                                            const hasMoreVoices = false;
+                                                            const listEmpty =
+                                                                !listLoading && !loadFailed && fullPool.length === 0;
+                                                            const hasMoreVoices = Boolean(libr.hasMore);
                                                             return (
                                                                 <div className="w-full">
                                                                     {listLoading ? (
@@ -2589,7 +2590,7 @@ const exportScript = async (format = "pdf") => {
                                                                             if (newVoice) clearSpeakerVoiceError(i);
 
                                                                             if (newVoice && shouldAutoplayVoicePreview()) {
-                                                                                const selected = pool.find(
+                                                                                const selected = fullPool.find(
                                                                                     (v) => (v.providerVoiceId || v.id || v.docId) === newVoice
                                                                                 );
                                                                                 previewVoice(newVoice, selected || null);
@@ -2597,7 +2598,14 @@ const exportScript = async (format = "pdf") => {
                                                                         }}
                                                                     >
                                                                         <option value="">{t("create.speakers.selectVoice")}</option>
-                                                                        {pool.map((v) => {
+                                                                        {safeValue && !selectedInDisplay ? (
+                                                                            <option value={safeValue}>
+                                                                                {fullPool.find(
+                                                                                    (v) => getVoiceId(v) === safeValue
+                                                                                )?.name || t("create.speakers.selectVoice")}
+                                                                            </option>
+                                                                        ) : null}
+                                                                        {displayPool.map((v) => {
                                                                         const vid = v.providerVoiceId || v.id || v.docId;
                                                                         const isTaken = speakers.some((s, idx) => s.voiceId === vid && idx !== i);
 
@@ -2614,9 +2622,11 @@ const exportScript = async (format = "pdf") => {
 
                                                                     <button
                                                                     type="button"
-                                                                    disabled={isHostLocked || !sp.voiceId || previewLoadingVoiceId === sp.voiceId || (elevenLabsAuthFailed && !String((pool.find((v) => (v.providerVoiceId || v.id || v.docId) === sp.voiceId)?.preview_url || "")).trim())}
+                                                                    disabled={isHostLocked || !sp.voiceId || previewLoadingVoiceId === sp.voiceId || (elevenLabsAuthFailed && !String((fullPool.find((v) => (v.providerVoiceId || v.id || v.docId) === sp.voiceId)?.preview_url || "")).trim())}
                                                                     onClick={() => {
-                                                                        const selected = pool.find((v) => (v.providerVoiceId || v.id || v.docId) === sp.voiceId);
+                                                                        const selected = fullPool.find(
+                                                                            (v) => (v.providerVoiceId || v.id || v.docId) === sp.voiceId
+                                                                        );
                                                                         previewVoice(sp.voiceId, selected || null);
                                                                     }}
                                                                     className={`inline-flex items-center justify-center gap-2 px-5 h-[44px] rounded-xl border border-purple-500 text-purple-600 font-semibold transition ${
@@ -2634,8 +2644,8 @@ const exportScript = async (format = "pdf") => {
                                                                             className="mt-2 text-xs font-semibold text-purple-600 dark:text-purple-300 hover:underline"
                                                                         >
 {t("create.speakers.loadMoreVoices", {
-  shown: pool.length,
-  total: libr.totalCount || pool.length,
+  shown: displayPool.length,
+  total: libr.totalCount || fullPool.length,
 })}
                                                                         </button>
                                                                     ) : null}
