@@ -30,6 +30,7 @@ import secrets
 from firebase_admin import firestore
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 from datetime import datetime, timedelta, timezone
 import jwt
 from firebase_init import db
@@ -496,16 +497,39 @@ else:
     print("WARNING: R2 environment variables are missing. R2 client not initialized.")
 
 
+def _process_rss_bytes():
+    try:
+        import psutil
+
+        return psutil.Process().memory_info().rss
+    except Exception:
+        return None
+
+
+def _memory_log(label, **details):
+    parts = [str(label)]
+    rss_bytes = _process_rss_bytes()
+    if rss_bytes is not None:
+        parts.append(f"rss_mb={rss_bytes / (1024 * 1024):.1f}")
+    for key, value in details.items():
+        if value is not None:
+            parts.append(f"{key}={value}")
+    print("Memory:", " ".join(parts), flush=True)
+
+
 def upload_bytes_to_r2(file_bytes: bytes, object_key: str, content_type: str):
     if not r2_client:
         raise RuntimeError("R2 client is not configured.")
 
+    _memory_log("upload_bytes_to_r2_before", object_key=object_key, bytes=len(file_bytes))
     r2_client.put_object(
         Bucket=R2_BUCKET_NAME,
         Key=object_key,
         Body=file_bytes,
         ContentType=content_type,
     )
+    _memory_log("upload_bytes_to_r2_after", object_key=object_key)
+    gc.collect()
     return object_key
 
 
@@ -516,12 +540,15 @@ def upload_file_to_r2(file_path: str, object_key: str, content_type: str):
     if not file_path or not os.path.isfile(file_path):
         raise RuntimeError("Upload file path is missing or invalid.")
 
+    _memory_log("upload_file_to_r2_before", object_key=object_key, bytes=os.path.getsize(file_path))
     r2_client.upload_file(
         file_path,
         R2_BUCKET_NAME,
         object_key,
         ExtraArgs={"ContentType": content_type},
     )
+    _memory_log("upload_file_to_r2_after", object_key=object_key)
+    gc.collect()
     return object_key
 
 
@@ -4927,6 +4954,28 @@ def _validate_image_bytes(image_bytes: bytes, min_size: int = 512):
     return True, {"width": w, "height": h, "format": (img.format or "").upper()}
 
 
+def _validate_image_file(image_path: str, min_size: int = 512):
+    try:
+        with Image.open(image_path) as img:
+            img.verify()
+    except UnidentifiedImageError:
+        return False, "Unsupported image format. Please upload PNG/JPG."
+    except Exception:
+        return False, "Invalid image file."
+
+    try:
+        with Image.open(image_path) as img:
+            w, h = img.size
+            fmt = (img.format or "").upper()
+    except Exception:
+        return False, "Invalid image file."
+
+    if w < min_size or h < min_size:
+        return False, f"Image too small. Minimum is {min_size}x{min_size}px."
+
+    return True, {"width": w, "height": h, "format": fmt}
+
+
 def _build_cover_prompt(title: str, style: str, language: str, description: str, extra: str = ""):
     lang_hint = "Arabic" if language == "ar" else "English"
 
@@ -4954,16 +5003,109 @@ Optional direction:
 """.strip()
 
 
-def _generate_cover_b64(prompt: str, size: str = "1024x1024") -> str:
+def _decode_openai_b64_json_stream(response, output_path: str):
+    key = '"b64_json"'
+    search_buffer = ""
+    found_key = False
+    in_string = False
+    escape = False
+    b64_buffer = ""
+    decoded_any = False
+
+    _memory_log("openai_image_response_read_before")
+    with open(output_path, "wb") as output_file:
+        for raw_chunk in response.iter_content(chunk_size=4096, decode_unicode=True):
+            if not raw_chunk:
+                continue
+            chunk = raw_chunk if isinstance(raw_chunk, str) else raw_chunk.decode("utf-8", errors="replace")
+            idx = 0
+            while idx < len(chunk):
+                char = chunk[idx]
+                if not found_key:
+                    search_buffer = (search_buffer + char)[-64:]
+                    if key in search_buffer:
+                        found_key = True
+                    idx += 1
+                    continue
+
+                if not in_string:
+                    if char == '"':
+                        in_string = True
+                    idx += 1
+                    continue
+
+                if escape:
+                    b64_buffer += char
+                    escape = False
+                    idx += 1
+                    continue
+                if char == "\\":
+                    escape = True
+                    idx += 1
+                    continue
+                if char == '"':
+                    if b64_buffer:
+                        output_file.write(base64.b64decode(b64_buffer))
+                        decoded_any = True
+                        b64_buffer = ""
+                    _memory_log("openai_image_response_read_after", decoded=True)
+                    return decoded_any
+
+                b64_buffer += char
+                flush_len = (len(b64_buffer) // 4) * 4
+                if flush_len >= 8192:
+                    output_file.write(base64.b64decode(b64_buffer[:flush_len]))
+                    decoded_any = True
+                    b64_buffer = b64_buffer[flush_len:]
+                idx += 1
+
+    _memory_log("openai_image_response_read_after", decoded=decoded_any)
+    return decoded_any
+
+
+def _generate_cover_file(prompt: str, output_path: str, size: str = "1024x1024") -> str:
     """
-    Uses OpenAI Images API (gpt-image-1) and returns base64 PNG.
+    Stream OpenAI Images API JSON and incrementally decode gpt-image-1 b64_json to disk.
+    GPT image models do not support URL response mode, so this avoids holding the base64
+    image string in memory while still using the required model family.
     """
-    img = client.images.generate(
-        model="gpt-image-1",
-        prompt=prompt,
-        size=size,
-    )
-    return img.data[0].b64_json
+    url = "https://api.openai.com/v1/images/generations"
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": "gpt-image-1",
+        "prompt": prompt,
+        "size": size,
+        "quality": "low",
+        "output_format": "jpeg",
+    }
+
+    _memory_log("openai_image_request_before", size=size)
+    with requests.post(url, headers=headers, json=payload, stream=True, timeout=240) as response:
+        _memory_log("openai_image_request_after", status_code=response.status_code)
+        if not response.ok:
+            err_chunks = []
+            err_size = 0
+            for chunk in response.iter_content(chunk_size=1024):
+                if not chunk:
+                    continue
+                remaining = 500 - err_size
+                if remaining <= 0:
+                    break
+                err_chunks.append(chunk[:remaining])
+                err_size += len(chunk[:remaining])
+            err_body = b"".join(err_chunks).decode("utf-8", errors="replace")
+            raise RuntimeError(f"OpenAI image error {response.status_code}: {err_body}")
+
+        decoded = _decode_openai_b64_json_stream(response, output_path)
+
+    gc.collect()
+    _memory_log("openai_image_gc_after", output_path=output_path)
+    if not decoded or not os.path.isfile(output_path) or os.path.getsize(output_path) < 100:
+        raise RuntimeError("OpenAI image generation returned empty image data.")
+    return output_path
 
 
 def _cover_ext_from_mime(mime_type: str) -> str:
@@ -4988,6 +5130,21 @@ def _make_cover_thumb_b64(image_bytes: bytes, size: int = 256) -> str:
     except Exception:
         return ""
 
+def _make_cover_thumb_b64_from_file(image_path: str, size: int = 256) -> str:
+    try:
+        _memory_log("cover_thumb_before", path=image_path)
+        with Image.open(image_path) as img:
+            img = img.convert("RGB")
+            img.thumbnail((size, size))
+            buf = BytesIO()
+            img.save(buf, format="JPEG", quality=72, optimize=True)
+            thumb_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        gc.collect()
+        _memory_log("cover_thumb_after", thumb_chars=len(thumb_b64))
+        return thumb_b64
+    except Exception:
+        return ""
+
 def _persist_avatar_to_r2(user_id: str, image_bytes: bytes, mime_type: str):
     ext = _cover_ext_from_mime(mime_type)
     ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
@@ -4997,6 +5154,50 @@ def _persist_avatar_to_r2(user_id: str, image_bytes: bytes, mime_type: str):
     signed_url = build_r2_asset_url(object_key, expires_in=3600)
 
     return signed_url, object_key
+
+def _persist_cover_file_to_storage_and_doc(podcast_id: str, image_path: str, mime_type: str = "image/jpeg"):
+    if not image_path or not os.path.isfile(image_path):
+        return "", "", "", "missing_cover_file"
+
+    thumb_b64 = _make_cover_thumb_b64_from_file(image_path)
+    ext = _cover_ext_from_mime(mime_type)
+    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    storage_path = f"covers/{podcast_id}/{ts}.{ext}"
+
+    cover_url = ""
+    persist_error = ""
+    old_cover_path = ""
+
+    try:
+        existing_doc = db.collection("podcasts").document(podcast_id).get()
+        if existing_doc.exists:
+            old_cover_path = ((existing_doc.to_dict() or {}).get("coverPath") or "").strip()
+    except Exception:
+        old_cover_path = ""
+
+    try:
+        upload_file_to_r2(image_path, storage_path, mime_type)
+        cover_url = build_r2_asset_url(storage_path, expires_in=3600)
+    except Exception as e:
+        persist_error = f"r2_upload_failed: {e}"
+
+    if old_cover_path and old_cover_path != storage_path and not persist_error:
+        delete_from_r2_quietly(old_cover_path, label="Cover replace")
+
+    db.collection("podcasts").document(podcast_id).set(
+        {
+            "coverUrl": cover_url,
+            "coverPath": storage_path,
+            "coverMimeType": mime_type,
+            "coverThumbB64": thumb_b64,
+            "coverUpdatedAt": firestore.SERVER_TIMESTAMP,
+        },
+        merge=True,
+    )
+
+    gc.collect()
+    _memory_log("cover_persist_after", storage_path=storage_path)
+    return cover_url, storage_path, thumb_b64, persist_error
 
 def _persist_cover_to_storage_and_doc(podcast_id: str, cover_b64: str, mime_type: str = "image/png"):
     """
@@ -5150,51 +5351,41 @@ def api_cover_generate(podcast_id):
 
     prompt = _build_cover_prompt(title=title, style=style, language=language, description=description, extra=extra)
 
-    try:
-        b64 = _generate_cover_b64(prompt, size="1024x1024")
-    except Exception as e:
-        print("Cover generation error:", e, flush=True)
-        traceback.print_exc()
-        return _apply_cors_headers(
-            _api_json_response(
-                {
-                    "ok": False,
-                    "code": "cover_generation_failed",
-                    "error": f"Failed to generate cover art: {str(e)}",
-                },
-                status=500,
+    with tempfile.TemporaryDirectory(prefix="wecast_cover_") as cover_tmp:
+        cover_path = os.path.join(cover_tmp, f"{secure_filename(podcast_id) or 'cover'}.jpg")
+        try:
+            _generate_cover_file(prompt, cover_path, size="1024x1024")
+        except Exception as e:
+            print("Cover generation error:", str(e)[:500], flush=True)
+            traceback.print_exc()
+            return _apply_cors_headers(
+                _api_json_response(
+                    {
+                        "ok": False,
+                        "code": "cover_generation_failed",
+                        "error": f"Failed to generate cover art: {str(e)[:300]}",
+                    },
+                    status=500,
+                )
             )
-        )
 
-    if not b64 or len(str(b64).strip()) < 100:
-        return _apply_cors_headers(
-            _api_json_response(
-                {
-                    "ok": False,
-                    "code": "cover_generation_failed",
-                    "error": "Cover image generation returned empty data.",
-                },
-                status=500,
+        try:
+            cover_url, storage_path, thumb_b64, persist_error = _persist_cover_file_to_storage_and_doc(
+                podcast_id, cover_path, "image/jpeg"
             )
-        )
-
-    try:
-        cover_url, storage_path, thumb_b64, persist_error = _persist_cover_to_storage_and_doc(
-            podcast_id, b64, "image/png"
-        )
-    except Exception as e:
-        print("Cover persist error:", e, flush=True)
-        traceback.print_exc()
-        return _apply_cors_headers(
-            _api_json_response(
-                {
-                    "ok": False,
-                    "code": "cover_generation_failed",
-                    "error": "Cover generated but failed to save.",
-                },
-                status=500,
+        except Exception as e:
+            print("Cover persist error:", str(e)[:500], flush=True)
+            traceback.print_exc()
+            return _apply_cors_headers(
+                _api_json_response(
+                    {
+                        "ok": False,
+                        "code": "cover_generation_failed",
+                        "error": "Cover generated but failed to save.",
+                    },
+                    status=500,
+                )
             )
-        )
 
     cover_generation_count = int(limit_state.get("count") or 0) + 1
     cover_generation_limit = int(limit_state.get("limit") or COVER_GENERATION_MAX_PER_PODCAST)
@@ -5209,11 +5400,11 @@ def api_cover_generate(podcast_id):
 
     # Keep session draft for immediate preview/finalize UI state.
     _set_draft_for(podcast_id, {
-        "coverArtBase64": b64,
+        "coverArtBase64": "",
         "coverArtMeta": {
             "generatedAt": datetime.utcnow().isoformat(),
             "source": "openai",
-            "mimeType": "image/png",
+            "mimeType": "image/jpeg",
             "storagePath": storage_path,
             "coverUrl": cover_url,
             "persistError": persist_error,
@@ -5235,13 +5426,13 @@ def api_cover_generate(podcast_id):
         _api_json_response(
             {
                 "podcastId": podcast_id,
-                "coverArtBase64": b64,
+                "coverArtBase64": "",
                 "coverUrl": cover_url,
                 "coverThumbB64": thumb_b64,
                 "coverArtMeta": {
                     "generatedAt": datetime.utcnow().isoformat(),
                     "source": "openai",
-                    "mimeType": "image/png",
+                    "mimeType": "image/jpeg",
                     "storagePath": storage_path,
                     "coverUrl": cover_url,
                 },
@@ -5431,29 +5622,32 @@ def api_cover_upload(podcast_id):
         return jsonify(error="Missing file"), 400
 
     f = request.files["file"]
-    image_bytes = f.read()
-    if not image_bytes:
-        return jsonify(error="Empty file"), 400
+    with tempfile.TemporaryDirectory(prefix="wecast_cover_upload_") as cover_tmp:
+        upload_name = secure_filename(f.filename or "cover-upload") or "cover-upload"
+        upload_path = os.path.join(cover_tmp, upload_name)
+        _memory_log("cover_upload_save_before", filename=f.filename or "")
+        f.save(upload_path)
+        _memory_log("cover_upload_save_after", bytes=os.path.getsize(upload_path) if os.path.exists(upload_path) else 0)
 
-    ok, info = _validate_image_bytes(image_bytes, min_size=512)
-    if not ok:
-        return jsonify(error=info), 400
+        if not os.path.isfile(upload_path) or os.path.getsize(upload_path) <= 0:
+            return jsonify(error="Empty file"), 400
 
-    mimeType = "image/png" if info["format"] == "PNG" else "image/jpeg"
+        ok, info = _validate_image_file(upload_path, min_size=512)
+        if not ok:
+            return jsonify(error=info), 400
 
-    # Encode for session storage + frontend display
-    b64 = base64.b64encode(image_bytes).decode("utf-8")
+        mimeType = "image/png" if info["format"] == "PNG" else "image/jpeg"
 
-    try:
-        cover_url, storage_path, thumb_b64, persist_error = _persist_cover_to_storage_and_doc(
-            podcast_id, b64, mimeType
-        )
-    except Exception as e:
-        print("Cover persist error:", e)
-        return jsonify(error="Cover uploaded but failed to persist."), 500
+        try:
+            cover_url, storage_path, thumb_b64, persist_error = _persist_cover_file_to_storage_and_doc(
+                podcast_id, upload_path, mimeType
+            )
+        except Exception as e:
+            print("Cover persist error:", str(e)[:500], flush=True)
+            return jsonify(error="Cover uploaded but failed to persist."), 500
 
     _set_draft_for(podcast_id, {
-        "coverArtBase64": b64,
+        "coverArtBase64": "",
         "coverArtMeta": {
             "uploadedAt": datetime.utcnow().isoformat(),
             "source": "upload",
@@ -5470,7 +5664,7 @@ def api_cover_upload(podcast_id):
     return jsonify(
         ok=True,
         podcastId=podcast_id,
-        coverArtBase64=b64,
+        coverArtBase64="",
         coverUrl=cover_url,
         coverThumbB64=thumb_b64,
         mimeType=mimeType,
@@ -7740,12 +7934,7 @@ def _audio_limits_payload():
 
 
 def _audio_rss_bytes():
-    try:
-        import psutil
-
-        return psutil.Process().memory_info().rss
-    except Exception:
-        return None
+    return _process_rss_bytes()
 
 
 def _audio_memory_log(stage, **details):
@@ -7966,13 +8155,35 @@ def _estimate_word_timeline_from_text(text: str, speaker: str, start_offset: flo
 
 
 def _ffmpeg_run(cmd, timeout=600):
-    return subprocess.run(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=timeout,
-    )
+    _memory_log("ffmpeg_subprocess_before", executable=os.path.basename(str(cmd[0] or "")))
+    stderr_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(prefix="wecast_ffmpeg_", suffix=".log", delete=False) as stderr_file:
+            stderr_path = stderr_file.name
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr_file,
+                timeout=timeout,
+            )
+        stderr_tail = ""
+        try:
+            with open(stderr_path, "rb") as err_file:
+                err_file.seek(0, os.SEEK_END)
+                size = err_file.tell()
+                err_file.seek(max(0, size - 4096))
+                stderr_tail = err_file.read().decode("utf-8", errors="replace")
+        except Exception:
+            stderr_tail = ""
+        _memory_log("ffmpeg_subprocess_after", returncode=result.returncode)
+        return subprocess.CompletedProcess(cmd, result.returncode, "", stderr_tail)
+    finally:
+        if stderr_path:
+            try:
+                os.remove(stderr_path)
+            except OSError:
+                pass
+        gc.collect()
 
 
 def eleven_tts_stream_to_file(
