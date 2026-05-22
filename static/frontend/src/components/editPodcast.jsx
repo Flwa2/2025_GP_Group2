@@ -2478,11 +2478,14 @@ const exportScript = async (format = "pdf") => {
           speakers[idx]
         );
         const languageStrictPool = getStrictFilteredVoicePool(voices, langOnlyApplied);
-        const accentOptions = buildAccentOptionsForLanguage(
-          languageStrictPool,
-          selectedLanguage,
-          DEFAULT_VOICE_LANGUAGE
-        );
+        const speakerGenderTok = normalizeGenderToken(speakers[idx]?.gender);
+        const modalGenderTok =
+          getSafeModalGenderFilter(f.gender) === "__all__"
+            ? speakerGenderTok
+            : normalizeGenderToken(f.gender);
+        const accentOptions = buildAccentOptionsForLanguage(voices, selectedLanguage, DEFAULT_VOICE_LANGUAGE, {
+          gender: modalGenderTok,
+        });
         const ageOptions = collectVoiceAgeOptions([
           ...VOICE_AGE_BUCKETS.map((age) => ({ age })),
           ...languageStrictPool,

@@ -12,6 +12,10 @@ import {
   strictAccentDecision,
   strictLanguageDecision,
 } from "./strictVoiceMetadata";
+import {
+  buildAvailableAccentOptionsForLanguage,
+  countVoicesForAccentOption,
+} from "./voiceFilterAvailability";
 
 const ARABIC_ACCENT_ALIAS_BY_TOKEN = new Map(ARABIC_ACCENT_ALIASES.map((alias) => [alias.token, alias]));
 const ENGLISH_ACCENT_ALIAS_BY_TOKEN = new Map(ENGLISH_ACCENT_ALIASES.map((alias) => [alias.token, alias]));
@@ -298,40 +302,16 @@ export const voiceMatchesAccentForLanguage = (voice, language, accentValue) =>
   rankVoiceForAccentForLanguage(voice, language, accentValue).include;
 
 /**
- * Build accent dropdown options for a language.
- * Arabic always offers the five dialect filters; other options come from detected voices.
+ * Build accent dropdown options for a language from catalog availability (no hardcoded lists).
  */
-export const buildAccentOptionsForLanguage = (voices, language, defaultLanguage = "en") => {
-  const normalizedLanguage = normalizeLanguageFilterValue(language || defaultLanguage);
-  const tokenToDisplay = new Map();
+export const buildAccentOptionsForLanguage = (voices, language, defaultLanguage = "en", options = {}) =>
+  buildAvailableAccentOptionsForLanguage(voices, language, defaultLanguage, options);
 
-  if (normalizedLanguage === "ar") {
-    return ARABIC_ACCENT_OPTIONS;
-  }
-  if (normalizedLanguage === "en") {
-    return ENGLISH_ACCENT_OPTIONS;
-  }
-
-  for (const voice of voices || []) {
-    if (!languageMatchesVoice(normalizedLanguage, voice)) continue;
-
-    const tokens = accentTokensForLanguageFromVoice(voice, normalizedLanguage);
-    const displays = accentDisplaysForLanguageFromVoice(voice, normalizedLanguage);
-    for (const token of tokens) {
-      if (!token || tokenToDisplay.has(token)) continue;
-      if (!voiceMatchesAccentForLanguage(voice, normalizedLanguage, token)) continue;
-      const display =
-        displays.find((label) => normalizeAccentToken(label) === token) || formatAccentDisplay(token);
-      tokenToDisplay.set(token, formatAccentDisplayForLanguage(display, normalizedLanguage));
-    }
-  }
-
-  return uniqueSortedDisplay(Array.from(tokenToDisplay.values()));
-};
-
-export const countVoicesMatchingAccentForLanguage = (voices, language, accentValue) => {
+export const countVoicesMatchingAccentForLanguage = (voices, language, accentValue, options = {}) => {
   const normalizedLanguage = normalizeLanguageFilterValue(language);
   const accentToken = normalizeAccentToken(accentValue);
-  if (!accentToken) return (voices || []).filter((voice) => languageMatchesVoice(normalizedLanguage, voice)).length;
-  return (voices || []).filter((voice) => voiceMatchesAccentForLanguage(voice, normalizedLanguage, accentToken)).length;
+  if (!accentToken) {
+    return (voices || []).filter((voice) => languageMatchesVoice(normalizedLanguage, voice)).length;
+  }
+  return countVoicesForAccentOption(voices, normalizedLanguage, accentToken, options);
 };

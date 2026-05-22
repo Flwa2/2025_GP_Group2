@@ -9,6 +9,11 @@ import { voiceMatchesAge } from "./voiceAgeFilters";
 import { voiceMatchesPitch, voiceMatchesTone } from "./voiceTonePitchFilters";
 import { normalizeCategoryLabelKey, voiceMatchesRoleCategory } from "./voiceRoleCategories";
 import { strictFilterVoicesByLanguageAccent } from "./strictVoiceFilter";
+import {
+  isCoreLanguageAccentGenderFilter,
+  logVoiceFilterAvailability,
+  partitionVoicesByLanguageAccentTier,
+} from "./voiceFilterAvailability";
 
 const voiceSearchHaystack = (voice) => {
   const parts = [voice?.name, voice?.description, voice?.category];
@@ -56,12 +61,32 @@ export const getStrictFilteredVoicePool = (voices, applied = {}) => {
     out = out.filter((voice) => voiceSearchHaystack(voice).includes(q));
   }
 
+  const langAccentGender = { language: lang, accent, gender };
+  let availabilityStats = null;
+
   if (lang || accent || gender) {
-    out = strictFilterVoicesByLanguageAccent(out, {
-      language: lang,
-      accent,
-      gender,
-    });
+    if (isCoreLanguageAccentGenderFilter(applied) && accent) {
+      const tiered = partitionVoicesByLanguageAccentTier(out, langAccentGender);
+      availabilityStats = {
+        strictCount: tiered.strictCount,
+        fallbackCount: tiered.fallbackCount,
+        finalCount: tiered.finalCount,
+      };
+      out = tiered.pool;
+    } else {
+      out = strictFilterVoicesByLanguageAccent(out, langAccentGender);
+      if (accent) {
+        availabilityStats = {
+          strictCount: out.length,
+          fallbackCount: 0,
+          finalCount: out.length,
+        };
+      }
+    }
+  }
+
+  if (availabilityStats && (lang || accent)) {
+    logVoiceFilterAvailability("getStrictFilteredVoicePool", applied, availabilityStats);
   }
 
   if (age) {

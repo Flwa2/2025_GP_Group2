@@ -10,7 +10,7 @@ import {
 } from "../utils/voiceFilterModal";
 import { PITCH_VALUES, TONE_FILTER_VALUES, formatPitchLabel, formatToneLabel } from "../utils/voiceTonePitchFilters";
 import { formatVoiceAgeLabel } from "../utils/voiceAgeFilters";
-import { ARABIC_ACCENT_OPTIONS, ENGLISH_ACCENT_OPTIONS, normalizeAccentToken } from "../utils/voiceAccentFilters";
+import { normalizeAccentToken } from "../utils/voiceAccentFilters";
 import VoiceFilterPreviewCount from "./VoiceFilterPreviewCount";
 
 /** Shared voice filter modal — identical UI on Create Podcast and Edit Podcast. */
@@ -72,12 +72,7 @@ const translateCategory = (value) =>
   const safeGenderFilter = getSafeModalGenderFilter(filters?.gender);
   const rawSelectedLanguage = filters?.language || DEFAULT_VOICE_LANGUAGE;
   const selectedLanguage = normalizeLanguageFilterValue(rawSelectedLanguage);
-  const visibleAccentOptions =
-    selectedLanguage === "ar"
-      ? ARABIC_ACCENT_OPTIONS
-      : selectedLanguage === "en"
-        ? ENGLISH_ACCENT_OPTIONS
-        : accentOptions;
+  const visibleAccentOptions = accentOptions;
   const languageOptions = uniqueLanguageOptions();
   const toneOptions = TONE_FILTER_VALUES;
   const pitchOptions = PITCH_VALUES;

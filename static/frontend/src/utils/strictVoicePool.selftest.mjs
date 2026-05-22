@@ -54,6 +54,12 @@ const fixtures = {
     name: "Saudi Host",
     languageAccents: [{ language: "ar", locale: "ar-SA", accent: "" }],
   },
+  arabicGenericMale: {
+    name: "Omar",
+    gender: "male",
+    labels: { language: "Arabic", gender: "male" },
+    languages: ["Arabic"],
+  },
 };
 
 const catalog = Object.values(fixtures);
@@ -68,7 +74,12 @@ const cases = [
   { label: "English + British", applied: { language: "en", accent: "british" }, expectNames: ["British Host"] },
   { label: "English + Indian", applied: { language: "en", accent: "indian" }, expectNames: ["Indian Host"] },
   { label: "English + Australian", applied: { language: "en", accent: "australian" }, expectNames: ["Aussie Host"] },
-  { label: "Arabic + Saudi", applied: { language: "ar", accent: "arabic-saudi" }, expectNames: ["Saudi Host"] },
+  {
+    label: "Arabic + Saudi + Male",
+    applied: { language: "ar", accent: "arabic-saudi", gender: "male" },
+    expectNames: ["Omar"],
+    expectAlsoNames: ["Saudi Host"],
+  },
   { label: "No lang/accent/gender", applied: {}, expectMin: catalog.length },
 ];
 

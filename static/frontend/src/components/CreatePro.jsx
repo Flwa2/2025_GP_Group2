@@ -2400,11 +2400,17 @@ const exportScript = async (format = "pdf") => {
                                                                         langOnlyApplied
                                                                     );
                                                                     const stableOptionVoices = languageStrictPool;
+                                                                    const speakerGenderTok = normalizeGenderToken(speakers?.[i]?.gender);
+                                                                    const modalGenderTok =
+                                                                        safeGenderFilter === "__all__"
+                                                                            ? speakerGenderTok
+                                                                            : normalizeGenderToken(safeGenderFilter);
                                                                     const accentOptionsForLanguage = (language) =>
                                                                         buildAccentOptionsForLanguage(
-                                                                            stableOptionVoices,
+                                                                            catalogForModal,
                                                                             language,
-                                                                            DEFAULT_VOICE_LANGUAGE
+                                                                            DEFAULT_VOICE_LANGUAGE,
+                                                                            { gender: modalGenderTok }
                                                                         );
                                                                     const accentOptions = accentOptionsForLanguage(selectedLanguage);
                                                                     const categoryOptions = roleCategoryOptionsForVoices(stableOptionVoices);
