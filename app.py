@@ -7975,8 +7975,8 @@ def _audio_limits_payload():
         "tts_chunk_chars": AUDIO_TTS_CHUNK_CHARS,
         "safe_emergency_mode": AUDIO_SAFE_EMERGENCY_MODE,
         "music_enabled": WECAST_AUDIO_EFFECTIVE_INCLUDE_MUSIC,
-        "transcript_timing_enabled": False,
-        "chapters_enabled": False,
+        "transcript_timing_enabled": True,
+        "chapters_enabled": not AUDIO_SKIP_GPT_CHAPTERS,
     }
 
 
@@ -8337,12 +8337,27 @@ def _estimate_mp3_duration_seconds(path, bitrate_kbps=64):
     return max(0.0, (size_bytes * 8) / (bitrate_kbps * 1000))
 
 
+def _pydub_probe_duration_seconds(path):
+    """Probe duration via pydub mediainfo (ffmpeg metadata, no full decode in RAM)."""
+    from pydub.utils import mediainfo
+
+    info = mediainfo(path) or {}
+    duration_ms = float(info.get("duration") or 0)
+    if duration_ms <= 0:
+        raise RuntimeError(f"invalid pydub duration for {path}")
+    return max(0.0, duration_ms / 1000.0)
+
+
 def _probe_mp3_duration_seconds(path):
     try:
         return _ffprobe_duration_seconds(path)
     except Exception as probe_error:
         print(f"WARN ffprobe duration fallback: {probe_error}", flush=True)
-        return _estimate_mp3_duration_seconds(path)
+    try:
+        return _pydub_probe_duration_seconds(path)
+    except Exception as pydub_error:
+        print(f"WARN pydub duration fallback: {pydub_error}", flush=True)
+    return _estimate_mp3_duration_seconds(path)
 
 
 def _ffprobe_duration_seconds(path):
@@ -8510,8 +8525,10 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
         return False, "Audio storage (R2) is not configured."
 
     speaker_to_voice, default_voice = build_speaker_voice_map()
+    word_timeline = []
     timeline_offset = 0.0
     speech_segment_count = 0
+    sync_segment = 0
 
     safe_id = re.sub(r"[^A-Za-z0-9_-]", "", podcast_id or "") or "output"
     local_filename = f"output_{safe_id}.mp3"
@@ -8539,7 +8556,13 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
             _ffmpeg_create_silence_mp3(silence_path, duration_ms=500)
             _audio_stage_log("lead_silence_create", phase="after")
             shutil.copy2(silence_path, master_path)
-            timeline_offset += _probe_mp3_duration_seconds(silence_path)
+            lead_duration = _probe_mp3_duration_seconds(silence_path)
+            timeline_offset += lead_duration
+            print(
+                f"transcript_sync segment=lead_silence "
+                f"actual_duration={lead_duration:.3f} accumulated={timeline_offset:.3f}",
+                flush=True,
+            )
             gc.collect()
             _audio_memory_log("master_initialized", path=master_path)
 
@@ -8577,6 +8600,11 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
                     _ffmpeg_append_mp3(master_path, music_abs, temp_dir)
                     music_duration = _probe_mp3_duration_seconds(music_abs)
                     timeline_offset += music_duration
+                    print(
+                        f"transcript_sync segment=music_{index} "
+                        f"actual_duration={music_duration:.3f} accumulated={timeline_offset:.3f}",
+                        flush=True,
+                    )
                     _audio_memory_log(
                         "music_segment_merged",
                         index=index,
@@ -8627,7 +8655,21 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
                     )
 
                     segment_duration = _probe_mp3_duration_seconds(segment_path)
+                    word_timeline.extend(
+                        _estimate_word_timeline_from_text(
+                            tts_chunk,
+                            speaker,
+                            timeline_offset,
+                            segment_duration,
+                        )
+                    )
                     timeline_offset += segment_duration
+                    print(
+                        f"transcript_sync segment={sync_segment} "
+                        f"actual_duration={segment_duration:.3f} accumulated={timeline_offset:.3f}",
+                        flush=True,
+                    )
+                    sync_segment += 1
 
                     _audio_stage_log(
                         "ffmpeg_merge_segment",
@@ -8697,7 +8739,7 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
     return True, {
         "url": signed_url,
         "audioKey": object_key,
-        "words": [],
+        "words": word_timeline,
     }
 
 @app.post("/api/audio")
@@ -8785,6 +8827,7 @@ def api_audio():
 
         session["last_audio_url"] = result["url"]
         session["last_audio_key"] = result.get("audioKey", "")
+        session["last_word_timeline"] = result.get("words") or []
         session.modified = True
 
         _audio_stage_log("firestore_persist", phase="before")
@@ -8798,23 +8841,58 @@ def api_audio():
                 if doc.exists:
                     pdata = doc.to_dict() or {}
                     if _podcast_owned_by_user(pdata, user_id):
+                        words = result.get("words") or []
+                        transcript_text = ""
+                        if words:
+                            try:
+                                transcript_text = build_transcript_text_with_speakers(words)
+                            except Exception:
+                                transcript_text = ""
                         old_audio_key = (pdata.get("audioKey") or "").strip()
                         new_audio_key = (result.get("audioKey") or "").strip()
 
                         if ui_language in ("en", "ar"):
                             podcast_ref.set({"language": ui_language}, merge=True)
 
-                        podcast_ref.set(
-                            {
-                                "audioUrl": result["url"],
-                                "audioKey": new_audio_key,
-                                "audioUpdatedAt": firestore.SERVER_TIMESTAMP,
-                                "audioGenerationMode": "safe_emergency",
-                                "transcriptTimingStatus": "disabled_during_audio_generation",
-                                "chaptersStatus": "disabled_during_audio_generation",
-                            },
-                            merge=True,
-                        )
+                        audio_updates = {
+                            "audioUrl": result["url"],
+                            "audioKey": new_audio_key,
+                            "audioUpdatedAt": firestore.SERVER_TIMESTAMP,
+                            "audioGenerationMode": "safe_emergency",
+                            "transcriptTimingStatus": "probed_segment_duration",
+                        }
+                        if transcript_text:
+                            audio_updates["transcriptText"] = transcript_text
+                            audio_updates["transcriptUpdatedAt"] = firestore.SERVER_TIMESTAMP
+                        podcast_ref.set(audio_updates, merge=True)
+
+                        if words:
+                            podcast_ref.collection("transcripts").document("main").set(
+                                {
+                                    "words": words,
+                                    "updatedAt": firestore.SERVER_TIMESTAMP,
+                                },
+                                merge=True,
+                            )
+
+                        if words and not AUDIO_SKIP_GPT_CHAPTERS:
+                            language = ui_language or pdata.get("language") or "en"
+                            if not transcript_text:
+                                try:
+                                    transcript_text = build_transcript_text_with_speakers(words)
+                                except Exception:
+                                    transcript_text = ""
+                            chapters = _chapters_for_audio_save(
+                                words, transcript_text, language=language
+                            )
+                            podcast_ref.set(
+                                {
+                                    "chapters": chapters,
+                                    "chaptersUpdatedAt": firestore.SERVER_TIMESTAMP,
+                                    "chaptersStatus": "probed_segment_duration",
+                                },
+                                merge=True,
+                            )
 
                         if old_audio_key and new_audio_key and old_audio_key != new_audio_key:
                             delete_from_r2_quietly(old_audio_key, label="Audio replace")
