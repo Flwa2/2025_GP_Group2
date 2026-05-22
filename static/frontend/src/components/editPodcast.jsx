@@ -1432,6 +1432,13 @@ const applySpeakerLabelRenames = (inputScript, oldSpeakers, newSpeakers) => {
 const speakersEqual = (left, right) =>
   JSON.stringify(Array.isArray(left) ? left : []) === JSON.stringify(Array.isArray(right) ? right : []);
 
+const clearFinalEditDraftState = (snapshot) => {
+  setDraftBaseline(snapshot);
+  setHasUnsavedChanges(false);
+  setDraftRestored(false);
+  setDraftSavedAt("");
+};
+
 const persistChanges = async ({
   nextScript,
   nextSpeakers,
@@ -1493,7 +1500,7 @@ const persistChanges = async ({
     setOriginalBodyMusic(bodyMusic);
     setOriginalOutroMusic(outroMusic);
     setOriginalCategory(nextCategory);
-    setDraftBaseline(buildEditableSnapshot({
+    const finalSnapshot = buildEditableSnapshot({
       nextShowTitle,
       nextScript: resolvedScript,
       nextSpeakers: resolvedSpeakers,
@@ -1501,23 +1508,26 @@ const persistChanges = async ({
       nextBodyMusic: bodyMusic,
       nextOutroMusic: outroMusic,
       nextCategory: nextCategory,
-    }));
+    });
+    setDraftBaseline(finalSnapshot);
     setHasUnsavedChanges(false);
-    setDraftRestored(false);
-    setDraftSavedAt("");
 
     if (regenerateAfterSave) {
       setToast({
         type: "info",
         message: "Updates saved. Regenerating the episode audio now...",
       });
-      await regenerateAudio({
+      const regenerated = await regenerateAudio({
         scriptOverride: resolvedScript,
         speakersOverride: resolvedSpeakers,
         successMessage,
         failureMessage: "Updates were saved, but audio regeneration failed. Please check the backend connection and try Regenerate again.",
       });
+      if (regenerated) {
+        clearFinalEditDraftState(finalSnapshot);
+      }
     } else {
+      clearFinalEditDraftState(finalSnapshot);
       setToast({ type: "success", message: successMessage });
     }
 };
