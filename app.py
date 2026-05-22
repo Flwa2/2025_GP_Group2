@@ -4017,6 +4017,7 @@ def health():
         ffmpeg=FFMPEG_EXECUTABLE,
         ffprobe=FFPROBE_EXECUTABLE,
         ffmpeg_ready=_audio_ffmpeg_ready(),
+        audioLimits=_audio_limits_payload(),
     )
 
 
@@ -7693,6 +7694,15 @@ WECAST_AUDIO_MAX_SPEAKERS = _audio_env_int("WECAST_AUDIO_MAX_SPEAKERS", "RENDER_
 WECAST_AUDIO_MAX_SEGMENTS = _audio_env_int("WECAST_AUDIO_MAX_SEGMENTS", "RENDER_AUDIO_MAX_SEGMENTS", 25)
 WECAST_AUDIO_MAX_TTS_CHARS = _audio_env_int("WECAST_AUDIO_MAX_TTS_CHARS", "RENDER_AUDIO_MAX_TTS_CHARS", 1500)
 WECAST_AUDIO_MAX_DURATION_SEC = _audio_env_float("WECAST_AUDIO_MAX_DURATION", "RENDER_AUDIO_MAX_DURATION_SEC", 300)
+print(
+    "Audio limits: "
+    f"max_words={WECAST_AUDIO_MAX_WORDS} "
+    f"max_speakers={WECAST_AUDIO_MAX_SPEAKERS} "
+    f"max_segments={WECAST_AUDIO_MAX_SEGMENTS} "
+    f"max_tts_chars={WECAST_AUDIO_MAX_TTS_CHARS} "
+    f"max_duration={int(WECAST_AUDIO_MAX_DURATION_SEC)}",
+    flush=True,
+)
 AUDIO_SKIP_GPT_CHAPTERS = os.getenv("AUDIO_SKIP_GPT_CHAPTERS", "1").strip().lower() in (
     "1",
     "true",
@@ -7705,6 +7715,16 @@ WECAST_AUDIO_INCLUDE_MUSIC = os.getenv("WECAST_AUDIO_INCLUDE_MUSIC", "0").strip(
     "yes",
     "on",
 )
+
+
+def _audio_limits_payload():
+    return {
+        "max_words": WECAST_AUDIO_MAX_WORDS,
+        "max_speakers": WECAST_AUDIO_MAX_SPEAKERS,
+        "max_segments": WECAST_AUDIO_MAX_SEGMENTS,
+        "max_tts_chars": WECAST_AUDIO_MAX_TTS_CHARS,
+        "max_duration": int(WECAST_AUDIO_MAX_DURATION_SEC),
+    }
 
 
 def _audio_rss_bytes():
