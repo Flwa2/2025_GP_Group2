@@ -1,6 +1,6 @@
-import { DEFAULT_VOICE_LANGUAGE } from "../components/voiceFilterLanguage";
 import {
   DEFAULT_MODAL_VOICE_FILTERS,
+  DEFAULT_VOICE_LANGUAGE,
   appliedFiltersToModalPatch,
   filtersModalToApplied,
 } from "./voiceFilterModal";

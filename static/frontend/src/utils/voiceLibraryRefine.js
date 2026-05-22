@@ -1,9 +1,6 @@
 import { normalizeLanguageFilterValue } from "../components/voiceFilterLanguage";
-import {
-  languageForAccentValue,
-  languageMatchesVoice,
-  rankVoicesForAccentForLanguage,
-} from "./voiceAccentFilters";
+import { languageForAccentValue } from "./voiceAccentFilters";
+import { strictFilterVoicesByLanguageAccent } from "./strictVoiceFilter";
 import { voiceMatchesAge } from "./voiceAgeFilters";
 import { normalizeGenderToken } from "./voiceGender";
 import { voiceMatchesPitch, voiceMatchesTone } from "./voiceTonePitchFilters";
@@ -44,16 +41,12 @@ export const clientRefineLibraryVoices = (items, applied) => {
   if (q) {
     out = out.filter((voice) => voiceSearchHaystack(voice).includes(q));
   }
-  if (g) {
-    out = out.filter(
-      (voice) => normalizeGenderToken(voice.gender || voice.labels?.gender || voice.labels?.Gender) === g
-    );
-  }
-  if (lang) {
-    out = out.filter((voice) => languageMatchesVoice(lang, voice));
-  }
-  if (accent) {
-    out = rankVoicesForAccentForLanguage(out, lang, accent);
+  if (lang || accent || g) {
+    out = strictFilterVoicesByLanguageAccent(out, {
+      language: lang,
+      accent,
+      gender: g,
+    });
   }
   if (age) {
     out = out.filter((voice) => voiceMatchesAge(voice, age));
