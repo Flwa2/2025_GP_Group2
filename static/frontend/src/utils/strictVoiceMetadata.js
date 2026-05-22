@@ -2,6 +2,7 @@ import { normalizeLanguageFilterValue } from "../components/voiceFilterLanguage"
 import {
   ARABIC_ACCENT_ALIASES,
   ARABIC_DIALECT_ACCENT_TOKENS,
+  normalizeArabicAccentToken,
   normalizeAccentToken,
 } from "./voiceAccentConstants";
 import { curatedArabicDialectTokenForVoice } from "./arabicVoiceDialectMap";
@@ -606,49 +607,27 @@ const hasAmbiguousArabicLocales = (voice, accentToken) => {
   return false;
 };
 
-const structuredValueMatchesArabicAlias = (raw, alias, accentToken) => {
-  const text = normalizeSearchText(raw);
-  if (!text) return false;
-  if ((alias.keywords || []).includes(text)) return true;
-  const tag = normalizeLocaleTag(raw);
-  if (tag && ARABIC_ACCENT_REQUIRED_LOCALES[accentToken]?.has(tag)) return true;
-  if (alias.patterns?.some((pattern) => pattern.test(text))) return true;
-  return false;
-};
-
-const structuredAccentValueMatchesArabicAlias = (raw, alias) => {
-  const text = normalizeSearchText(raw);
-  if (!text) return false;
-  if ((alias.keywords || []).includes(text)) return true;
-  if (alias.patterns?.some((pattern) => pattern.test(text))) return true;
-  return false;
-};
-
 const compatibleArabicAccentTokens = (accentToken) =>
   ARABIC_ACCENT_COMPATIBLE_TOKENS[accentToken] || new Set([accentToken]);
-
-const arabicAliasesForAccentToken = (accentToken) => {
-  const compatibleTokens = compatibleArabicAccentTokens(accentToken);
-  return ARABIC_ACCENT_ALIASES.filter((entry) => compatibleTokens.has(entry.token));
-};
 
 const hasExplicitArabicDialectProof = (voice, accentToken) => {
   const curatedDialect = curatedArabicDialectTokenForVoice(voice);
   if (curatedDialect && compatibleArabicAccentTokens(accentToken).has(curatedDialect)) return true;
 
-  const aliases = arabicAliasesForAccentToken(accentToken);
-  if (!aliases.length) return false;
+  const compatibleTokens = compatibleArabicAccentTokens(accentToken);
 
   const topAccentValues = [voice?.accent, voice?.labels?.accent, voice?.labels?.Accent].filter(Boolean);
   for (const value of topAccentValues) {
-    if (aliases.some((alias) => structuredAccentValueMatchesArabicAlias(value, alias))) {
+    const normalizedToken = normalizeArabicAccentToken(value);
+    if (normalizedToken && compatibleTokens.has(normalizedToken)) {
       return true;
     }
   }
 
   for (const profile of collectLanguageAccentProfilesFromVoice(voice)) {
     if (profileLanguageCode(profile) !== "ar") continue;
-    if (aliases.some((alias) => structuredAccentValueMatchesArabicAlias(profile.accent, alias))) {
+    const normalizedToken = normalizeArabicAccentToken(profile.accent);
+    if (normalizedToken && compatibleTokens.has(normalizedToken)) {
       return true;
     }
   }
@@ -659,19 +638,17 @@ const hasExplicitArabicDialectProof = (voice, accentToken) => {
 const hasStructuredArabicAccentPhrase = (voice, accentToken) => {
   if (hasExplicitArabicDialectProof(voice, accentToken)) return true;
 
-  const aliases = arabicAliasesForAccentToken(accentToken);
-  if (!aliases.length) return false;
+  const compatibleTokens = compatibleArabicAccentTokens(accentToken);
   for (const value of collectStructuredFieldValues(voice)) {
-    if (aliases.some((alias) => structuredValueMatchesArabicAlias(value, alias, alias.token))) {
+    const normalizedToken = normalizeArabicAccentToken(value);
+    if (normalizedToken && compatibleTokens.has(normalizedToken)) {
       return true;
     }
   }
   for (const profile of collectLanguageAccentProfilesFromVoice(voice)) {
     if (profileLanguageCode(profile) !== "ar") continue;
-    if (aliases.some((alias) => structuredValueMatchesArabicAlias(profile.locale, alias, alias.token))) {
-      return true;
-    }
-    if (aliases.some((alias) => structuredValueMatchesArabicAlias(profile.language, alias, alias.token))) {
+    const normalizedToken = normalizeArabicAccentToken(profile.locale || profile.language);
+    if (normalizedToken && compatibleTokens.has(normalizedToken)) {
       return true;
     }
   }

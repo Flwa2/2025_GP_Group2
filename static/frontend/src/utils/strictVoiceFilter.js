@@ -40,10 +40,29 @@ export const shouldLogStrictVoiceFilter = () => {
 
 const logStrictVoicePass = (row) => {
   if (!shouldLogStrictVoiceFilter() || typeof console === "undefined") return;
+  if (row.selectedLanguage === "ar" && typeof console.debug === "function") {
+    console.debug("[strictVoiceFilter] ARABIC PASS", {
+      voiceName: row.voiceName,
+      rawAccentFields: row.rawAccentFields || {},
+      normalizedAccent: row.normalizedAccent,
+      selectedAccent: row.selectedAccent || "",
+      reason: row.reason,
+    });
+    return;
+  }
   console.debug(
     `[strictVoiceFilter] PASS voice="${row.voiceName}" locale=${JSON.stringify(row.locales)} normalizedLanguage=${JSON.stringify(row.normalizedLanguage)} normalizedAccent=${JSON.stringify(row.normalizedAccent)} selectedLanguage=${row.selectedLanguage || ""} selectedAccent=${row.selectedAccent || ""} reason=${row.reason}`
   );
 };
+
+const rawArabicAccentDebugFields = (voice) => ({
+  accent: voice?.accent || "",
+  locale: voice?.locale || "",
+  labelsAccent: voice?.labels?.accent || voice?.labels?.Accent || "",
+  labelsLocale: voice?.labels?.locale || voice?.labels?.Locale || "",
+  languageAccents: voice?.languageAccents || voice?.languageAccentPairs || [],
+  verifiedLanguages: voice?.verified_languages || voice?.verifiedLanguages || [],
+});
 
 /**
  * Strict language + accent (+ optional gender) match used by Create and Edit.
@@ -142,6 +161,7 @@ export const strictFilterVoicesByLanguageAccent = (
           selectedLanguage,
           selectedAccent,
           reason: decision.reason,
+          rawAccentFields: selectedLanguage === "ar" ? rawArabicAccentDebugFields(voice) : undefined,
         });
       }
       out.push(voice);

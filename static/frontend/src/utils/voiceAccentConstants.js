@@ -224,6 +224,15 @@ const accentAliasForValue = (value) => {
   return ARABIC_ACCENT_ALIASES.find((alias) => normalizeAccentSearchText(alias.display) === text) || null;
 };
 
+export const normalizeArabicAccentToken = (value) => {
+  const text = normalizeAccentSearchText(stripArabicAccentLabelPrefix(value));
+  if (!text) return "";
+  const alias =
+    ARABIC_ACCENT_ALIASES.find((entry) => arabicAccentAliasMatchesText(entry, text)) ||
+    ARABIC_ACCENT_ALIASES.find((entry) => normalizeAccentSearchText(entry.display) === text);
+  return alias?.token || "";
+};
+
 export const normalizeAccentToken = (value) => {
   const text = normalizeAccentSearchText(stripArabicAccentLabelPrefix(value));
   if (!text) return "";
