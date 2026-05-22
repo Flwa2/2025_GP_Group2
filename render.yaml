@@ -59,7 +59,9 @@ services:
       - key: WECAST_AUDIO_MAX_MEMORY_MB_HARD
         value: "1700"
       - key: WECAST_AUDIO_TTS_CHUNK_CHARS
-        value: "2500"
+        value: "900"
+      - key: WECAST_AUDIO_SAFE_EMERGENCY_MODE
+        value: "1"
       - key: WECAST_AUDIO_TTS_FORMAT
         value: mp3_44100_64
   - type: static
