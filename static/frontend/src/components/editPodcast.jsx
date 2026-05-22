@@ -31,11 +31,16 @@ import VoiceFiltersModal from "./VoiceFiltersModal";
 import { useVoiceFilterModalPreview } from "../hooks/useVoiceFilterModalPreview";
 import {
   DEFAULT_MODAL_VOICE_FILTERS,
-  filtersModalToApplied,
   getSafeModalGenderFilter,
   hasActiveModalVoiceFilters,
 } from "../utils/voiceFilterModal";
 import { clientRefineLibraryVoices } from "../utils/voiceLibraryRefine";
+import {
+  appliedVoiceFiltersForSpeakerGender,
+  buildAppliedVoiceFiltersForSpeaker,
+  modalFiltersFromApplied,
+  refineVoicesForSpeakerModalFilters,
+} from "../utils/voiceSpeakerFilterApply";
 import { exportScriptPdf } from "../utils/exportScriptPdf";
 import { exportScriptTxt } from "../utils/exportScriptTxt";
 import { shouldAutoplayVoicePreview, shouldShowEditingNotifications } from "../utils/accountPreferences";
@@ -613,6 +618,7 @@ export default function EditPodcast() {
   const [voices, setVoices] = useState([]);
   const [loadingVoices, setLoadingVoices] = useState(true);
   const [speakerVoiceFilters, setSpeakerVoiceFilters] = useState({});
+  const [speakerVoiceAppliedFilters, setSpeakerVoiceAppliedFilters] = useState({});
   const [speakerVoiceVisibleCounts, setSpeakerVoiceVisibleCounts] = useState({});
   const [activeFilterSpeaker, setActiveFilterSpeaker] = useState(null);
   const VOICE_PAGE_SIZE = 100;
@@ -965,26 +971,31 @@ useEffect(() => {
     });
   }, [voices]);
 
-  // Filter voices for a specific speaker (same pipeline as CreatePro clientRefineLibraryVoices)
-  const getFilteredVoicesForSpeaker = useCallback((speakerIndex) => {
-    const f = speakerVoiceFilters[speakerIndex] || DEFAULT_MODAL_VOICE_FILTERS;
-    const isNeutralGender = (value) => {
-      const g = String(value || "").trim().toLowerCase();
-      return g.includes("neutral") || g.includes("netural");
-    };
-    const speakerGenderRaw = String(speakers?.[speakerIndex]?.gender || "").trim().toLowerCase();
-    const speakerGender = isNeutralGender(speakerGenderRaw) ? "" : speakerGenderRaw;
-    const selectedGender = String(f.gender || "").trim().toLowerCase();
-    const effectiveGender =
-      selectedGender === "__all__" || isNeutralGender(selectedGender)
-        ? ""
-        : String(selectedGender || speakerGender || "").trim().toLowerCase();
-    const applied = filtersModalToApplied({
-      ...f,
-      gender: effectiveGender || (f.gender === "__all__" ? "" : f.gender),
+  // Keep applied filters aligned with speakers (same default as Create Podcast).
+  useEffect(() => {
+    setSpeakerVoiceAppliedFilters((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      speakers.forEach((speaker, index) => {
+        if (!next[index]) {
+          next[index] = appliedVoiceFiltersForSpeakerGender(speaker);
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
     });
-    return clientRefineLibraryVoices(voices, applied);
-  }, [speakerVoiceFilters, speakers, voices]);
+  }, [speakers]);
+
+  // Voice dropdown uses applied filters only (updated when modal Done/Clear), matching Create.
+  const getFilteredVoicesForSpeaker = useCallback(
+    (speakerIndex) => {
+      const speaker = speakers?.[speakerIndex];
+      const applied =
+        speakerVoiceAppliedFilters[speakerIndex] || appliedVoiceFiltersForSpeakerGender(speaker);
+      return clientRefineLibraryVoices(voices, applied);
+    },
+    [speakerVoiceAppliedFilters, speakers, voices]
+  );
 
   const activeModalFilters =
     activeFilterSpeaker !== null
@@ -993,8 +1004,10 @@ useEffect(() => {
 
   const getEditModalFilterCount = useCallback(() => {
     if (activeFilterSpeaker === null) return 0;
-    return getFilteredVoicesForSpeaker(activeFilterSpeaker).length;
-  }, [activeFilterSpeaker, getFilteredVoicesForSpeaker]);
+    const speaker = speakers?.[activeFilterSpeaker];
+    const draft = speakerVoiceFilters[activeFilterSpeaker] || DEFAULT_MODAL_VOICE_FILTERS;
+    return refineVoicesForSpeakerModalFilters(voices, draft, speaker).length;
+  }, [activeFilterSpeaker, speakerVoiceFilters, speakers, voices]);
 
   const editVoiceFilterPreview = useVoiceFilterModalPreview({
     enabled: activeFilterSpeaker !== null,
@@ -2124,7 +2137,7 @@ const exportScript = async (format = "pdf") => {
                         <p className="text-sm text-red-500">No voices found. Check ElevenLabs config.</p>
                       ) : pool.length === 0 ? (
                         <p className="text-sm text-black/60 dark:text-white/60">
-                          {speakerVoiceFilters[index]?.accent
+                          {speakerVoiceAppliedFilters[index]?.accent
                             ? t("create.speakers.noMatchingAccentVoices", {
                                 defaultValue:
                                   "No voices found for this accent. Try another accent or clear the accent filter.",
@@ -2137,7 +2150,10 @@ const exportScript = async (format = "pdf") => {
                         <div className="w-full">
                           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                             {(() => {
-                              const modalFilters = speakerVoiceFilters[index] || DEFAULT_MODAL_VOICE_FILTERS;
+                              const applied =
+                                speakerVoiceAppliedFilters[index] ||
+                                appliedVoiceFiltersForSpeakerGender(speaker);
+                              const modalFilters = modalFiltersFromApplied(applied, speaker);
                               const safeGender = getSafeModalGenderFilter(modalFilters.gender);
                               const hasActive = hasActiveModalVoiceFilters(modalFilters, safeGender);
                               return (
@@ -2146,7 +2162,11 @@ const exportScript = async (format = "pdf") => {
                               onClick={() => {
                                 setSpeakerVoiceFilters((prev) => ({
                                   ...prev,
-                                  [index]: { ...DEFAULT_MODAL_VOICE_FILTERS, ...prev[index] },
+                                  [index]: modalFiltersFromApplied(
+                                    speakerVoiceAppliedFilters[index] ||
+                                      appliedVoiceFiltersForSpeakerGender(speaker),
+                                    speaker
+                                  ),
                                 }));
                                 setActiveFilterSpeaker(index);
                               }}
@@ -2427,7 +2447,16 @@ const exportScript = async (format = "pdf") => {
         return (
           <VoiceFiltersModal
             open
-            onClose={() => setActiveFilterSpeaker(null)}
+            onClose={() => {
+              setSpeakerVoiceFilters((prev) => ({
+                ...prev,
+                [idx]: modalFiltersFromApplied(
+                  speakerVoiceAppliedFilters[idx] || appliedVoiceFiltersForSpeakerGender(speakers[idx]),
+                  speakers[idx]
+                ),
+              }));
+              setActiveFilterSpeaker(null);
+            }}
             filters={f}
             onFiltersChange={(next) => {
               setSpeakerVoiceFilters((prev) => ({
@@ -2447,10 +2476,21 @@ const exportScript = async (format = "pdf") => {
             formatVoiceCategoryLabel={formatVoiceCategoryLabel}
             onClear={() => {
               const cleared = { ...DEFAULT_MODAL_VOICE_FILTERS, gender: speakerGenderReset };
+              const applied = buildAppliedVoiceFiltersForSpeaker(cleared, speakers[idx]);
               setSpeakerVoiceFilters((prev) => ({ ...prev, [idx]: cleared }));
+              setSpeakerVoiceAppliedFilters((prev) => ({ ...prev, [idx]: applied }));
               setSpeakerVoiceVisibleCounts((prev) => ({ ...prev, [idx]: VOICE_PAGE_SIZE }));
             }}
-            onDone={() => setActiveFilterSpeaker(null)}
+            onDone={(sanitized) => {
+              const applied = buildAppliedVoiceFiltersForSpeaker(sanitized, speakers[idx]);
+              setSpeakerVoiceFilters((prev) => ({
+                ...prev,
+                [idx]: { ...DEFAULT_MODAL_VOICE_FILTERS, ...sanitized },
+              }));
+              setSpeakerVoiceAppliedFilters((prev) => ({ ...prev, [idx]: applied }));
+              setSpeakerVoiceVisibleCounts((prev) => ({ ...prev, [idx]: VOICE_PAGE_SIZE }));
+              setActiveFilterSpeaker(null);
+            }}
             preview={editVoiceFilterPreview}
           />
         );

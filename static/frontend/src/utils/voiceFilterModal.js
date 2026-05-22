@@ -27,7 +27,8 @@ export const getSafeModalGenderFilter = (gender) => {
 
 export const filtersModalToApplied = (f) => {
   const language = normalizeLanguageFilterValue(f?.language) || String(f?.language || "").trim();
-  const accent = String(f?.accent || "").trim();
+  const accentRaw = String(f?.accent || "").trim();
+  const accent = accentRaw ? normalizeAccentToken(accentRaw) : "";
   return {
     search: String(f?.q || "").trim(),
     gender: f?.gender === "__all__" ? "" : String(f?.gender || "").trim().toLowerCase(),

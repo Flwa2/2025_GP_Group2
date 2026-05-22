@@ -215,6 +215,32 @@ const ENGLISH_ACCENT_ALIASES = [
 
 const ENGLISH_ACCENT_ALIAS_BY_TOKEN = new Map(ENGLISH_ACCENT_ALIASES.map((alias) => [alias.token, alias]));
 
+/** Exact normalized accent tokens (after lowercase + trim + punctuation collapse). */
+const CANONICAL_ACCENT_LOOKUP = {
+  american: "american",
+  usa: "american",
+  us: "american",
+  "u s": "american",
+  "u.s": "american",
+  "u.s.a": "american",
+  "united states": "american",
+  "united states of america": "american",
+  british: "british",
+  uk: "british",
+  "u k": "british",
+  england: "british",
+  "united kingdom": "british",
+  australian: "australian",
+  australia: "australian",
+  aussie: "australian",
+  indian: "indian",
+  india: "indian",
+  neutral: "neutral",
+  generic: "neutral",
+  international: "neutral",
+  global: "neutral",
+};
+
 const keywordMatchesText = (keyword, text) => {
   const normalizedKeyword = normalizeAccentSearchText(keyword);
   if (!normalizedKeyword || !text) return false;
@@ -253,9 +279,12 @@ const accentAliasForValue = (value) => {
 };
 
 export const normalizeAccentToken = (value) => {
+  const text = normalizeAccentSearchText(stripArabicAccentLabelPrefix(value));
+  if (!text) return "";
+  if (CANONICAL_ACCENT_LOOKUP[text]) return CANONICAL_ACCENT_LOOKUP[text];
   const alias = accentAliasForValue(value);
   if (alias) return alias.token;
-  return normalizeAccentSearchText(value);
+  return text;
 };
 
 const formatAccentDisplayForLanguage = (display, language) => {
