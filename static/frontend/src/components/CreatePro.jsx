@@ -2393,7 +2393,7 @@ const exportScript = async (format = "pdf") => {
                                                             const loadFailed = Boolean(!listLoading && libr.error);
                                                             const listEmpty =
                                                                 !listLoading && !loadFailed && fullPool.length === 0;
-                                                            const hasMoreVoices = Boolean(libr.hasMore);
+                                                            const hasMoreVoices = displayPool.length < fullPool.length;
                                                             return (
                                                                 <div className="w-full">
                                                                     {listLoading ? (

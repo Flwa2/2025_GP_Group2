@@ -640,7 +640,7 @@ export default function EditPodcast() {
   const [speakerVoiceAppliedFilters, setSpeakerVoiceAppliedFilters] = useState({});
   const [speakerVoiceVisibleCounts, setSpeakerVoiceVisibleCounts] = useState({});
   const [activeFilterSpeaker, setActiveFilterSpeaker] = useState(null);
-  const VOICE_PAGE_SIZE = 100;
+  const VOICE_PAGE_SIZE = 50;
 
   // Music related
   const [availableTracks, setAvailableTracks] = useState([]);

@@ -187,7 +187,6 @@ const ARABIC_ACCENT_REQUIRED_LOCALES = {
 };
 
 const ARABIC_ACCENT_COMPATIBLE_TOKENS = {
-  "arabic-saudi": new Set(["arabic-saudi", "arabic-gulf"]),
   "arabic-gulf": new Set(["arabic-gulf", "arabic-saudi"]),
 };
 
