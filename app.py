@@ -7663,44 +7663,40 @@ AUDIO_FFMPEG_SAMPLE_RATE = "44100"
 AUDIO_FFMPEG_CHANNELS = "1"
 
 
-def _audio_env_int(primary_name: str, legacy_name: str, fallback: int) -> int:
-    for name in (primary_name, legacy_name):
-        raw_value = os.getenv(name)
-        if raw_value is None or str(raw_value).strip() == "":
-            continue
+def _audio_env_int(name: str, fallback: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is not None and str(raw_value).strip() != "":
         try:
             return int(raw_value)
         except (TypeError, ValueError):
             print(f"Invalid audio limit env {name}={raw_value!r}; using fallback.", flush=True)
-            continue
     return fallback
 
 
-def _audio_env_float(primary_name: str, legacy_name: str, fallback: float) -> float:
-    for name in (primary_name, legacy_name):
-        raw_value = os.getenv(name)
-        if raw_value is None or str(raw_value).strip() == "":
-            continue
+def _audio_env_float(name: str, fallback: float) -> float:
+    raw_value = os.getenv(name)
+    if raw_value is not None and str(raw_value).strip() != "":
         try:
             return float(raw_value)
         except (TypeError, ValueError):
             print(f"Invalid audio limit env {name}={raw_value!r}; using fallback.", flush=True)
-            continue
     return fallback
 
 
-WECAST_AUDIO_MAX_WORDS = _audio_env_int("WECAST_AUDIO_MAX_WORDS", "RENDER_AUDIO_MAX_WORDS", 400)
-WECAST_AUDIO_MAX_SPEAKERS = _audio_env_int("WECAST_AUDIO_MAX_SPEAKERS", "RENDER_AUDIO_MAX_SPEAKERS", 2)
-WECAST_AUDIO_MAX_SEGMENTS = _audio_env_int("WECAST_AUDIO_MAX_SEGMENTS", "RENDER_AUDIO_MAX_SEGMENTS", 25)
-WECAST_AUDIO_MAX_TTS_CHARS = _audio_env_int("WECAST_AUDIO_MAX_TTS_CHARS", "RENDER_AUDIO_MAX_TTS_CHARS", 1500)
-WECAST_AUDIO_MAX_DURATION_SEC = _audio_env_float("WECAST_AUDIO_MAX_DURATION", "RENDER_AUDIO_MAX_DURATION_SEC", 300)
+MAX_WORDS_HARD = _audio_env_int("WECAST_AUDIO_MAX_WORDS_HARD", 6000)
+MAX_SEGMENTS_HARD = _audio_env_int("WECAST_AUDIO_MAX_SEGMENTS_HARD", 200)
+MAX_DURATION_HARD = _audio_env_float("WECAST_AUDIO_MAX_DURATION_HARD", 3600)
+MAX_TTS_REQUESTS_HARD = _audio_env_int("WECAST_AUDIO_MAX_TTS_REQUESTS_HARD", 260)
+MAX_ESTIMATED_MEMORY_MB_HARD = _audio_env_int("WECAST_AUDIO_MAX_MEMORY_MB_HARD", 1700)
+AUDIO_TTS_CHUNK_CHARS = _audio_env_int("WECAST_AUDIO_TTS_CHUNK_CHARS", 2500)
 print(
-    "Audio limits: "
-    f"max_words={WECAST_AUDIO_MAX_WORDS} "
-    f"max_speakers={WECAST_AUDIO_MAX_SPEAKERS} "
-    f"max_segments={WECAST_AUDIO_MAX_SEGMENTS} "
-    f"max_tts_chars={WECAST_AUDIO_MAX_TTS_CHARS} "
-    f"max_duration={int(WECAST_AUDIO_MAX_DURATION_SEC)}",
+    "Audio safety: "
+    f"hard_words={MAX_WORDS_HARD} "
+    f"hard_segments={MAX_SEGMENTS_HARD} "
+    f"hard_duration={int(MAX_DURATION_HARD)} "
+    f"hard_tts_requests={MAX_TTS_REQUESTS_HARD} "
+    f"hard_memory_mb={MAX_ESTIMATED_MEMORY_MB_HARD} "
+    f"tts_chunk_chars={AUDIO_TTS_CHUNK_CHARS}",
     flush=True,
 )
 AUDIO_SKIP_GPT_CHAPTERS = os.getenv("AUDIO_SKIP_GPT_CHAPTERS", "1").strip().lower() in (
@@ -7719,11 +7715,13 @@ WECAST_AUDIO_INCLUDE_MUSIC = os.getenv("WECAST_AUDIO_INCLUDE_MUSIC", "0").strip(
 
 def _audio_limits_payload():
     return {
-        "max_words": WECAST_AUDIO_MAX_WORDS,
-        "max_speakers": WECAST_AUDIO_MAX_SPEAKERS,
-        "max_segments": WECAST_AUDIO_MAX_SEGMENTS,
-        "max_tts_chars": WECAST_AUDIO_MAX_TTS_CHARS,
-        "max_duration": int(WECAST_AUDIO_MAX_DURATION_SEC),
+        "mode": "dynamic_resource_estimate",
+        "hard_words": MAX_WORDS_HARD,
+        "hard_segments": MAX_SEGMENTS_HARD,
+        "hard_duration": int(MAX_DURATION_HARD),
+        "hard_tts_requests": MAX_TTS_REQUESTS_HARD,
+        "hard_memory_mb": MAX_ESTIMATED_MEMORY_MB_HARD,
+        "tts_chunk_chars": AUDIO_TTS_CHUNK_CHARS,
     }
 
 
@@ -7761,63 +7759,167 @@ def _audio_stage_log(stage, phase="during", **details):
         print(f"Audio stage: {stage}", flush=True)
 
 
-def _audio_api_json_error(message, code, status=400):
+def _audio_api_json_error(message, code, status=400, **extra):
+    body = {"ok": False, "error": message, "code": code}
+    body.update(extra)
     return _apply_cors_headers(
         _api_json_response(
-            {"ok": False, "error": message, "code": code},
+            body,
             status=status,
         )
     )
 
 
-def _validate_render_audio_limits(script: str, segments: list):
-    word_count = len(re.findall(r"\S+", script or ""))
-    if word_count > WECAST_AUDIO_MAX_WORDS:
-        return (
-            False,
-            f"Script has {word_count} words; maximum allowed is {WECAST_AUDIO_MAX_WORDS} on this server.",
-        )
+def _split_tts_text(text: str, max_chars: int = AUDIO_TTS_CHUNK_CHARS):
+    text = (text or "").strip()
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
 
-    speech_segments = [
+    chunks = []
+    current = ""
+    parts = re.split(r"(?<=[.!?؟。؛])\s+|\n+", text)
+    if len(parts) == 1:
+        parts = re.split(r"(\s+)", text)
+
+    for part in parts:
+        if not part:
+            continue
+        candidate = f"{current}{part}" if part.isspace() else f"{current} {part}".strip()
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current.strip())
+            current = ""
+        if len(part) <= max_chars:
+            current = part.strip()
+            continue
+        for start in range(0, len(part), max_chars):
+            chunks.append(part[start : start + max_chars].strip())
+
+    if current:
+        chunks.append(current.strip())
+    return [chunk for chunk in chunks if chunk]
+
+
+def _speech_segments_for_audio(segments: list):
+    return [
         (speaker, text)
         for speaker, text in segments
         if (speaker or "").strip().lower() != "__music__" and (text or "").strip()
     ]
-    if len(speech_segments) > WECAST_AUDIO_MAX_SEGMENTS:
-        return (
-            False,
-            f"Script has {len(speech_segments)} speech segments; maximum allowed is {WECAST_AUDIO_MAX_SEGMENTS}.",
-        )
 
+
+def _audio_request_estimate(script: str, segments: list):
+    word_count = len(re.findall(r"\S+", script or ""))
+    speech_segments = _speech_segments_for_audio(segments)
     speakers = {(speaker or "").strip() for speaker, _text in speech_segments}
     speakers.discard("")
-    if len(speakers) > WECAST_AUDIO_MAX_SPEAKERS:
-        return (
-            False,
-            f"Too many speakers ({len(speakers)}); maximum allowed is {WECAST_AUDIO_MAX_SPEAKERS}.",
-        )
 
+    tts_requests = 0
+    tts_chars = 0
     for speaker, text in speech_segments:
         if is_arabic(text):
             tts_len = len((text or "").strip())
+            tts_text = (text or "").strip()
         else:
-            tts_len = len(clean_script_for_tts(text or ""))
-        if tts_len > WECAST_AUDIO_MAX_TTS_CHARS:
-            return (
-                False,
-                f"Speech block for {speaker or 'speaker'} is too long ({tts_len} chars); "
-                f"maximum per block is {WECAST_AUDIO_MAX_TTS_CHARS}.",
-            )
+            tts_text = clean_script_for_tts(text or "")
+            tts_len = len(tts_text)
+        tts_chars += tts_len
+        tts_requests += max(1, len(_split_tts_text(tts_text)))
 
     estimated_duration_sec = word_count * 0.45
-    if estimated_duration_sec > WECAST_AUDIO_MAX_DURATION_SEC:
+    estimated_minutes = estimated_duration_sec / 60
+    music_segments = sum(
+        1 for speaker, _text in segments if (speaker or "").strip().lower() == "__music__"
+    )
+    estimated_memory_mb = int(
+        260
+        + (estimated_minutes * 8)
+        + (len(speech_segments) * 1.5)
+        + (tts_requests * 4)
+        + (len(speakers) * 12)
+        + (120 if WECAST_AUDIO_INCLUDE_MUSIC and music_segments else 0)
+    )
+
+    return {
+        "words": word_count,
+        "estimated_seconds": int(estimated_duration_sec),
+        "estimated_minutes": round(estimated_minutes, 1),
+        "segments": len(speech_segments),
+        "speakers": len(speakers),
+        "tts_requests": tts_requests,
+        "tts_chars": tts_chars,
+        "music_enabled": WECAST_AUDIO_INCLUDE_MUSIC,
+        "music_segments": music_segments,
+        "estimated_memory_mb": estimated_memory_mb,
+    }
+
+
+def _log_audio_estimate(estimate: dict):
+    print(
+        "Audio estimate: "
+        f"words={estimate.get('words')} "
+        f"estimated_minutes={estimate.get('estimated_minutes')} "
+        f"segments={estimate.get('segments')} "
+        f"tts_requests={estimate.get('tts_requests')} "
+        f"speakers={estimate.get('speakers')} "
+        f"music_enabled={estimate.get('music_enabled')} "
+        f"estimated_memory_mb={estimate.get('estimated_memory_mb')}",
+        flush=True,
+    )
+
+
+def _validate_audio_resource_estimate(script: str, segments: list):
+    estimate = _audio_request_estimate(script, segments)
+    _log_audio_estimate(estimate)
+
+    if estimate["words"] > MAX_WORDS_HARD:
         return (
             False,
-            f"Estimated audio length (~{int(estimated_duration_sec)}s) exceeds the "
-            f"{int(WECAST_AUDIO_MAX_DURATION_SEC)}s limit for this server.",
+            "This script is too large for one audio generation request. "
+            f"Estimated words: {estimate['words']}; emergency hard limit: {MAX_WORDS_HARD}.",
+            estimate,
         )
 
-    return True, ""
+    if estimate["segments"] > MAX_SEGMENTS_HARD:
+        return (
+            False,
+            "This script has too many speech segments for one audio generation request. "
+            f"Estimated segments: {estimate['segments']}; emergency hard limit: {MAX_SEGMENTS_HARD}.",
+            estimate,
+        )
+
+    if estimate["estimated_seconds"] > MAX_DURATION_HARD:
+        return (
+            False,
+            "This script is estimated to produce audio that is too long for one request. "
+            f"Estimated duration: {estimate['estimated_minutes']} minutes; "
+            f"emergency hard limit: {int(MAX_DURATION_HARD / 60)} minutes.",
+            estimate,
+        )
+
+    if estimate["tts_requests"] > MAX_TTS_REQUESTS_HARD:
+        return (
+            False,
+            "This script requires too many TTS streaming requests for one audio generation job. "
+            f"Estimated TTS requests: {estimate['tts_requests']}; "
+            f"emergency hard limit: {MAX_TTS_REQUESTS_HARD}.",
+            estimate,
+        )
+
+    if estimate["estimated_memory_mb"] > MAX_ESTIMATED_MEMORY_MB_HARD:
+        return (
+            False,
+            "This audio job is estimated to need more memory than this server can safely reserve. "
+            f"Estimated memory: {estimate['estimated_memory_mb']} MB; "
+            f"emergency hard limit: {MAX_ESTIMATED_MEMORY_MB_HARD} MB.",
+            estimate,
+        )
+
+    return True, "", estimate
 
 
 def _chapters_for_audio_save(word_timeline, transcript_text, language="en"):
@@ -8086,6 +8188,25 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
     Background music is off by default on Render (WECAST_AUDIO_INCLUDE_MUSIC=1 to enable).
     """
     _audio_stage_log("synthesis_entry", phase="before")
+    music_index = 0
+    script = (script or "").strip()
+    if not script:
+        return False, "Script is empty."
+
+    _audio_stage_log("script_extracted", script_chars=len(script))
+    segments = parse_script_into_segments(script)
+    if not segments:
+        return False, "Nothing to read after cleaning script."
+
+    ok_limits, limit_error, estimate = _validate_audio_resource_estimate(script, segments)
+    if not ok_limits:
+        _audio_stage_log("limits_rejected", error=limit_error[:120])
+        return False, {
+            "error": limit_error,
+            "code": "audio_performance_limit",
+            "estimate": estimate,
+        }
+
     if not _audio_ffmpeg_ready():
         _audio_stage_log("ffmpeg_ready", ready=False)
         return False, "ffmpeg not installed/configured"
@@ -8098,21 +8219,6 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
     if not r2_client:
         _audio_stage_log("r2_ready", ready=False)
         return False, "Audio storage (R2) is not configured."
-
-    music_index = 0
-    script = (script or "").strip()
-    if not script:
-        return False, "Script is empty."
-
-    _audio_stage_log("script_extracted", script_chars=len(script))
-    segments = parse_script_into_segments(script)
-    if not segments:
-        return False, "Nothing to read after cleaning script."
-
-    ok_limits, limit_error = _validate_render_audio_limits(script, segments)
-    if not ok_limits:
-        _audio_stage_log("limits_rejected", error=limit_error[:120])
-        return False, limit_error
 
     speaker_to_voice, default_voice = build_speaker_voice_map()
     word_timeline = []
@@ -8128,6 +8234,9 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
         "synthesis_start",
         podcast_id=safe_id,
         segment_count=len(segments),
+        speech_segments=estimate.get("segments"),
+        tts_requests=estimate.get("tts_requests"),
+        estimated_memory_mb=estimate.get("estimated_memory_mb"),
         include_music=WECAST_AUDIO_INCLUDE_MUSIC,
         tts_format=AUDIO_TTS_OUTPUT_FORMAT,
     )
@@ -8197,70 +8306,88 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
                     continue
 
                 voice_id = speaker_to_voice.get(speaker, default_voice)
-                segment_path = os.path.join(temp_dir, f"speech_{index:04d}.mp3")
+                tts_chunks = _split_tts_text(tts_text)
 
-                _audio_stage_log(
-                    "tts_stream",
-                    phase="before",
-                    index=index,
-                    speaker=speaker,
-                    chars=len(tts_text),
-                )
-                try:
-                    eleven_tts_stream_to_file(
-                        text=tts_text,
-                        voice_id=voice_id,
-                        output_path=segment_path,
+                for chunk_index, tts_chunk in enumerate(tts_chunks):
+                    segment_path = os.path.join(temp_dir, f"speech_{index:04d}_{chunk_index:02d}.mp3")
+
+                    _audio_stage_log(
+                        "tts_stream",
+                        phase="before",
+                        index=index,
+                        chunk=chunk_index + 1,
+                        chunks=len(tts_chunks),
+                        speaker=speaker,
+                        chars=len(tts_chunk),
                     )
-                except Exception as exc:
-                    return False, str(exc)
+                    try:
+                        eleven_tts_stream_to_file(
+                            text=tts_chunk,
+                            voice_id=voice_id,
+                            output_path=segment_path,
+                        )
+                    except Exception as exc:
+                        return False, str(exc)
 
-                segment_bytes = os.path.getsize(segment_path)
-                _audio_stage_log(
-                    "tts_stream",
-                    phase="after",
-                    index=index,
-                    bytes=segment_bytes,
-                )
-
-                segment_duration = _probe_mp3_duration_seconds(segment_path)
-                word_timeline.extend(
-                    _estimate_word_timeline_from_text(
-                        tts_text,
-                        speaker,
-                        timeline_offset,
-                        segment_duration,
+                    segment_bytes = os.path.getsize(segment_path)
+                    _audio_stage_log(
+                        "tts_stream",
+                        phase="after",
+                        index=index,
+                        chunk=chunk_index + 1,
+                        bytes=segment_bytes,
                     )
-                )
-                timeline_offset += segment_duration
 
-                _audio_stage_log("ffmpeg_merge_segment", phase="before", index=index)
-                _ffmpeg_append_mp3(master_path, segment_path, temp_dir)
-                _audio_stage_log("ffmpeg_merge_segment", phase="after", index=index)
-                try:
-                    os.remove(segment_path)
-                except OSError:
-                    pass
+                    segment_duration = _probe_mp3_duration_seconds(segment_path)
+                    word_timeline.extend(
+                        _estimate_word_timeline_from_text(
+                            tts_chunk,
+                            speaker,
+                            timeline_offset,
+                            segment_duration,
+                        )
+                    )
+                    timeline_offset += segment_duration
+
+                    _audio_stage_log(
+                        "ffmpeg_merge_segment",
+                        phase="before",
+                        index=index,
+                        chunk=chunk_index + 1,
+                    )
+                    _ffmpeg_append_mp3(master_path, segment_path, temp_dir)
+                    _audio_stage_log(
+                        "ffmpeg_merge_segment",
+                        phase="after",
+                        index=index,
+                        chunk=chunk_index + 1,
+                    )
+                    try:
+                        os.remove(segment_path)
+                    except OSError:
+                        pass
+
+                    _audio_memory_log(
+                        "speech_chunk_merged",
+                        index=index,
+                        chunk=chunk_index + 1,
+                        duration_sec=round(segment_duration, 2),
+                        speech_segments=speech_segment_count + 1,
+                    )
+                    gc.collect()
 
                 speech_segment_count += 1
-                _audio_memory_log(
-                    "speech_segment_merged",
-                    index=index,
-                    duration_sec=round(segment_duration, 2),
-                    speech_segments=speech_segment_count,
-                )
-                gc.collect()
 
             if speech_segment_count == 0:
                 return False, "No audio data generated."
 
             output_path = master_path
             measured_duration = _probe_mp3_duration_seconds(output_path)
-            if measured_duration > WECAST_AUDIO_MAX_DURATION_SEC:
+            if measured_duration > MAX_DURATION_HARD:
                 return (
                     False,
                     f"Generated audio ({int(measured_duration)}s) exceeds the "
-                    f"{int(WECAST_AUDIO_MAX_DURATION_SEC)}s server limit.",
+                    f"{int(MAX_DURATION_HARD)}s emergency hard limit.",
                 )
 
             for w in word_timeline:
@@ -8333,22 +8460,19 @@ def api_audio():
         if not script:
             return _audio_api_json_error("Script is empty.", "empty_script", status=400)
 
-        word_count = len(re.findall(r"\S+", script))
-        if word_count > WECAST_AUDIO_MAX_WORDS:
-            _audio_stage_log("api_failure", reason="word_limit", word_count=word_count)
-            return _audio_api_json_error(
-                f"Script has {word_count} words; maximum allowed is {WECAST_AUDIO_MAX_WORDS} on this server.",
-                "audio_limit_exceeded",
-                status=400,
-            )
-
         _audio_stage_log("synthesis_invoke", phase="before")
         ok, result = synthesize_audio_from_script(script, podcast_id)
         _audio_stage_log("synthesis_invoke", phase="after", ok=ok)
         if not ok:
-            error_message = (
-                result if isinstance(result, str) else "Audio generation failed."
-            )
+            error_code = ""
+            error_extra = {}
+            if isinstance(result, dict):
+                error_message = result.get("error") or "Audio generation failed."
+                error_code = result.get("code") or ""
+                if result.get("estimate"):
+                    error_extra["estimate"] = result.get("estimate")
+            else:
+                error_message = result if isinstance(result, str) else "Audio generation failed."
             is_ffmpeg = "ffmpeg" in error_message.lower()
             is_eleven = "elevenlabs" in error_message.lower()
             is_r2 = "storage" in error_message.lower() or "r2" in error_message.lower()
@@ -8357,24 +8481,31 @@ def api_audio():
                 or "exceeds the" in error_message
                 or "server limit" in error_message
                 or "too long" in error_message
+                or "emergency hard limit" in error_message
+                or "estimated to" in error_message
+                or "too many" in error_message.lower()
+                or "too large" in error_message.lower()
             )
             _audio_stage_log("api_failure", reason=error_message[:160])
             return _audio_api_json_error(
                 error_message,
                 (
-                    "ffmpeg_not_configured"
+                    error_code
+                    if error_code
+                    else "ffmpeg_not_configured"
                     if is_ffmpeg
                     else "elevenlabs_not_configured"
                     if is_eleven
                     else "audio_storage_not_configured"
                     if is_r2
-                    else "audio_limit_exceeded"
+                    else "audio_performance_limit"
                     if is_limit
                     else "audio_generation_failed"
                 ),
                 status=503
                 if (is_ffmpeg or is_eleven or is_r2)
                 else 400,
+                **error_extra,
             )
 
         session["last_audio_url"] = result["url"]
