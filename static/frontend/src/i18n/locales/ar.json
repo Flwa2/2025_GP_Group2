@@ -733,6 +733,7 @@
   "account.profileUpdated": "تم تحديث الملف الشخصي بنجاح!",
   "account.savedLocallyServerUnavailable": "تم الحفظ محليًا (الخادم غير متاح)",
   "account.loggedOut": "تم تسجيل خروجك بنجاح.",
+  "account.signInAgainUpdateProfile": "يرجى تسجيل الدخول مرة أخرى قبل تحديث ملفك الشخصي.",
   "account.signInAgainChangeEmail": "يرجى تسجيل الدخول مرة أخرى قبل تغيير بريدك الإلكتروني.",
   "account.validNewEmail": "أدخل بريدًا إلكترونيًا جديدًا صالحًا.",
   "account.differentEmail": "أدخل بريدًا إلكترونيًا مختلفًا للمتابعة.",

@@ -351,6 +351,9 @@ export default function Account() {
     setUsernameFieldError("");
     try {
       const token = localStorage.getItem("token") || sessionStorage.getItem("token");
+      if (!token) {
+        throw new Error(t("account.signInAgainUpdateProfile"));
+      }
 
       const nextUsername = normalizeUsername(profile.displayName);
       const previousUsername = normalizeUsername(originalProfile.displayName);
@@ -372,27 +375,6 @@ export default function Account() {
         }
       }
       
-      // If not authenticated, save to localStorage only
-      if (!token) {
-        const userToStore = {
-          displayName: profile.displayName,
-          email: profile.email,
-          bio: profile.bio,
-          avatarUrl: profile.avatarUrl,
-          authProvider: normalizedAuthProvider,
-        };
-        
-        localStorage.setItem("user", JSON.stringify(userToStore));
-        
-        setOriginalProfile(profile);
-        setAvatarFile(null);
-        setAvatarPreview(null);
-        
-        showToast(t("account.profileSavedLocally"), "success");
-        setSaving(false);
-        return;
-      }
-
       // Prepare FormData for API call
       const formData = new FormData();
       formData.append('displayName', profile.displayName);
@@ -424,12 +406,20 @@ export default function Account() {
 
       const data = await res.json();
 
-      // Update localStorage
-      const userToStore = {
-        displayName: profile.displayName,
-        email: profile.email,
-        bio: profile.bio,
+      const confirmedProfile = {
+        displayName: data.displayName || data.username || profile.displayName,
+        email: data.email || profile.email,
+        bio: data.bio ?? profile.bio,
         avatarUrl: data.avatarUrl || profile.avatarUrl,
+      };
+
+      const userToStore = {
+        displayName: confirmedProfile.displayName,
+        name: confirmedProfile.displayName,
+        username: data.username || confirmedProfile.displayName,
+        email: confirmedProfile.email,
+        bio: confirmedProfile.bio,
+        avatarUrl: confirmedProfile.avatarUrl,
         authProvider: normalizedAuthProvider,
       };
       
@@ -439,12 +429,8 @@ export default function Account() {
         sessionStorage.setItem("user", JSON.stringify(userToStore));
       }
 
-      setOriginalProfile(profile);
-      
-      if (data.avatarUrl) {
-        setProfile(prev => ({ ...prev, avatarUrl: data.avatarUrl }));
-        setOriginalProfile(prev => ({ ...prev, avatarUrl: data.avatarUrl }));
-      }
+      setProfile(confirmedProfile);
+      setOriginalProfile(confirmedProfile);
       
       setAvatarFile(null);
       setAvatarPreview(null);
@@ -459,19 +445,7 @@ export default function Account() {
         return;
       }
       
-      // Fallback to localStorage
-      const userToStore = {
-        displayName: profile.displayName,
-        email: profile.email,
-        bio: profile.bio,
-        avatarUrl: profile.avatarUrl,
-        authProvider: normalizedAuthProvider,
-      };
-      
-      localStorage.setItem("user", JSON.stringify(userToStore));
-      setOriginalProfile(profile);
-      
-      showToast(error.message || t("account.savedLocallyServerUnavailable"), "warning");
+      showToast(error.message || t("account.profileUpdateFailed"), "error");
     } finally {
       setSaving(false);
     }

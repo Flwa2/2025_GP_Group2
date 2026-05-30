@@ -708,6 +708,7 @@
   "account.profileUpdated": "Profile updated successfully!",
   "account.savedLocallyServerUnavailable": "Saved locally (server unavailable)",
   "account.loggedOut": "You have been logged out successfully.",
+  "account.signInAgainUpdateProfile": "Please sign in again before updating your profile.",
   "account.signInAgainChangeEmail": "Please sign in again before changing your email.",
   "account.validNewEmail": "Enter a valid new email address.",
   "account.differentEmail": "Enter a different email address to continue.",

@@ -2326,7 +2326,8 @@ def _upsert_firebase_user_profile(
         user_ref.set(existing_data, merge=True)
 
     existing_name = (
-        existing_data.get("displayName")
+        existing_data.get("username")
+        or existing_data.get("displayName")
         or existing_data.get("name")
         or ""
     ).strip()
@@ -2349,7 +2350,7 @@ def _upsert_firebase_user_profile(
     if firebase_uid:
         payload["firebaseUid"] = firebase_uid
 
-    if display_name or not existing_name:
+    if not existing_name:
         payload["name"] = resolved_name
         payload["displayName"] = resolved_name
 
@@ -2400,9 +2401,17 @@ def _upsert_firebase_user_profile(
 
 
 def _session_user_payload(data, fallback_email):
+    display_name = (
+        data.get("username")
+        or data.get("displayName")
+        or data.get("name")
+        or ""
+    )
     return {
         "email": data.get("email", fallback_email),
-        "name": data.get("name") or data.get("displayName") or "",
+        "name": display_name,
+        "displayName": display_name,
+        "username": data.get("username") or display_name,
         "role": data.get("role", "user"),
         "authProvider": normalize_auth_provider(
             data.get("authProvider"),
@@ -5829,17 +5838,14 @@ def api_me():
             data.get("authProvider")
             or ("password" if data.get("password_hash") else "unknown")
         )
-        display_name = (
-            data.get("name")
-            or data.get("displayName")
-            or "WeCast User"
-        )
+        display_name = _stored_username_display(data) or "WeCast User"
         handle_name = display_name or data.get("email") or user_id or "user"
 
         return jsonify(_json_safe_firestore_value(
             {
                 "email": data.get("email", user_id),
                 "displayName": display_name,
+                "username": data.get("username") or display_name,
                 "bio": data.get("bio", "I create AI-powered podcasts."),
                 "avatarUrl": avatar_url,
                 "authProvider": auth_provider,
@@ -5984,13 +5990,7 @@ def api_profile_update():
 
     # Prepare update data
     update_data = {}
-    should_update_username = bool(display_name) and (
-        bool(_stored_username_lower(existing_data))
-        or normalize_auth_provider(
-            existing_data.get('authProvider'),
-            existing_data.get('password_hash'),
-        ) == "password"
-    )
+    should_update_username = bool(display_name)
     
     if display_name:
         try:
@@ -6075,7 +6075,8 @@ def api_profile_update():
         return jsonify({
             "ok": True,
             "message": "Profile updated successfully",
-            "displayName": updated_data.get('name', updated_data.get('displayName', '')),
+            "displayName": _stored_username_display(updated_data),
+            "username": updated_data.get('username', _stored_username_display(updated_data)),
             "bio": updated_data.get('bio', ''),
             "avatarUrl": response_avatar_url,
             "email": updated_data.get('email', ''),
