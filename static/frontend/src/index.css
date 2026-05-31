@@ -341,6 +341,19 @@ body:has(.wecast-overlay) {
   }
 }
 
+@media (min-width: 768px) and (max-width: 1024px) and (orientation: portrait) {
+  .preview-transcript-card {
+    display: flex;
+    max-height: min(32rem, calc(100dvh - 18rem));
+    flex-direction: column;
+  }
+
+  .preview-transcript-scroll {
+    min-height: 0;
+    max-height: clamp(18rem, calc(100dvh - 26rem), 25rem);
+  }
+}
+
 /* Custom circular motion animations */
 @keyframes circularMotion {
   0% {
