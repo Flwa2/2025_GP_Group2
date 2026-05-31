@@ -882,7 +882,7 @@ export default function Episodes() {
                           : "border-black/10 dark:border-white/10"
                       } text-start`}
                     >
-                      <div className="flex w-full min-w-0 max-w-full flex-col flex-nowrap items-stretch gap-0 overflow-x-clip max-md:gap-4 md:min-w-0 md:flex-row md:items-stretch md:gap-5">
+                      <div className="flex w-full min-w-0 max-w-full flex-col flex-nowrap items-stretch gap-0 overflow-x-clip max-md:gap-4 md:min-w-0 md:flex-row md:items-stretch md:gap-5 md:max-lg:[@media_(orientation:portrait)]:flex-col">
                         <div className="flex w-full min-w-0 max-w-full flex-none flex-col gap-3 overflow-hidden max-md:flex-none max-md:flex-row max-md:flex-nowrap max-md:items-start max-md:gap-2.5 md:min-w-0 md:flex-1 md:flex-row md:items-stretch md:gap-5">
                           <div className="relative w-32 shrink-0 overflow-hidden rounded-lg border-0 bg-neutral-100/80 max-md:h-16 max-md:w-16 max-md:shrink-0 max-md:self-start max-md:border max-md:border-black/10 dark:max-md:border-white/15 md:h-full md:min-h-0 md:w-40 md:shrink-0 md:self-stretch md:rounded-lg md:border-0">
                             <EpisodeCover title={ep.title} coverUrl={ep.coverUrl} coverThumbB64={ep.coverThumbB64} />
