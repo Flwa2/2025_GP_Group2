@@ -8782,6 +8782,65 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
         "words": word_timeline,
     }
 
+
+@app.post("/api/audio/diagnostic")
+def api_audio_diagnostic():
+    """
+    Authenticated production smoke test for CORS, Flask routing, ffmpeg, R2 upload,
+    and /api/audio-style JSON shape without calling ElevenLabs.
+    """
+    user_id, err = _require_login_user()
+    if err:
+        return err
+    if not r2_client:
+        return _audio_api_json_error(
+            "Audio storage (R2) is not configured.",
+            "audio_storage_not_configured",
+            status=503,
+        )
+    if not _audio_ffmpeg_ready():
+        return _audio_api_json_error(
+            "ffmpeg not installed/configured",
+            "ffmpeg_not_configured",
+            status=503,
+        )
+
+    safe_user = re.sub(r"[^A-Za-z0-9_-]", "", user_id or "")[:48] or "user"
+    diag_id = secrets.token_hex(8)
+    object_key = f"diagnostics/audio/{safe_user}/{diag_id}.mp3"
+    started = time.monotonic()
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="wecast_audio_diag_") as temp_dir:
+            output_path = os.path.join(temp_dir, "diagnostic.mp3")
+            _ffmpeg_create_silence_mp3(output_path, duration_ms=250)
+            duration_sec = _probe_mp3_duration_seconds(output_path)
+            upload_file_to_r2(output_path, object_key, "audio/mpeg")
+            signed_url = build_r2_asset_url(object_key, expires_in=300)
+    except Exception as exc:
+        print("Audio diagnostic failed:", exc, flush=True)
+        traceback.print_exc()
+        return _audio_api_json_error(
+            "Audio diagnostic failed on the server.",
+            "audio_diagnostic_failed",
+            status=500,
+        )
+
+    delete_from_r2_quietly(object_key, label="Audio diagnostic cleanup")
+    return _apply_cors_headers(
+        jsonify(
+            ok=True,
+            diagnostic=True,
+            elevenLabsCalled=False,
+            url=signed_url,
+            audioKey=object_key,
+            words=[],
+            durationSec=round(duration_sec, 3),
+            elapsedSec=round(time.monotonic() - started, 2),
+        )
+    )
+
+
 @app.post("/api/audio")
 def api_audio():
     _audio_stage_log("api_request_received", phase="before")
