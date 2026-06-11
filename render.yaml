@@ -40,6 +40,8 @@ services:
         value: https://wecastsa.com
       - key: FLASK_ENV
         value: production
+      - key: GUNICORN_CMD_ARGS
+        value: --worker-class gthread --threads 2 --timeout 900 --graceful-timeout 120 --workers 1
       - key: WECAST_GUNICORN_WORKER_CLASS
         value: gthread
       - key: WECAST_GUNICORN_THREADS
