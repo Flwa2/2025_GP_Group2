@@ -8552,11 +8552,12 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
         with tempfile.TemporaryDirectory(prefix="wecast_audio_") as temp_dir:
             _audio_stage_log("temp_workspace", phase="after", temp_dir=temp_dir)
             master_path = os.path.join(temp_dir, local_filename)
+            concat_segment_paths = []
             silence_path = os.path.join(temp_dir, "lead_silence.mp3")
             _audio_stage_log("lead_silence_create", phase="before")
             _ffmpeg_create_silence_mp3(silence_path, duration_ms=500)
             _audio_stage_log("lead_silence_create", phase="after")
-            shutil.copy2(silence_path, master_path)
+            concat_segment_paths.append(silence_path)
             lead_duration = _probe_mp3_duration_seconds(silence_path)
             timeline_offset += lead_duration
             print(
@@ -8565,7 +8566,7 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
                 flush=True,
             )
             gc.collect()
-            _audio_memory_log("master_initialized", path=master_path)
+            _audio_memory_log("concat_queue_initialized", path=master_path)
 
             for index, (speaker, text) in enumerate(segments):
                 if speaker.strip().lower() == "__music__":
@@ -8598,7 +8599,7 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
                         index=index,
                         music=selected_music,
                     )
-                    _ffmpeg_append_mp3(master_path, music_abs, temp_dir)
+                    concat_segment_paths.append(music_abs)
                     music_duration = _probe_mp3_duration_seconds(music_abs)
                     timeline_offset += music_duration
                     print(
@@ -8673,25 +8674,21 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
                     sync_segment += 1
 
                     _audio_stage_log(
-                        "ffmpeg_merge_segment",
+                        "queue_audio_segment",
                         phase="before",
                         index=index,
                         chunk=chunk_index + 1,
                     )
-                    _ffmpeg_append_mp3(master_path, segment_path, temp_dir)
+                    concat_segment_paths.append(segment_path)
                     _audio_stage_log(
-                        "ffmpeg_merge_segment",
+                        "queue_audio_segment",
                         phase="after",
                         index=index,
                         chunk=chunk_index + 1,
                     )
-                    try:
-                        os.remove(segment_path)
-                    except OSError:
-                        pass
 
                     _audio_memory_log(
-                        "speech_chunk_merged",
+                        "speech_chunk_queued",
                         index=index,
                         chunk=chunk_index + 1,
                         duration_sec=round(segment_duration, 2),
@@ -8703,6 +8700,18 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
 
             if speech_segment_count == 0:
                 return False, "No audio data generated."
+
+            _audio_stage_log(
+                "ffmpeg_final_concat",
+                phase="before",
+                segment_count=len(concat_segment_paths),
+            )
+            _ffmpeg_concat_mp3_files(concat_segment_paths, master_path)
+            _audio_stage_log(
+                "ffmpeg_final_concat",
+                phase="after",
+                segment_count=len(concat_segment_paths),
+            )
 
             output_path = master_path
             measured_duration = _probe_mp3_duration_seconds(output_path)
