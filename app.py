@@ -27,6 +27,7 @@ import base64
 import math
 import numbers
 import secrets
+import time
 from firebase_admin import firestore
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -365,6 +366,7 @@ _ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(dotenv_path=_ENV_PATH, override=False)
 
 import boto3
+from boto3.s3.transfer import TransferConfig
 from botocore.client import Config
 
 FFMPEG_EXECUTABLE = None
@@ -490,11 +492,24 @@ if all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME]):
         endpoint_url=R2_ENDPOINT,
         aws_access_key_id=R2_ACCESS_KEY_ID,
         aws_secret_access_key=R2_SECRET_ACCESS_KEY,
-        config=Config(signature_version="s3v4"),
+        config=Config(
+            signature_version="s3v4",
+            connect_timeout=10,
+            read_timeout=120,
+            retries={"max_attempts": 3, "mode": "standard"},
+            max_pool_connections=4,
+        ),
         region_name="auto",
     )
 else:
     print("WARNING: R2 environment variables are missing. R2 client not initialized.")
+
+R2_UPLOAD_TRANSFER_CONFIG = TransferConfig(
+    multipart_threshold=8 * 1024 * 1024,
+    multipart_chunksize=8 * 1024 * 1024,
+    max_concurrency=1,
+    use_threads=False,
+)
 
 
 def _process_rss_bytes():
@@ -540,14 +555,22 @@ def upload_file_to_r2(file_path: str, object_key: str, content_type: str):
     if not file_path or not os.path.isfile(file_path):
         raise RuntimeError("Upload file path is missing or invalid.")
 
-    _memory_log("upload_file_to_r2_before", object_key=object_key, bytes=os.path.getsize(file_path))
+    file_size = os.path.getsize(file_path)
+    started = time.monotonic()
+    _memory_log("upload_file_to_r2_before", object_key=object_key, bytes=file_size)
     r2_client.upload_file(
         file_path,
         R2_BUCKET_NAME,
         object_key,
         ExtraArgs={"ContentType": content_type},
+        Config=R2_UPLOAD_TRANSFER_CONFIG,
     )
-    _memory_log("upload_file_to_r2_after", object_key=object_key)
+    _memory_log(
+        "upload_file_to_r2_after",
+        object_key=object_key,
+        bytes=file_size,
+        elapsed_sec=round(time.monotonic() - started, 2),
+    )
     gc.collect()
     return object_key
 
@@ -4050,6 +4073,13 @@ def eleven_tts_with_timestamps(
 def health():
     return jsonify(
         status="ok",
+        renderGitCommit=(os.getenv("RENDER_GIT_COMMIT") or ""),
+        gunicorn={
+            "workerClass": os.getenv("WECAST_GUNICORN_WORKER_CLASS", "gthread"),
+            "threads": _audio_env_int("WECAST_GUNICORN_THREADS", 2),
+            "timeout": _audio_env_int("WECAST_GUNICORN_TIMEOUT", 900),
+            "gracefulTimeout": _audio_env_int("WECAST_GUNICORN_GRACEFUL_TIMEOUT", 120),
+        },
         ffmpeg=FFMPEG_EXECUTABLE,
         ffprobe=FFPROBE_EXECUTABLE,
         ffmpeg_ready=_audio_ffmpeg_ready(),

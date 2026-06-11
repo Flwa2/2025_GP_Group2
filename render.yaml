@@ -4,7 +4,7 @@ services:
     env: python
     # apt.txt installs ffmpeg on Render native Python; build step verifies binaries
     buildCommand: pip install -r requirements.txt && ffmpeg -version && ffprobe -version
-    startCommand: gunicorn app:app --timeout 900 --graceful-timeout 120 --workers 1
+    startCommand: gunicorn app:app --worker-class gthread --threads 2 --timeout 900 --graceful-timeout 120 --workers 1
     envVars:
       - key: OPENAI_API_KEY
         sync: false
@@ -40,6 +40,14 @@ services:
         value: https://wecastsa.com
       - key: FLASK_ENV
         value: production
+      - key: WECAST_GUNICORN_WORKER_CLASS
+        value: gthread
+      - key: WECAST_GUNICORN_THREADS
+        value: "2"
+      - key: WECAST_GUNICORN_TIMEOUT
+        value: "900"
+      - key: WECAST_GUNICORN_GRACEFUL_TIMEOUT
+        value: "120"
       - key: FRONTEND_ORIGINS
         value: https://wecastsa.com,https://www.wecastsa.com,http://localhost:5173,http://127.0.0.1:5173
       - key: CORS_ORIGINS
