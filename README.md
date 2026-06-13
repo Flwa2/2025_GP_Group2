@@ -86,6 +86,16 @@ WeCast follows a client-server architecture:
 
 ![Dark Account](docs/images/dark-account-page.png)
 
+## 🌐 Live Demo
+
+Website: https://wecastsa.com
+
+## 🎥 Demo Video
+
+Watch a short demonstration of WeCast features and workflow:
+
+https://github.com/Flwa2/2025_GP_Group2/releases/tag/v1.0
+
 ## ✨ Key Features
 
 - AI script generation from user-provided content
