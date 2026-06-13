@@ -32,6 +32,16 @@ WeCast follows a client-server architecture:
 - Cloudflare R2 for generated media storage
 - OpenAI and ElevenLabs APIs for AI-powered generation
 
+## 🌐 Live Demo
+
+Website: https://wecastsa.com
+
+## 🎥 Demo Video
+
+Watch a short demonstration of WeCast features and workflow:
+
+https://github.com/Flwa2/2025_GP_Group2/releases/tag/v1.0
+
 ## 📸 Screenshots
 
 ### Home Page
@@ -85,16 +95,6 @@ WeCast follows a client-server architecture:
 ### Account Page (Dark Mode)
 
 ![Dark Account](docs/images/dark-account-page.png)
-
-## 🌐 Live Demo
-
-Website: https://wecastsa.com
-
-## 🎥 Demo Video
-
-Watch a short demonstration of WeCast features and workflow:
-
-https://github.com/Flwa2/2025_GP_Group2/releases/tag/v1.0
 
 ## ✨ Key Features
 
