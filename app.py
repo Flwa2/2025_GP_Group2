@@ -14,10 +14,6 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from pydub import AudioSegment
 from shutil import which
-import gc
-import shutil
-import subprocess
-import tempfile
 from io import BytesIO
 from elevenlabs.client import ElevenLabs
 import os
@@ -27,11 +23,8 @@ import base64
 import math
 import numbers
 import secrets
-import time
 from firebase_admin import firestore
-from werkzeug.exceptions import HTTPException
 from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.utils import secure_filename
 from datetime import datetime, timedelta, timezone
 import jwt
 from firebase_init import db
@@ -210,10 +203,8 @@ def _configured_frontend_origins():
     ]
     configured = []
 
-    for env_name in ("CORS_ORIGINS", "FRONTEND_ORIGINS"):
-        raw_env = (os.getenv(env_name) or "").strip()
-        if not raw_env:
-            continue
+    raw_env = (os.getenv("FRONTEND_ORIGINS") or "").strip()
+    if raw_env:
         for value in raw_env.split(","):
             candidate = value.strip().rstrip("/")
             if candidate and candidate not in configured:
@@ -234,12 +225,16 @@ def _configured_frontend_origins():
 
 app = Flask(__name__)
 FRONTEND_ORIGINS = _configured_frontend_origins()
-CORS_ALLOW_HEADERS = ["Content-Type", "Authorization", "X-Requested-With"]
-CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+_ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
+load_dotenv(dotenv_path=_ENV_PATH, override=False)
 
 
 def _cors_origin_specs():
-    """Origins allowed for credentialed cross-origin requests (JWT + cookies)."""
+    """
+    Origins allowed for credentialed cross-origin requests (JWT + cookies).
+    Keep this explicit because credentials are enabled; never pair credentials
+    with a wildcard origin.
+    """
     return list(FRONTEND_ORIGINS)
 
 
@@ -254,178 +249,80 @@ def _is_allowed_cors_origin(origin):
     return False
 
 
-def _apply_cors_headers(response):
-    """Attach CORS headers for allowed production/dev frontend origins."""
-    if not has_request_context():
-        return response
-
-    origin = (request.headers.get("Origin") or "").strip().rstrip("/")
-    if not _is_allowed_cors_origin(origin):
-        return response
-
-    response.headers["Access-Control-Allow-Origin"] = origin
-    response.headers["Vary"] = "Origin"
-    response.headers["Access-Control-Allow-Credentials"] = "true"
-    response.headers["Access-Control-Allow-Methods"] = ", ".join(CORS_ALLOW_METHODS)
-    response.headers["Access-Control-Allow-Headers"] = ", ".join(CORS_ALLOW_HEADERS)
-    response.headers["Access-Control-Max-Age"] = "86400"
-    return response
-
-
 CORS(
     app,
-    resources={
-        r"/api/*": {
-            "origins": _cors_origin_specs(),
-            "supports_credentials": True,
-            "allow_headers": CORS_ALLOW_HEADERS,
-            "methods": CORS_ALLOW_METHODS,
-            "expose_headers": ["Content-Type"],
-            "max_age": 86400,
-        }
-    },
-    intercept_exceptions=True,
-    automatic_options=True,
+    resources={r"/*": {"origins": _cors_origin_specs()}},
+    supports_credentials=True,
+    allow_headers=["Content-Type", "Authorization"],
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 )
 
 
 @app.after_request
 def add_cors_headers(response):
-    return _apply_cors_headers(response)
-
-
-@app.errorhandler(HTTPException)
-def handle_http_exception(error):
-    if request.path.startswith("/api/"):
-        payload = {
-            "ok": False,
-            "error": error.description or error.name,
-            "code": f"http_{error.code}",
-        }
-        response = jsonify(payload)
-        response.status_code = error.code
-        return _apply_cors_headers(response)
-    return error
-
-
-@app.errorhandler(500)
-def handle_internal_server_error(error):
-    if request.path.startswith("/api/"):
-        print("API 500 error:", error, flush=True)
-        traceback.print_exc()
-        return _apply_cors_headers(
-            _api_json_response(
-                {
-                    "error": "Internal server error.",
-                    "code": "server_error",
-                },
-                status=500,
-            )
+    origin = (request.headers.get("Origin") or "").strip().rstrip("/")
+    if _is_allowed_cors_origin(origin):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = (
+            "GET, POST, PUT, PATCH, DELETE, OPTIONS"
         )
-    raise error
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
 
 
-@app.errorhandler(Exception)
-def handle_unhandled_exception(error):
-    if not request.path.startswith("/api/"):
-        raise error
-    if isinstance(error, HTTPException):
-        raise error
-    print("API unhandled error:", error, flush=True)
-    traceback.print_exc()
-    return _apply_cors_headers(
-        _api_json_response(
-            {
-                "error": "Internal server error.",
-                "code": "server_error",
-            },
-            status=500,
-        )
-    )
+def _load_flask_secret_key():
+    secret = (os.getenv("FLASK_SECRET_KEY") or "").strip()
+    if secret:
+        return secret
+    if os.getenv("FLASK_ENV", "").strip().lower() in {"prod", "production"} or os.getenv("RENDER"):
+        raise RuntimeError("FLASK_SECRET_KEY must be set in production.")
+    return "dev-only-change-me"
 
 
-# Server-side sessions (JWT is primary; cookies are supplementary for /api/me)
-from services.email_config import is_production as _email_is_production
-
-_session_cookie_secure = _email_is_production()
-_session_cookie_samesite = "None" if _session_cookie_secure else "Lax"
+# Server-side sessions 
 app.config.update(
-    SECRET_KEY=os.getenv("FLASK_SECRET_KEY", "WeCast2025"),
-    SESSION_TYPE="filesystem",
+    SECRET_KEY=_load_flask_secret_key(), 
+    SESSION_TYPE="filesystem", 
     SESSION_FILE_DIR="./.flask_session",
     SESSION_PERMANENT=False,
-    SESSION_COOKIE_SAMESITE=_session_cookie_samesite,
-    SESSION_COOKIE_SECURE=_session_cookie_secure,
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_PATH="/",
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=False,  
 )
 Session(app)
 
-# Load .env variables configuring ffmpeg for pydub (explicit path: repo root)
-_ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
-load_dotenv(dotenv_path=_ENV_PATH, override=False)
+# .env is already loaded above so security-sensitive config is available early.
 
 import boto3
-from boto3.s3.transfer import TransferConfig
 from botocore.client import Config
 
-FFMPEG_EXECUTABLE = None
-FFPROBE_EXECUTABLE = None
+# Get ffmpeg & ffprobe paths from .env
+ffmpeg_path = os.getenv("FFMPEG_PATH")
+ffprobe_path = os.getenv("FFPROBE_PATH")
 
+print("DEBUG ffmpeg_path:", ffmpeg_path)
+print("DEBUG ffprobe_path:", ffprobe_path)
 
-def _command_is_executable(command):
-    if not command or not os.path.isfile(command):
-        return False
-    try:
-        result = subprocess.run(
-            [command, "-version"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
+# If the paths exist, configure pydub AND PATH
+if ffmpeg_path and os.path.exists(ffmpeg_path):
+    AudioSegment.converter = ffmpeg_path
+    ffmpeg_dir = os.path.dirname(ffmpeg_path)
+    os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+else:
+    print("WARNING: ffmpeg_path missing or invalid")
 
+if ffprobe_path and os.path.exists(ffprobe_path):
+    AudioSegment.ffprobe = ffprobe_path
+    ffprobe_dir = os.path.dirname(ffprobe_path)
+    if ffprobe_dir not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = ffprobe_dir + os.pathsep + os.environ.get("PATH", "")
+else:
+    print("WARNING: ffprobe_path missing or invalid")
 
-def _configure_ffmpeg_binaries():
-    """Resolve ffmpeg/ffprobe from env, PATH, or Render apt packages."""
-    global FFMPEG_EXECUTABLE, FFPROBE_EXECUTABLE
-
-    env_ffmpeg = (os.getenv("FFMPEG_PATH") or "").strip()
-    env_ffprobe = (os.getenv("FFPROBE_PATH") or "").strip()
-
-    ffmpeg_candidates = [env_ffmpeg, which("ffmpeg"), "/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
-    ffprobe_candidates = [env_ffprobe, which("ffprobe"), "/usr/bin/ffprobe", "/usr/local/bin/ffprobe"]
-
-    ffmpeg_bin = next((c for c in ffmpeg_candidates if _command_is_executable(c)), None)
-    ffprobe_bin = next((c for c in ffprobe_candidates if _command_is_executable(c)), None)
-
-    print("ffmpeg:", ffmpeg_bin, flush=True)
-    print("ffprobe:", ffprobe_bin, flush=True)
-
-    if ffmpeg_bin:
-        AudioSegment.converter = ffmpeg_bin or which("ffmpeg")
-        ffmpeg_dir = os.path.dirname(ffmpeg_bin)
-        if ffmpeg_dir:
-            os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
-    else:
-        print("WARNING: ffmpeg not found on PATH or FFMPEG_PATH", flush=True)
-
-    if ffprobe_bin:
-        AudioSegment.ffprobe = ffprobe_bin or which("ffprobe")
-        ffprobe_dir = os.path.dirname(ffprobe_bin)
-        if ffprobe_dir and ffprobe_dir not in os.environ.get("PATH", ""):
-            os.environ["PATH"] = ffprobe_dir + os.pathsep + os.environ.get("PATH", "")
-    else:
-        print("WARNING: ffprobe not found on PATH or FFPROBE_PATH", flush=True)
-
-    FFMPEG_EXECUTABLE = ffmpeg_bin
-    FFPROBE_EXECUTABLE = ffprobe_bin
-    return ffmpeg_bin, ffprobe_bin
-
-
-_configure_ffmpeg_binaries()
+print("DEBUG AudioSegment.converter:", getattr(AudioSegment, "converter", None))
+print("DEBUG AudioSegment.ffprobe:", getattr(AudioSegment, "ffprobe", None))
+print("DEBUG PATH starts with:", os.environ["PATH"].split(os.pathsep)[0])
 
 
 app.secret_key = app.config["SECRET_KEY"]
@@ -452,12 +349,10 @@ def _decode_request_token():
         return None
 
     token = auth_header.split(" ", 1)[1].strip()
-    if not token:
-        return None
     try:
         return jwt.decode(token, app.config["SECRET_KEY"], algorithms=["HS256"])
     except Exception as e:
-        print("JWT decode failed:", e, flush=True)
+        print("JWT decode failed:", e)
         return None
 
 
@@ -492,86 +387,23 @@ if all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME]):
         endpoint_url=R2_ENDPOINT,
         aws_access_key_id=R2_ACCESS_KEY_ID,
         aws_secret_access_key=R2_SECRET_ACCESS_KEY,
-        config=Config(
-            signature_version="s3v4",
-            connect_timeout=10,
-            read_timeout=120,
-            retries={"max_attempts": 3, "mode": "standard"},
-            max_pool_connections=4,
-        ),
+        config=Config(signature_version="s3v4"),
         region_name="auto",
     )
 else:
     print("WARNING: R2 environment variables are missing. R2 client not initialized.")
-
-R2_UPLOAD_TRANSFER_CONFIG = TransferConfig(
-    multipart_threshold=8 * 1024 * 1024,
-    multipart_chunksize=8 * 1024 * 1024,
-    max_concurrency=1,
-    use_threads=False,
-)
-
-
-def _process_rss_bytes():
-    try:
-        import psutil
-
-        return psutil.Process().memory_info().rss
-    except Exception:
-        return None
-
-
-def _memory_log(label, **details):
-    parts = [str(label)]
-    rss_bytes = _process_rss_bytes()
-    if rss_bytes is not None:
-        parts.append(f"rss_mb={rss_bytes / (1024 * 1024):.1f}")
-    for key, value in details.items():
-        if value is not None:
-            parts.append(f"{key}={value}")
-    print("Memory:", " ".join(parts), flush=True)
 
 
 def upload_bytes_to_r2(file_bytes: bytes, object_key: str, content_type: str):
     if not r2_client:
         raise RuntimeError("R2 client is not configured.")
 
-    _memory_log("upload_bytes_to_r2_before", object_key=object_key, bytes=len(file_bytes))
     r2_client.put_object(
         Bucket=R2_BUCKET_NAME,
         Key=object_key,
         Body=file_bytes,
         ContentType=content_type,
     )
-    _memory_log("upload_bytes_to_r2_after", object_key=object_key)
-    gc.collect()
-    return object_key
-
-
-def upload_file_to_r2(file_path: str, object_key: str, content_type: str):
-    """Stream upload from disk to avoid loading large audio files into RAM."""
-    if not r2_client:
-        raise RuntimeError("R2 client is not configured.")
-    if not file_path or not os.path.isfile(file_path):
-        raise RuntimeError("Upload file path is missing or invalid.")
-
-    file_size = os.path.getsize(file_path)
-    started = time.monotonic()
-    _memory_log("upload_file_to_r2_before", object_key=object_key, bytes=file_size)
-    r2_client.upload_file(
-        file_path,
-        R2_BUCKET_NAME,
-        object_key,
-        ExtraArgs={"ContentType": content_type},
-        Config=R2_UPLOAD_TRANSFER_CONFIG,
-    )
-    _memory_log(
-        "upload_file_to_r2_after",
-        object_key=object_key,
-        bytes=file_size,
-        elapsed_sec=round(time.monotonic() - started, 2),
-    )
-    gc.collect()
     return object_key
 
 
@@ -823,30 +655,12 @@ class AuthFlowError(RuntimeError):
 
 def auth_error_response(code, message, status=400, **extra):
     payload = {
-        "ok": False,
         "code": code,
         "message": message,
         "error": message,
     }
     payload.update(extra)
     return jsonify(payload), status
-
-
-def _api_json_response(payload, status=200):
-    """Always return a JSON object with ok flag for /api auth routes."""
-    body = dict(payload or {})
-    if "ok" not in body:
-        body["ok"] = status < 400 and not body.get("error")
-    response = jsonify(body)
-    response.status_code = status
-    return response
-
-
-def _encode_app_jwt_token(user_email, firebase_uid=""):
-    raw_token = create_token(user_email, user_email, firebase_uid=firebase_uid)
-    if isinstance(raw_token, bytes):
-        return raw_token.decode("utf-8")
-    return str(raw_token or "").strip()
 
 
 def _clean_username(value):
@@ -1124,22 +938,10 @@ def _username_login_match_metadata(username, doc):
     }
     has_password_hash = bool(data.get("password_hash"))
 
-    resolved_email = _normalize_email(data.get("email") or (doc.id if doc and doc.exists else ""))
-    firebase_state = (
-        _firebase_account_state_for_email(resolved_email, user_data=data)
-        if resolved_email
-        else None
-    )
-    login_strategy = "firebase_email"
-    if firebase_state and firebase_state.get("hasPasswordProvider"):
-        login_strategy = "firebase_email"
-    elif has_password_hash:
-        login_strategy = "legacy_password"
-
     return {
         "doc": doc,
         "data": data,
-        "loginStrategy": login_strategy,
+        "loginStrategy": "legacy_password" if has_password_hash else "firebase_email",
         "score": (
             1 if has_password_hash else 0,
             1 if explicit_username_match else 0,
@@ -1184,18 +986,13 @@ def resolve_login_strategy_for_email(email):
         stored_hash,
     )
 
+    login_strategy = "legacy_password" if stored_hash else "firebase_email"
     if (
         firebase_state
         and firebase_state.get("authProvider") in {"google", "github"}
         and not firebase_state.get("hasPasswordProvider")
     ):
         login_strategy = "social_only"
-    elif firebase_state and firebase_state.get("hasPasswordProvider"):
-        login_strategy = "firebase_email"
-    elif stored_hash:
-        login_strategy = "legacy_password"
-    else:
-        login_strategy = "firebase_email"
 
     return {
         "userDoc": user_doc,
@@ -1204,33 +1001,6 @@ def resolve_login_strategy_for_email(email):
         "authProvider": auth_provider,
         "loginStrategy": login_strategy,
     }
-
-
-def _verify_password_for_login(user_email, user_data, user_doc, password, firebase_state):
-    """Return (ok, path) where path is legacy_hash, firebase_rest, or failed."""
-    stored_hash = user_data.get("password_hash")
-    normalized_email = _normalize_email(user_email)
-
-    if stored_hash and check_password_hash(stored_hash, password):
-        return True, "legacy_hash"
-
-    if firebase_state and firebase_state.get("hasPasswordProvider"):
-        if _verify_firebase_email_password(normalized_email, password):
-            if stored_hash and user_doc and user_doc.exists:
-                try:
-                    user_doc.reference.set(
-                        {"password_hash": firestore.DELETE_FIELD},
-                        merge=True,
-                    )
-                    _log_auth_login_step("cleared_stale_password_hash", email=normalized_email)
-                except Exception as clear_error:
-                    _log_auth_login_step(
-                        "clear_stale_password_hash_failed",
-                        errorType=type(clear_error).__name__,
-                    )
-            return True, "firebase_rest"
-
-    return False, "failed"
 
 
 def _username_is_taken(username_lower, *, email="", firebase_uid="", user_ref=None):
@@ -1497,103 +1267,9 @@ def get_user_doc_by_candidates(user_id=None, firebase_uid="", email=""):
     return None
 
 
-def _jwt_auth_payload():
-    return _decode_request_token() or {}
-
-
-def _resolve_identity_from_firebase_id_token(id_token: str):
-    """Mint session + identity from a verified Firebase ID token (cover/finalize bootstrap)."""
-    from firebase_admin import auth as fb_auth
-
-    if not id_token or not _looks_like_firebase_jwt(id_token):
-        return None
-
-    try:
-        decoded = fb_auth.verify_id_token(id_token)
-    except Exception as exc:
-        print(f"Firebase idToken verify failed: {exc}", flush=True)
-        return None
-
-    email = _normalize_email(decoded.get("email") or "")
-    firebase_uid = (decoded.get("uid") or "").strip()
-    if not email and not firebase_uid:
-        return None
-
-    name = (decoded.get("name") or "").strip()
-    sign_in_provider = decoded.get("firebase", {}).get("sign_in_provider", "oauth")
-    mapped_provider = _map_firebase_sign_in_provider(sign_in_provider)
-
-    if email:
-        try:
-            _upsert_firebase_user_profile(
-                email=email,
-                display_name=name,
-                auth_provider=mapped_provider,
-                email_verified=bool(decoded.get("email_verified")),
-                firebase_uid=firebase_uid,
-                mark_login=False,
-            )
-        except Exception as exc:
-            print(f"Firebase profile upsert during token refresh failed: {exc}", flush=True)
-
-    if email:
-        session["user_id"] = email
-    if firebase_uid:
-        session["firebase_uid"] = firebase_uid
-    session.modified = True
-
-    doc = get_user_doc_by_candidates(email, firebase_uid=firebase_uid, email=email)
-    if doc and doc.exists and not _user_doc_is_active(doc):
-        session.clear()
-        session.modified = True
-        doc = None
-    data = doc.to_dict() or {} if doc and doc.exists else {}
-    resolved_email = _normalize_email(data.get("email") or email)
-    resolved_uid = (data.get("firebaseUid") or firebase_uid).strip()
-    return {
-        "email": resolved_email,
-        "firebaseUid": resolved_uid,
-        "doc": doc,
-        "data": data,
-    }
-
-
-def _sync_session_from_jwt(payload=None):
-    """Restore session from app JWT when Render lost filesystem session store."""
-    payload = payload if payload is not None else _jwt_auth_payload()
-    if not payload:
-        return False
-
-    email = _normalize_email(payload.get("email") or payload.get("user_id") or "")
-    uid = (payload.get("firebase_uid") or "").strip()
-    if not email and not uid:
-        return False
-
-    changed = False
-    if email and session.get("user_id") != email:
-        session["user_id"] = email
-        changed = True
-    if uid and session.get("firebase_uid") != uid:
-        session["firebase_uid"] = uid
-        changed = True
-    if changed:
-        session.modified = True
-    return True
-
-
 def get_current_user_identity():
-    payload = _jwt_auth_payload()
-    jwt_email = _normalize_email(payload.get("email") or payload.get("user_id") or "")
-    jwt_uid = (payload.get("firebase_uid") or "").strip()
-    session_email = _normalize_email(session.get("user_id") or "")
-    session_uid = (session.get("firebase_uid") or "").strip()
-
-    # JWT first: cross-origin requests keep Bearer; filesystem sessions may be empty on Render.
-    if jwt_email or jwt_uid:
-        _sync_session_from_jwt(payload)
-
-    current_email = jwt_email or session_email or _normalize_email(get_current_user_email() or "")
-    current_uid = jwt_uid or session_uid or (get_current_user_firebase_uid() or "").strip()
+    current_email = _normalize_email(session.get("user_id") or get_current_user_email())
+    current_uid = (session.get("firebase_uid") or get_current_user_firebase_uid() or "").strip()
     doc = get_user_doc_by_candidates(current_email, firebase_uid=current_uid, email=current_email)
     if doc and doc.exists and not _user_doc_is_active(doc):
         session.clear()
@@ -1795,30 +1471,10 @@ def _firebase_web_api_key():
     return ""
 
 
-def _identity_toolkit_error_body(response):
-    try:
-        return response.json()
-    except Exception:
-        return {"raw": (getattr(response, "text", None) or "")[:500]}
-
-
-def _log_identity_toolkit_error(context, response):
-    body = _identity_toolkit_error_body(response)
-    err_msg = ((body.get("error") or {}).get("message") or "").strip()
-    print(
-        f"Identity Toolkit {context}:",
-        f"status={getattr(response, 'status_code', '?')}",
-        f"message={err_msg or 'unknown'}",
-        flush=True,
-    )
-    return err_msg
-
-
 def _verify_firebase_email_password(email, password):
     """True if Identity Toolkit accepts this email/password (Firebase Auth source of truth)."""
     api_key = _firebase_web_api_key()
     if not api_key:
-        _log_auth_login_step("firebase_password_verify_skipped", reason="missing_api_key")
         return False
     normalized = _normalize_email(email)
     if not normalized or password is None or password == "":
@@ -1841,10 +1497,7 @@ def _verify_firebase_email_password(email, password):
     except Exception as exc:
         print(f"Firebase password verify request failed: {exc}")
         return False
-    if not response.ok:
-        _log_identity_toolkit_error("signInWithPassword", response)
-        return False
-    return True
+    return bool(response.ok)
 
 
 def _password_reset_continue_url():
@@ -1966,54 +1619,6 @@ def _log_password_reset_step(step, **details):
             continue
         safe_parts.append(f"{key}={value}")
     print("Password reset trace:", *safe_parts, flush=True)
-
-
-def _log_auth_login_step(step, **details):
-    safe_parts = [f"step={step}"]
-    for key, value in details.items():
-        if value is None:
-            continue
-        safe_parts.append(f"{key}={value}")
-    print("Auth login trace:", *safe_parts, flush=True)
-
-
-def _firebase_admin_project_id():
-    try:
-        import firebase_admin
-
-        app_instance = firebase_admin.get_app()
-        project_id = getattr(app_instance, "project_id", None)
-        if project_id:
-            return str(project_id).strip()
-        cred_obj = getattr(app_instance, "credential", None)
-        if cred_obj and getattr(cred_obj, "project_id", None):
-            return str(cred_obj.project_id).strip()
-    except Exception:
-        pass
-    try:
-        with open("config/service_account.json", "r", encoding="utf-8") as fh:
-            return (json.load(fh).get("project_id") or "").strip()
-    except Exception:
-        return ""
-
-
-def _looks_like_firebase_jwt(token):
-    value = (token or "").strip()
-    if not value or value.lower() in {"invalid", "undefined", "null"}:
-        return False
-    parts = value.split(".")
-    return len(parts) == 3 and all(part for part in parts)
-
-
-def _map_firebase_sign_in_provider(raw_provider):
-    normalized = (raw_provider or "").strip().lower()
-    if normalized in {"password", "email", "email_password"}:
-        return "password"
-    if "google" in normalized:
-        return "google"
-    if "github" in normalized:
-        return "github"
-    return normalized or "unknown"
 
 
 def _issue_internal_password_reset_link(email, delivery_label):
@@ -2349,8 +1954,7 @@ def _upsert_firebase_user_profile(
         user_ref.set(existing_data, merge=True)
 
     existing_name = (
-        existing_data.get("username")
-        or existing_data.get("displayName")
+        existing_data.get("displayName")
         or existing_data.get("name")
         or ""
     ).strip()
@@ -2373,7 +1977,7 @@ def _upsert_firebase_user_profile(
     if firebase_uid:
         payload["firebaseUid"] = firebase_uid
 
-    if not existing_name:
+    if display_name or not existing_name:
         payload["name"] = resolved_name
         payload["displayName"] = resolved_name
 
@@ -2424,17 +2028,9 @@ def _upsert_firebase_user_profile(
 
 
 def _session_user_payload(data, fallback_email):
-    display_name = (
-        data.get("username")
-        or data.get("displayName")
-        or data.get("name")
-        or ""
-    )
     return {
         "email": data.get("email", fallback_email),
-        "name": display_name,
-        "displayName": display_name,
-        "username": data.get("username") or display_name,
+        "name": data.get("name") or data.get("displayName") or "",
         "role": data.get("role", "user"),
         "authProvider": normalize_auth_provider(
             data.get("authProvider"),
@@ -4010,23 +3606,10 @@ def chars_to_words(text: str, ch_starts: list, ch_ends: list):
 
     return words
 
-def _decode_base64_to_file(b64_string, output_path):
-    """Decode base64 MP3 to disk in chunks to avoid a second full-RAM copy."""
-    chunk_chars = 4 * 1024 * 1024
-    with open(output_path, "wb") as output_file:
-        for offset in range(0, len(b64_string), chunk_chars):
-            output_file.write(base64.b64decode(b64_string[offset : offset + chunk_chars]))
-
-
-def eleven_tts_with_timestamps(
-    text: str,
-    voice_id: str,
-    model_id: str = "eleven_multilingual_v2",
-    output_path=None,
-):
+def eleven_tts_with_timestamps(text: str, voice_id: str, model_id: str = "eleven_multilingual_v2"):
     """
-    DEPRECATED for /api/audio — loads full JSON+base64 (OOM on Render).
-    Use eleven_tts_stream_to_file() instead.
+    Returns: (audio_bytes, word_timings_for_this_segment)
+    word timings are relative to segment start (0.0)
     """
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/with-timestamps"
     headers = {
@@ -4044,49 +3627,25 @@ def eleven_tts_with_timestamps(
     if not r.ok:
         raise RuntimeError(f"ElevenLabs error {r.status_code}: {r.text[:300]}")
 
-    try:
-        data = r.json()
-    finally:
-        r.close()
+    data = r.json()
     audio_b64 = data.get("audio_base64")
     if not audio_b64:
         raise RuntimeError("Missing audio_base64 in ElevenLabs response.")
 
+    audio_bytes = base64.b64decode(audio_b64)
+
     alignment = data.get("alignment") or {}
     ch_starts = alignment.get("character_start_times_seconds") or []
     ch_ends = alignment.get("character_end_times_seconds") or []
+
+    # Convert char timings to words using the exact same text we sent
     words = chars_to_words(text, ch_starts, ch_ends)
-    del data, alignment, ch_starts, ch_ends
 
-    if output_path:
-        _decode_base64_to_file(audio_b64, output_path)
-        del audio_b64
-        gc.collect()
-        return None, words
-
-    audio_bytes = base64.b64decode(audio_b64)
-    del audio_b64
-    gc.collect()
     return audio_bytes, words
 
 @app.get("/api/health")
 def health():
-    return jsonify(
-        status="ok",
-        renderGitCommit=(os.getenv("RENDER_GIT_COMMIT") or ""),
-        gunicorn={
-            "cmdArgs": os.getenv("GUNICORN_CMD_ARGS") or "",
-            "configuredWorkerClass": os.getenv("WECAST_GUNICORN_WORKER_CLASS") or "",
-            "configuredThreads": os.getenv("WECAST_GUNICORN_THREADS") or "",
-            "configuredTimeout": os.getenv("WECAST_GUNICORN_TIMEOUT") or "",
-            "configuredGracefulTimeout": os.getenv("WECAST_GUNICORN_GRACEFUL_TIMEOUT") or "",
-            "serverSoftware": request.environ.get("SERVER_SOFTWARE", ""),
-        },
-        ffmpeg=FFMPEG_EXECUTABLE,
-        ffprobe=FFPROBE_EXECUTABLE,
-        ffmpeg_ready=_audio_ffmpeg_ready(),
-        audioLimits=_audio_limits_payload(),
-    )
+    return jsonify(status="ok")
 
 
 def _json_safe_voice_labels(labels: dict) -> dict:
@@ -4350,6 +3909,9 @@ def _shared_voices_query_params_from_request():
 
 def _fetch_elevenlabs_shared_voices_from_request():
     """Fetch shared voice library page from ElevenLabs using backend key only."""
+    if not get_current_podcast_owner_id():
+        return None, None, None, (jsonify(error="Not logged in"), 401)
+
     if not _elevenlabs_key_ready():
         return None, None, None, _elevenlabs_not_configured_response()
 
@@ -4421,6 +3983,9 @@ def api_voices_elevenlabs():
 @app.get("/api/voices/library-options")
 def api_voices_library_options():
     """Sample shared voices (paginated) to build filter dropdown options — no API key in response."""
+    if not get_current_podcast_owner_id():
+        return jsonify(error="Not logged in"), 401
+
     if not _elevenlabs_key_ready():
         return _elevenlabs_not_configured_response()
     headers = _elevenlabs_headers()
@@ -4504,6 +4069,9 @@ def api_voices():
 
     # If caller explicitly requests ElevenLabs, fetch live list directly.
     if provider_q == "elevenlabs":
+        if not get_current_podcast_owner_id():
+            return jsonify(error="Not logged in"), 401
+
         if not _elevenlabs_key_ready():
             return jsonify(count=0, items=[], error="ElevenLabs API key is not configured."), 500
         if library_flag:
@@ -4610,6 +4178,9 @@ def api_voices():
             return jsonify(count=len(items), items=items)
 
         # Fallback to ElevenLabs if Firestore has no voices
+        if not get_current_podcast_owner_id():
+            return jsonify(error="Not logged in"), 401
+
         if not _elevenlabs_key_ready():
             return jsonify(count=0, items=[], error="ElevenLabs API key is not configured."), 500
 
@@ -4645,6 +4216,10 @@ def api_voices():
 
 @app.post("/api/voices/preview")
 def api_voice_preview():
+    user_id, err = _require_login_user()
+    if err:
+        return err
+
     data = request.get_json(force=True) or {}
     incoming = (data.get("voiceId") or "").strip()
     incoming_name = (data.get("voiceName") or "").strip()
@@ -4738,184 +4313,21 @@ def api_voice_preview():
         details=r.text[:800],
     ), 502
 
-def _log_api_auth_context(route_name: str, podcast_id: str = "", failure_reason: str = ""):
-    """Cross-origin auth diagnostics (Render + wecastsa.com)."""
-    auth_header = request.headers.get("Authorization", "")
-    token_payload = _jwt_auth_payload()
-    jwt_email = ""
-    if token_payload:
-        jwt_email = _normalize_email(
-            token_payload.get("email") or token_payload.get("user_id") or ""
-        )
-    identity = get_current_user_identity()
-    origin = (request.headers.get("Origin") or "").strip()
-    cookie_names = sorted(request.cookies.keys())
-    owner_id = get_current_podcast_owner_id() or ""
-    episode_owner = ""
-    if podcast_id:
-        try:
-            pdata = db.collection("podcasts").document(podcast_id).get()
-            if pdata.exists:
-                pdata_dict = pdata.to_dict() or {}
-                episode_owner = (
-                    pdata_dict.get("userId")
-                    or pdata_dict.get("ownerEmail")
-                    or pdata_dict.get("ownerUid")
-                    or ""
-                )
-        except Exception as exc:
-            episode_owner = f"<lookup_error:{exc}>"
-
-    print(
-        "API auth",
-        f"route={route_name}",
-        f"method={request.method}",
-        f"route_hit=yes",
-        f"origin={origin or '<none>'}",
-        f"cookie_present={'yes' if cookie_names else 'no'}",
-        f"cookies={cookie_names}",
-        f"auth_header={'yes' if auth_header else 'no'}",
-        f"bearer={'yes' if auth_header.startswith('Bearer ') else 'no'}",
-        f"jwt={'yes' if token_payload else 'no'}",
-        f"jwt_decoded={'yes' if token_payload else 'no'}",
-        f"jwt_email={_mask_email(jwt_email) if jwt_email else '<none>'}",
-        f"session_keys={sorted(session.keys())}",
-        f"session_user={'yes' if session.get('user_id') else 'no'}",
-        f"session_uid={'yes' if session.get('firebase_uid') else 'no'}",
-        f"resolved_email={_mask_email(identity.get('email') or '') or '<none>'}",
-        f"resolved_uid={'yes' if identity.get('firebaseUid') else 'no'}",
-        f"owner_id={owner_id[:48] if owner_id else '<none>'}",
-        f"episode_owner={str(episode_owner)[:48] if episode_owner else '<none>'}",
-        f"failure={failure_reason or '<none>'}",
-        flush=True,
-    )
-
-
-def _log_request_json_context(route_name: str):
-    payload = request.get_json(silent=True) or {}
-    safe_payload = {}
-    for key, value in payload.items():
-        if key.lower() in {"token", "authorization", "password", "secret"}:
-            safe_payload[key] = "<redacted>"
-        elif isinstance(value, str):
-            safe_payload[key] = value[:200]
-        else:
-            safe_payload[key] = value
-
-    print(
-        "API request body",
-        f"route={route_name}",
-        f"method={request.method}",
-        f"body={safe_payload}",
-        flush=True,
-    )
-
-
-def _auth_identity_missing_response():
-    return (
-        _apply_cors_headers(
-            _api_json_response(
-                {
-                    "ok": False,
-                    "code": "auth_identity_missing",
-                    "error": "Please log in again.",
-                },
-                status=401,
-            )
-        ),
-        401,
-    )
-
-
-@app.post("/api/auth/session-token")
-def api_auth_session_token():
-    _log_api_auth_context("auth_session_token")
-    body = request.get_json(silent=True) or {}
-    firebase_id_token = (body.get("idToken") or "").strip()
-
-    identity = get_current_user_identity()
-    email = _normalize_email(identity.get("email") or "")
-    firebase_uid = (identity.get("firebaseUid") or "").strip()
-
-    if not email and not firebase_uid and firebase_id_token:
-        refreshed = _resolve_identity_from_firebase_id_token(firebase_id_token)
-        if refreshed:
-            identity = refreshed
-            email = _normalize_email(identity.get("email") or "")
-            firebase_uid = (identity.get("firebaseUid") or "").strip()
-
-    if not email and not firebase_uid:
-        _log_api_auth_context("auth_session_token", failure_reason="auth_identity_missing")
-        return _auth_identity_missing_response()
-
-    try:
-        token_email = email or session.get("user_id") or ""
-        app_token = _encode_app_jwt_token(token_email, firebase_uid=firebase_uid)
-    except Exception as exc:
-        print("Session token mint failed:", exc, flush=True)
-        return _api_json_response(
-            {
-                "ok": False,
-                "code": "session_token_failed",
-                "error": "Could not refresh your session. Please log in again.",
-            },
-            status=500,
-        )
-
-    return _api_json_response(
-        {
-            "ok": True,
-            "token": app_token,
-            "user": {
-                "email": email,
-                "firebaseUid": firebase_uid,
-            },
-        },
-        status=200,
-    )
-
-
-def _require_login_user(podcast_id: str = ""):
-    identity = get_current_user_identity()
-    user_email = _normalize_email(identity.get("email") or "")
-
-    if not user_email:
-        payload = _jwt_auth_payload()
-        user_email = _normalize_email(payload.get("email") or payload.get("user_id") or "")
-
-    if not user_email:
-        user_email = _normalize_email(session.get("user_id") or "")
-
-    if not user_email:
-        _log_api_auth_context(
-            "require_login",
-            podcast_id=podcast_id,
-            failure_reason="auth_identity_missing",
-        )
-        return None, _auth_identity_missing_response()
-
-    owner_id = get_current_podcast_owner_id() or user_email
-    return owner_id, None
+def _require_login_user():
+    user_id = get_current_podcast_owner_id()
+    if not user_id:
+        return None, (jsonify(error="Not logged in"), 401)
+    return user_id, None
 
 
 def _assert_podcast_owner(podcast_id: str, user_id: str):
     ref = db.collection("podcasts").document(podcast_id)
     doc = ref.get()
     if not doc.exists:
-        _log_api_auth_context(
-            "assert_podcast_owner",
-            podcast_id=podcast_id,
-            failure_reason="podcast_not_found",
-        )
         return None, (jsonify(error="Podcast not found"), 404)
 
     pdata = doc.to_dict() or {}
     if not _podcast_owned_by_user(pdata, user_id):
-        _log_api_auth_context(
-            "assert_podcast_owner",
-            podcast_id=podcast_id,
-            failure_reason="forbidden_owner_mismatch",
-        )
         return None, (jsonify(error="Forbidden"), 403)
 
     return pdata, None
@@ -4995,48 +4407,24 @@ def _validate_image_bytes(image_bytes: bytes, min_size: int = 512):
     return True, {"width": w, "height": h, "format": (img.format or "").upper()}
 
 
-def _validate_image_file(image_path: str, min_size: int = 512):
-    try:
-        with Image.open(image_path) as img:
-            img.verify()
-    except UnidentifiedImageError:
-        return False, "Unsupported image format. Please upload PNG/JPG."
-    except Exception:
-        return False, "Invalid image file."
-
-    try:
-        with Image.open(image_path) as img:
-            w, h = img.size
-            fmt = (img.format or "").upper()
-    except Exception:
-        return False, "Invalid image file."
-
-    if w < min_size or h < min_size:
-        return False, f"Image too small. Minimum is {min_size}x{min_size}px."
-
-    return True, {"width": w, "height": h, "format": fmt}
-
-
 def _build_cover_prompt(title: str, style: str, language: str, description: str, extra: str = ""):
     lang_hint = "Arabic" if language == "ar" else "English"
 
-    # The episode title is rendered by the UI, not baked into the image.
+    # no text on image (title is shown in UI, not baked into art)
     return f"""
-Create a polished square podcast cover artwork.
+Create a professional podcast cover art image.
 
 Context:
-- Episode title for context only, not for rendering in the image: "{title}"
+- Episode title: "{title}"
 - Podcast style: {style or "Conversational"}
 - Language context: {lang_hint}
 
 Design requirements:
 - Square composition (1:1), podcast-platform friendly
-- Crisp, premium, editorial artwork with clean edges and clear focal hierarchy
-- A single strong visual concept related to the topic, supported by abstract shapes, symbols, lighting, and color
-- No readable text, no title words, no lettering, no numbers, no fake typography, no signage, no labels, no logos, no watermarks
-- Avoid text-like marks or glyphs that could look like distorted words
-- Avoid photorealistic faces; prefer refined illustration, cinematic abstract art, or high-quality graphic design
-- Keep the center visually strong and leave breathing room around the edges for platform cropping
+- Modern, clean, high contrast, minimal clutter
+- A single strong focal concept + abstract shapes related to the topic
+- Do NOT include readable text, letters, numbers, logos, or watermarks
+- Avoid photorealistic faces; prefer abstract/illustrative/graphic styles
 
 Topic description:
 {description[:1200]}
@@ -5046,110 +4434,16 @@ Optional direction:
 """.strip()
 
 
-def _decode_openai_b64_json_stream(response, output_path: str):
-    key = '"b64_json"'
-    search_buffer = ""
-    found_key = False
-    in_string = False
-    escape = False
-    b64_buffer = ""
-    decoded_any = False
-
-    _memory_log("openai_image_response_read_before")
-    with open(output_path, "wb") as output_file:
-        for raw_chunk in response.iter_content(chunk_size=4096, decode_unicode=True):
-            if not raw_chunk:
-                continue
-            chunk = raw_chunk if isinstance(raw_chunk, str) else raw_chunk.decode("utf-8", errors="replace")
-            idx = 0
-            while idx < len(chunk):
-                char = chunk[idx]
-                if not found_key:
-                    search_buffer = (search_buffer + char)[-64:]
-                    if key in search_buffer:
-                        found_key = True
-                    idx += 1
-                    continue
-
-                if not in_string:
-                    if char == '"':
-                        in_string = True
-                    idx += 1
-                    continue
-
-                if escape:
-                    b64_buffer += char
-                    escape = False
-                    idx += 1
-                    continue
-                if char == "\\":
-                    escape = True
-                    idx += 1
-                    continue
-                if char == '"':
-                    if b64_buffer:
-                        output_file.write(base64.b64decode(b64_buffer))
-                        decoded_any = True
-                        b64_buffer = ""
-                    _memory_log("openai_image_response_read_after", decoded=True)
-                    return decoded_any
-
-                b64_buffer += char
-                flush_len = (len(b64_buffer) // 4) * 4
-                if flush_len >= 8192:
-                    output_file.write(base64.b64decode(b64_buffer[:flush_len]))
-                    decoded_any = True
-                    b64_buffer = b64_buffer[flush_len:]
-                idx += 1
-
-    _memory_log("openai_image_response_read_after", decoded=decoded_any)
-    return decoded_any
-
-
-def _generate_cover_file(prompt: str, output_path: str, size: str = "1024x1024") -> str:
+def _generate_cover_b64(prompt: str, size: str = "1024x1024") -> str:
     """
-    Stream OpenAI Images API JSON and incrementally decode gpt-image-1 b64_json to disk.
-    GPT image models do not support URL response mode, so this avoids holding the base64
-    image string in memory while still using the required model family.
+    Uses OpenAI Images API (gpt-image-1) and returns base64 PNG.
     """
-    url = "https://api.openai.com/v1/images/generations"
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": "gpt-image-1",
-        "prompt": prompt,
-        "size": size,
-        "quality": "medium",
-        "output_format": "jpeg",
-        "output_compression": 92,
-    }
-
-    _memory_log("openai_image_request_before", size=size)
-    with requests.post(url, headers=headers, json=payload, stream=True, timeout=240) as response:
-        _memory_log("openai_image_request_after", status_code=response.status_code)
-        if not response.ok:
-            err_chunks = []
-            err_size = 0
-            for chunk in response.iter_content(chunk_size=1024):
-                if not chunk:
-                    continue
-                remaining = 500 - err_size
-                if remaining <= 0:
-                    break
-                err_chunks.append(chunk[:remaining])
-                err_size += len(chunk[:remaining])
-            err_body = b"".join(err_chunks).decode("utf-8", errors="replace")
-            raise RuntimeError(f"OpenAI image error {response.status_code}: {err_body}")
-
-        decoded = _decode_openai_b64_json_stream(response, output_path)
-
-    gc.collect()
-    _memory_log("openai_image_gc_after", output_path=output_path)
-    if not decoded or not os.path.isfile(output_path) or os.path.getsize(output_path) < 100:
-        raise RuntimeError("OpenAI image generation returned empty image data.")
-    return output_path
+    img = client.images.generate(
+        model="gpt-image-1",
+        prompt=prompt,
+        size=size,
+    )
+    return img.data[0].b64_json
 
 
 def _cover_ext_from_mime(mime_type: str) -> str:
@@ -5174,21 +4468,6 @@ def _make_cover_thumb_b64(image_bytes: bytes, size: int = 256) -> str:
     except Exception:
         return ""
 
-def _make_cover_thumb_b64_from_file(image_path: str, size: int = 256) -> str:
-    try:
-        _memory_log("cover_thumb_before", path=image_path)
-        with Image.open(image_path) as img:
-            img = img.convert("RGB")
-            img.thumbnail((size, size))
-            buf = BytesIO()
-            img.save(buf, format="JPEG", quality=72, optimize=True)
-            thumb_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-        gc.collect()
-        _memory_log("cover_thumb_after", thumb_chars=len(thumb_b64))
-        return thumb_b64
-    except Exception:
-        return ""
-
 def _persist_avatar_to_r2(user_id: str, image_bytes: bytes, mime_type: str):
     ext = _cover_ext_from_mime(mime_type)
     ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
@@ -5198,50 +4477,6 @@ def _persist_avatar_to_r2(user_id: str, image_bytes: bytes, mime_type: str):
     signed_url = build_r2_asset_url(object_key, expires_in=3600)
 
     return signed_url, object_key
-
-def _persist_cover_file_to_storage_and_doc(podcast_id: str, image_path: str, mime_type: str = "image/jpeg"):
-    if not image_path or not os.path.isfile(image_path):
-        return "", "", "", "missing_cover_file"
-
-    thumb_b64 = _make_cover_thumb_b64_from_file(image_path)
-    ext = _cover_ext_from_mime(mime_type)
-    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-    storage_path = f"covers/{podcast_id}/{ts}.{ext}"
-
-    cover_url = ""
-    persist_error = ""
-    old_cover_path = ""
-
-    try:
-        existing_doc = db.collection("podcasts").document(podcast_id).get()
-        if existing_doc.exists:
-            old_cover_path = ((existing_doc.to_dict() or {}).get("coverPath") or "").strip()
-    except Exception:
-        old_cover_path = ""
-
-    try:
-        upload_file_to_r2(image_path, storage_path, mime_type)
-        cover_url = build_r2_asset_url(storage_path, expires_in=3600)
-    except Exception as e:
-        persist_error = f"r2_upload_failed: {e}"
-
-    if old_cover_path and old_cover_path != storage_path and not persist_error:
-        delete_from_r2_quietly(old_cover_path, label="Cover replace")
-
-    db.collection("podcasts").document(podcast_id).set(
-        {
-            "coverUrl": cover_url,
-            "coverPath": storage_path,
-            "coverMimeType": mime_type,
-            "coverThumbB64": thumb_b64,
-            "coverUpdatedAt": firestore.SERVER_TIMESTAMP,
-        },
-        merge=True,
-    )
-
-    gc.collect()
-    _memory_log("cover_persist_after", storage_path=storage_path)
-    return cover_url, storage_path, thumb_b64, persist_error
 
 def _persist_cover_to_storage_and_doc(podcast_id: str, cover_b64: str, mime_type: str = "image/png"):
     """
@@ -5293,8 +4528,9 @@ def _persist_cover_to_storage_and_doc(podcast_id: str, cover_b64: str, mime_type
 
     return cover_url, storage_path, thumb_b64, persist_error
 
-def _finalize_payload_for_podcast(podcast_id):
-    user_id, err = _require_login_user(podcast_id)
+@app.get("/api/podcasts/<podcast_id>/finalize")
+def api_finalize_get(podcast_id):
+    user_id, err = _require_login_user()
     if err:
         return err
 
@@ -5302,35 +4538,10 @@ def _finalize_payload_for_podcast(podcast_id):
     if err:
         return err
 
-    resolved_pdata = resolve_podcast_media_urls(
-        pdata,
-        include_audio=False,
-        include_cover=True,
-        prefer_long_lived=True,
-    )
-    persisted_cover_url = (
-        resolved_pdata.get("coverUrl")
-        or pdata.get("coverUrl")
-        or pdata.get("publicUrl")
-        or pdata.get("coverPublicUrl")
-        or ""
-    )
-    persisted_cover_path = pdata.get("coverPath") or ""
-
     draft = _get_draft_for(podcast_id)
     cover_b64 = draft.get("coverArtBase64")
     cover_meta = draft.get("coverArtMeta") or {}
-    if persisted_cover_url:
-        cover_meta = {
-            **cover_meta,
-            "source": cover_meta.get("source") or "Saved cover",
-            "mimeType": cover_meta.get("mimeType") or pdata.get("coverMimeType") or "image/jpeg",
-            "coverUrl": cover_meta.get("coverUrl") or persisted_cover_url,
-            "publicUrl": cover_meta.get("publicUrl") or persisted_cover_url,
-            "storagePath": cover_meta.get("storagePath") or persisted_cover_path,
-        }
-        cover_b64 = cover_b64 or ""
-    elif not cover_b64 and pdata.get("coverThumbB64"):
+    if not cover_b64 and pdata.get("coverThumbB64"):
         cover_b64 = pdata.get("coverThumbB64")
         cover_meta = {
             "source": "Saved cover",
@@ -5345,9 +4556,6 @@ def _finalize_payload_for_podcast(podcast_id):
         ok=True,
         podcastId=podcast_id,
         title=title,
-        coverUrl=persisted_cover_url,
-        publicUrl=persisted_cover_url,
-        coverPath=persisted_cover_path,
         coverArtBase64=cover_b64,
         coverArtMeta=cover_meta,
         coverGenerationCount=cover_limit_state.get("count", 0),
@@ -5355,43 +4563,15 @@ def _finalize_payload_for_podcast(podcast_id):
         coverGenerationRemaining=cover_limit_state.get("remaining", 0),
     )
 
-
-@app.get("/api/podcasts/<podcast_id>/finalize")
-def api_finalize_get(podcast_id):
-    _log_api_auth_context("finalize_get", podcast_id=podcast_id)
-    return _finalize_payload_for_podcast(podcast_id)
-
-
-@app.post("/api/podcasts/<podcast_id>/finalize")
-def api_finalize_post(podcast_id):
-    _log_api_auth_context("finalize_post", podcast_id=podcast_id)
-    _log_request_json_context("finalize_post")
-    return _finalize_payload_for_podcast(podcast_id)
-
 @app.post("/api/podcasts/<podcast_id>/cover/generate")
 def api_cover_generate(podcast_id):
-    _log_api_auth_context("cover_generate", podcast_id=podcast_id)
-    identity = get_current_user_identity()
-    print(
-        "cover_generate_auth_debug",
-        {
-            "has_cookie": bool(request.cookies),
-            "has_authorization": bool(request.headers.get("Authorization")),
-            "session_keys": list(session.keys()),
-            "identity": {
-                "email": _mask_email(identity.get("email") or ""),
-                "firebaseUidPresent": bool(identity.get("firebaseUid")),
-            },
-        },
-        flush=True,
-    )
-    user_id, err = _require_login_user(podcast_id)
+    user_id, err = _require_login_user()
     if err:
         return err
 
     pdata, err = _assert_podcast_owner(podcast_id, user_id)
     if err:
-        return _apply_cors_headers(err[0]), err[1]
+        return err
 
     payload = request.get_json(silent=True) or {}
     limit_ok, limit_state = _cover_generation_limit_status(pdata)
@@ -5423,53 +4603,19 @@ def api_cover_generate(podcast_id):
 
     prompt = _build_cover_prompt(title=title, style=style, language=language, description=description, extra=extra)
 
-    with tempfile.TemporaryDirectory(prefix="wecast_cover_") as cover_tmp:
-        cover_path = os.path.join(cover_tmp, f"{secure_filename(podcast_id) or 'cover'}.jpg")
-        try:
-            _generate_cover_file(prompt, cover_path, size="1024x1024")
-        except Exception as e:
-            print("Cover generation error:", str(e)[:500], flush=True)
-            traceback.print_exc()
-            return _apply_cors_headers(
-                _api_json_response(
-                    {
-                        "ok": False,
-                        "code": "cover_generation_failed",
-                        "error": f"Failed to generate cover art: {str(e)[:300]}",
-                    },
-                    status=500,
-                )
-            )
+    try:
+        b64 = _generate_cover_b64(prompt, size="1024x1024")
+    except Exception as e:
+        print("Cover generation error:", e)
+        return jsonify(error=f"Failed to generate cover art: {str(e)}"), 500
 
-        try:
-            cover_url, storage_path, thumb_b64, persist_error = _persist_cover_file_to_storage_and_doc(
-                podcast_id, cover_path, "image/jpeg"
-            )
-        except Exception as e:
-            print("Cover persist error:", str(e)[:500], flush=True)
-            traceback.print_exc()
-            return _apply_cors_headers(
-                _api_json_response(
-                    {
-                        "ok": False,
-                        "code": "cover_generation_failed",
-                        "error": "Cover generated but failed to save.",
-                    },
-                    status=500,
-                )
-            )
-
-    if not cover_url:
-        return _apply_cors_headers(
-            _api_json_response(
-                {
-                    "ok": False,
-                    "code": "cover_url_missing",
-                    "error": "Cover image was generated and saved, but no display URL was returned. Please try again.",
-                },
-                status=500,
-            )
+    try:
+        cover_url, storage_path, thumb_b64, persist_error = _persist_cover_to_storage_and_doc(
+            podcast_id, b64, "image/png"
         )
+    except Exception as e:
+        print("Cover persist error:", e)
+        return jsonify(error="Cover generated but failed to persist."), 500
 
     cover_generation_count = int(limit_state.get("count") or 0) + 1
     cover_generation_limit = int(limit_state.get("limit") or COVER_GENERATION_MAX_PER_PODCAST)
@@ -5484,14 +4630,11 @@ def api_cover_generate(podcast_id):
 
     # Keep session draft for immediate preview/finalize UI state.
     _set_draft_for(podcast_id, {
-        "coverArtBase64": "",
+        "coverArtBase64": b64,
         "coverArtMeta": {
             "generatedAt": datetime.utcnow().isoformat(),
             "source": "openai",
-            "mimeType": "image/jpeg",
-            "size": "1024x1024",
-            "quality": "medium",
-            "outputCompression": 92,
+            "mimeType": "image/png",
             "storagePath": storage_path,
             "coverUrl": cover_url,
             "persistError": persist_error,
@@ -5509,45 +4652,26 @@ def api_cover_generate(podcast_id):
                 merge=True,
             )
 
-    return _apply_cors_headers(
-        _api_json_response(
-            {
-                "podcastId": podcast_id,
-                "coverUrl": cover_url,
-                "coverArtMeta": {
-                    "generatedAt": datetime.utcnow().isoformat(),
-                    "source": "openai",
-                    "mimeType": "image/jpeg",
-                    "size": "1024x1024",
-                    "quality": "medium",
-                    "outputCompression": 92,
-                    "storagePath": storage_path,
-                    "coverUrl": cover_url,
-                },
-                "coverGenerationCount": cover_generation_count,
-                "coverGenerationLimit": cover_generation_limit,
-                "coverGenerationRemaining": max(
-                    0, cover_generation_limit - cover_generation_count
-                ),
-                "warning": (
-                    "Cover thumbnail saved; storage URL unavailable."
-                    if persist_error
-                    else ""
-                ),
-            }
-        )
+    return jsonify(
+        ok=True,
+        podcastId=podcast_id,
+        coverArtBase64=b64,
+        coverUrl=cover_url,
+        coverThumbB64=thumb_b64,
+        coverGenerationCount=cover_generation_count,
+        coverGenerationLimit=cover_generation_limit,
+        coverGenerationRemaining=max(0, cover_generation_limit - cover_generation_count),
+        warning=("Cover thumbnail saved; storage URL unavailable." if persist_error else ""),
     )
 
 @app.post("/api/podcast/<podcast_id>/update")
 def api_update_podcast(podcast_id):
     """Save edit draft or finalize podcast changes."""
-    _log_api_auth_context("podcast_update", podcast_id=podcast_id)
-    user_id, err = _require_login_user(podcast_id)
-    if err:
-        return err
+    user_id = get_current_podcast_owner_id()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
 
     data = request.get_json(silent=True) or {}
-    _log_request_json_context("podcast_update")
     print(f"Received update for podcast {podcast_id}")
     print(f"Data keys: {data.keys()}")
     
@@ -5562,11 +4686,6 @@ def api_update_podcast(podcast_id):
     
     # Verify ownership
     if not _podcast_owned_by_user(podcast_data, user_id):
-        _log_api_auth_context(
-            "podcast_update",
-            podcast_id=podcast_id,
-            failure_reason="forbidden_owner_mismatch",
-        )
         return jsonify(error="Forbidden"), 403
 
     mode = str(data.get("mode") or "final").strip().lower()
@@ -5697,8 +4816,7 @@ def api_update_podcast(podcast_id):
 
 @app.post("/api/podcasts/<podcast_id>/cover/upload")
 def api_cover_upload(podcast_id):
-    _log_api_auth_context("cover_upload", podcast_id=podcast_id)
-    user_id, err = _require_login_user(podcast_id)
+    user_id, err = _require_login_user()
     if err:
         return err
 
@@ -5710,32 +4828,29 @@ def api_cover_upload(podcast_id):
         return jsonify(error="Missing file"), 400
 
     f = request.files["file"]
-    with tempfile.TemporaryDirectory(prefix="wecast_cover_upload_") as cover_tmp:
-        upload_name = secure_filename(f.filename or "cover-upload") or "cover-upload"
-        upload_path = os.path.join(cover_tmp, upload_name)
-        _memory_log("cover_upload_save_before", filename=f.filename or "")
-        f.save(upload_path)
-        _memory_log("cover_upload_save_after", bytes=os.path.getsize(upload_path) if os.path.exists(upload_path) else 0)
+    image_bytes = f.read()
+    if not image_bytes:
+        return jsonify(error="Empty file"), 400
 
-        if not os.path.isfile(upload_path) or os.path.getsize(upload_path) <= 0:
-            return jsonify(error="Empty file"), 400
+    ok, info = _validate_image_bytes(image_bytes, min_size=512)
+    if not ok:
+        return jsonify(error=info), 400
 
-        ok, info = _validate_image_file(upload_path, min_size=512)
-        if not ok:
-            return jsonify(error=info), 400
+    mimeType = "image/png" if info["format"] == "PNG" else "image/jpeg"
 
-        mimeType = "image/png" if info["format"] == "PNG" else "image/jpeg"
+    # Encode for session storage + frontend display
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
 
-        try:
-            cover_url, storage_path, thumb_b64, persist_error = _persist_cover_file_to_storage_and_doc(
-                podcast_id, upload_path, mimeType
-            )
-        except Exception as e:
-            print("Cover persist error:", str(e)[:500], flush=True)
-            return jsonify(error="Cover uploaded but failed to persist."), 500
+    try:
+        cover_url, storage_path, thumb_b64, persist_error = _persist_cover_to_storage_and_doc(
+            podcast_id, b64, mimeType
+        )
+    except Exception as e:
+        print("Cover persist error:", e)
+        return jsonify(error="Cover uploaded but failed to persist."), 500
 
     _set_draft_for(podcast_id, {
-        "coverArtBase64": "",
+        "coverArtBase64": b64,
         "coverArtMeta": {
             "uploadedAt": datetime.utcnow().isoformat(),
             "source": "upload",
@@ -5752,7 +4867,7 @@ def api_cover_upload(podcast_id):
     return jsonify(
         ok=True,
         podcastId=podcast_id,
-        coverArtBase64="",
+        coverArtBase64=b64,
         coverUrl=cover_url,
         coverThumbB64=thumb_b64,
         mimeType=mimeType,
@@ -5762,32 +4877,20 @@ def api_cover_upload(podcast_id):
 
 @app.post("/api/podcasts/<podcast_id>/title")
 def api_podcast_update_title(podcast_id):
-    _log_api_auth_context("podcast_title", podcast_id=podcast_id)
-    user_id, err = _require_login_user(podcast_id)
-    if err:
-        return err
+    user_id = get_current_podcast_owner_id()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
 
     ref = db.collection("podcasts").document(podcast_id)
     doc = ref.get()
     if not doc.exists:
-        _log_api_auth_context(
-            "podcast_title",
-            podcast_id=podcast_id,
-            failure_reason="podcast_not_found",
-        )
         return jsonify(error="Podcast not found"), 404
 
     pdata = doc.to_dict() or {}
     if not _podcast_owned_by_user(pdata, user_id):
-        _log_api_auth_context(
-            "podcast_title",
-            podcast_id=podcast_id,
-            failure_reason="forbidden_owner_mismatch",
-        )
         return jsonify(error="Forbidden"), 403
 
     payload = request.get_json(silent=True) or {}
-    _log_request_json_context("podcast_title")
     title = resolve_episode_title(payload, fallback="")
     if not title:
         return jsonify(error="Title is required"), 400
@@ -5809,8 +4912,7 @@ def api_podcast_update_title(podcast_id):
 
 @app.post("/api/podcasts/<podcast_id>/cover/clear")
 def api_cover_clear(podcast_id):
-    _log_api_auth_context("cover_clear", podcast_id=podcast_id)
-    user_id, err = _require_login_user(podcast_id)
+    user_id, err = _require_login_user()
     if err:
         return err
 
@@ -5870,14 +4972,17 @@ def api_me():
             data.get("authProvider")
             or ("password" if data.get("password_hash") else "unknown")
         )
-        display_name = _stored_username_display(data) or "WeCast User"
+        display_name = (
+            data.get("name")
+            or data.get("displayName")
+            or "WeCast User"
+        )
         handle_name = display_name or data.get("email") or user_id or "user"
 
         return jsonify(_json_safe_firestore_value(
             {
                 "email": data.get("email", user_id),
                 "displayName": display_name,
-                "username": data.get("username") or display_name,
                 "bio": data.get("bio", "I create AI-powered podcasts."),
                 "avatarUrl": avatar_url,
                 "authProvider": auth_provider,
@@ -6022,7 +5127,13 @@ def api_profile_update():
 
     # Prepare update data
     update_data = {}
-    should_update_username = bool(display_name)
+    should_update_username = bool(display_name) and (
+        bool(_stored_username_lower(existing_data))
+        or normalize_auth_provider(
+            existing_data.get('authProvider'),
+            existing_data.get('password_hash'),
+        ) == "password"
+    )
     
     if display_name:
         try:
@@ -6107,8 +5218,7 @@ def api_profile_update():
         return jsonify({
             "ok": True,
             "message": "Profile updated successfully",
-            "displayName": _stored_username_display(updated_data),
-            "username": updated_data.get('username', _stored_username_display(updated_data)),
+            "displayName": updated_data.get('name', updated_data.get('displayName', '')),
             "bio": updated_data.get('bio', ''),
             "avatarUrl": response_avatar_url,
             "email": updated_data.get('email', ''),
@@ -6356,42 +5466,25 @@ def api_password_reset_confirm():
     try:
         doc, user_data, payload = _validate_pending_password_reset(token)
         firebase_uid = (user_data.get("firebaseUid") or payload.get("firebase_uid") or "").strip()
-        _log_password_reset_step("token_confirm_start", has_firebase_uid=bool(firebase_uid))
 
         if firebase_uid:
             fb_auth.update_user(firebase_uid, password=new_password)
-            _log_password_reset_step("token_confirm_firebase_admin_updated", uid=firebase_uid[:8])
-            profile_patch = {
-                "password_hash": firestore.DELETE_FIELD,
-                "authProvider": "password",
-                "failed_attempts": 0,
-                "lock_until": None,
-                "pendingPasswordReset": firestore.DELETE_FIELD,
-                "last_password_reset_completed": datetime.utcnow().isoformat(),
-            }
-        else:
-            profile_patch = {
+
+        doc.reference.set(
+            {
                 "password_hash": generate_password_hash(new_password),
                 "authProvider": "password",
                 "failed_attempts": 0,
                 "lock_until": None,
                 "pendingPasswordReset": firestore.DELETE_FIELD,
                 "last_password_reset_completed": datetime.utcnow().isoformat(),
-            }
-
-        doc.reference.set(profile_patch, merge=True)
+            },
+            merge=True,
+        )
 
         resolved_email = _normalize_email(user_data.get("email"))
         if not resolved_email and doc and doc.exists:
             resolved_email = _normalize_email(doc.reference.id)
-
-        if firebase_uid and resolved_email:
-            firebase_ok = _verify_firebase_email_password(resolved_email, new_password)
-            _log_password_reset_step(
-                "token_confirm_firebase_verify",
-                ok=firebase_ok,
-                email=resolved_email,
-            )
 
         if is_reasonably_valid_email(resolved_email):
             try:
@@ -6399,7 +5492,6 @@ def api_password_reset_confirm():
             except Exception as email_error:
                 print(f"Password changed confirmation email failed: {email_error}")
 
-        _log_password_reset_step("token_confirm_success", email=resolved_email)
         return jsonify(ok=True, email=resolved_email)
     except Exception as e:
         print(f"Password reset confirmation error: {e}")
@@ -6443,8 +5535,6 @@ def api_firebase_password_reset_confirm():
     if not api_key:
         return jsonify(error="Password reset is not configured right now."), 503
 
-    _log_password_reset_step("firebase_confirm_start", oob_present=bool(oob_code))
-
     try:
         response = requests.post(
             f"https://identitytoolkit.googleapis.com/v1/accounts:resetPassword?key={api_key}",
@@ -6459,12 +5549,11 @@ def api_firebase_password_reset_confirm():
         return jsonify(error="We couldn't update your password from this link."), 502
 
     if not response.ok:
-        toolkit_message = _log_identity_toolkit_error("resetPassword", response)
         error_message, status_code = _firebase_reset_password_error(response)
-        _log_password_reset_step(
-            "firebase_confirm_failed",
-            status=response.status_code,
-            toolkitMessage=toolkit_message or "",
+        print(
+            "Firebase password reset confirm failed:",
+            f"status={response.status_code}",
+            flush=True,
         )
         return jsonify(error=error_message), status_code
 
@@ -6477,18 +5566,11 @@ def api_firebase_password_reset_confirm():
     if not is_reasonably_valid_email(resolved_email):
         return jsonify(error="Password updated, but the account email could not be confirmed."), 502
 
-    firebase_verify_ok = _verify_firebase_email_password(resolved_email, new_password)
-    _log_password_reset_step(
-        "firebase_confirm_password_verify",
-        ok=firebase_verify_ok,
-        email=resolved_email,
-    )
-
     doc = get_user_doc_by_candidates(resolved_email, email=resolved_email)
     if doc and doc.exists:
         doc.reference.set(
             {
-                "password_hash": firestore.DELETE_FIELD,
+                "password_hash": generate_password_hash(new_password),
                 "authProvider": "password",
                 "failed_attempts": 0,
                 "lock_until": None,
@@ -6497,7 +5579,6 @@ def api_firebase_password_reset_confirm():
             },
             merge=True,
         )
-    _log_password_reset_step("firebase_confirm_firestore_synced", has_doc=bool(doc and doc.exists))
 
     tokens_revoked = False
     try:
@@ -6525,74 +5606,6 @@ def api_firebase_password_reset_confirm():
     return jsonify(
         ok=True,
         email=resolved_email,
-        confirmationSent=confirmation_sent,
-        sessionsRevoked=tokens_revoked,
-    )
-
-
-@app.post("/api/password-reset/firebase-sync")
-def api_firebase_password_reset_sync():
-    """Sync Firestore after client-side confirmPasswordReset (oob already consumed)."""
-    from firebase_admin import auth as fb_auth
-    from services.email_service import send_password_changed_email
-
-    data = request.get_json(silent=True) or {}
-    resolved_email = _normalize_email(data.get("email") or "")
-    if not is_reasonably_valid_email(resolved_email):
-        return jsonify(error="Valid email is required after password reset."), 400
-
-    _log_password_reset_step("firebase_sync_start", email=resolved_email)
-
-    firebase_state = _firebase_account_state_for_email(resolved_email)
-    if not firebase_state:
-        _log_password_reset_step("firebase_sync_user_not_found", email=resolved_email)
-        return jsonify(error="No Firebase account found for this email."), 404
-    if not firebase_state.get("hasPasswordProvider"):
-        _log_password_reset_step("firebase_sync_no_password_provider", email=resolved_email)
-        return jsonify(
-            error="This account cannot sign in with email/password in Firebase."
-        ), 400
-
-    doc = get_user_doc_by_candidates(resolved_email, email=resolved_email)
-    if doc and doc.exists:
-        doc.reference.set(
-            {
-                "password_hash": firestore.DELETE_FIELD,
-                "authProvider": "password",
-                "failed_attempts": 0,
-                "lock_until": None,
-                "pendingPasswordReset": firestore.DELETE_FIELD,
-                "last_password_reset_completed": datetime.utcnow().isoformat(),
-            },
-            merge=True,
-        )
-    _log_password_reset_step("firebase_sync_firestore_updated", has_doc=bool(doc and doc.exists))
-
-    tokens_revoked = False
-    try:
-        firebase_user = fb_auth.get_user_by_email(resolved_email)
-        fb_auth.revoke_refresh_tokens(firebase_user.uid)
-        tokens_revoked = True
-    except Exception as revoke_error:
-        print(f"Password reset sync session revocation skipped: errorType={type(revoke_error).__name__}")
-
-    confirmation_sent = False
-    try:
-        result = send_password_changed_email(resolved_email)
-        confirmation_sent = bool(result.get("ok"))
-    except Exception as email_error:
-        print(f"Password changed confirmation email failed: {type(email_error).__name__}")
-
-    _log_password_reset_step(
-        "firebase_sync_complete",
-        email=resolved_email,
-        sessionsRevoked=tokens_revoked,
-    )
-
-    return jsonify(
-        ok=True,
-        email=resolved_email,
-        firebaseVerified=True,
         confirmationSent=confirmation_sent,
         sessionsRevoked=tokens_revoked,
     )
@@ -7512,14 +6525,16 @@ def api_get_podcast(podcast_id):
     
 @app.post("/api/generate")
 def api_generate():
+    user_id = get_current_podcast_owner_id()
+    if not user_id:
+        return jsonify(ok=False, error="Not logged in"), 401
+
     data = request.get_json(force=True)
     script_style = (data.get("script_style") or "").strip()
     speakers = int(data.get("speakers") or 0)
     speakers_info = data.get("speakers_info") or []
     description = (data.get("description") or "").strip()
-    content_language = (data.get("content_language") or "").strip().lower()
-    if content_language not in ("en", "ar"):
-        content_language = detect_language(description)
+    ui_language = (data.get("language") or "").strip().lower()
 
     ok, msg = validate_roles(script_style, speakers_info)
     if not ok:
@@ -7532,7 +6547,7 @@ def api_generate():
         return jsonify(ok=False, error="Your text must be at least 500 words."), 400
 
     try:
-        script = generate_podcast_script(description, speakers_info, script_style, language=content_language)
+        script = generate_podcast_script(description, speakers_info, script_style, language=ui_language)
     except Exception as e:
         print("api_generate script error:", e)
         return jsonify(ok=False, error=f"Script generation failed: {str(e)}"), 500
@@ -7545,25 +6560,16 @@ def api_generate():
 
     script_template = script  
     show_title = title or "Podcast Show"
-    # figure out user (prefer session)
-    user_id = get_current_podcast_owner_id()
-
-    is_guest_session = not bool(user_id)
-
-    if user_id:
-        podcast_id = save_generated_podcast_to_firestore(
-            user_id=user_id,
-            title=title,
-            script_style=script_style,
-            description=description,
-            script=script_template,
-            speakers_info=speakers_info,
-            language=content_language,
-        )
-    else:
-        # Try WeCast guest flow: keep the draft in-session and defer persistence
-        # until the user signs up or explicitly saves later.
-        podcast_id = db.collection("podcasts").document().id
+    is_guest_session = False
+    podcast_id = save_generated_podcast_to_firestore(
+        user_id=user_id,
+        title=title,
+        script_style=script_style,
+        description=description,
+        script=script_template,
+        speakers_info=speakers_info,
+        language=ui_language,
+    )
 
 
     session["create_draft"] = {
@@ -7575,20 +6581,12 @@ def api_generate():
         "script": script_template,
         "show_title": show_title,
         "title": title,
-        "language": content_language,
+        "language": ui_language,
         "guestMode": is_guest_session,
     }
 
 
-    return jsonify(
-        ok=True,
-        script=script_template,
-        title=title,
-        show_title=show_title,
-        podcastId=podcast_id,
-        language=content_language,
-        content_language=content_language,
-    )
+    return jsonify(ok=True, script=script_template, title=title, show_title=show_title, podcastId=podcast_id)
 
 
 
@@ -7928,855 +6926,114 @@ def parse_script_into_segments(script: str):
 
     return segments
 
-
-# Render /api/audio: low-memory synthesis (stream TTS, no alignment JSON)
-AUDIO_TTS_MODEL = os.getenv("WECAST_AUDIO_TTS_MODEL", "eleven_multilingual_v2")
-AUDIO_TTS_OUTPUT_FORMAT = os.getenv("WECAST_AUDIO_TTS_FORMAT", "mp3_44100_64")
-AUDIO_FFMPEG_BITRATE = "64k"
-AUDIO_FFMPEG_SAMPLE_RATE = "44100"
-AUDIO_FFMPEG_CHANNELS = "1"
-
-
-def _audio_env_int(name: str, fallback: int) -> int:
-    raw_value = os.getenv(name)
-    if raw_value is not None and str(raw_value).strip() != "":
-        try:
-            return int(raw_value)
-        except (TypeError, ValueError):
-            print(f"Invalid audio limit env {name}={raw_value!r}; using fallback.", flush=True)
-    return fallback
-
-
-def _audio_env_float(name: str, fallback: float) -> float:
-    raw_value = os.getenv(name)
-    if raw_value is not None and str(raw_value).strip() != "":
-        try:
-            return float(raw_value)
-        except (TypeError, ValueError):
-            print(f"Invalid audio limit env {name}={raw_value!r}; using fallback.", flush=True)
-    return fallback
-
-
-MAX_WORDS_HARD = _audio_env_int("WECAST_AUDIO_MAX_WORDS_HARD", 6000)
-MAX_SEGMENTS_HARD = _audio_env_int("WECAST_AUDIO_MAX_SEGMENTS_HARD", 200)
-MAX_DURATION_HARD = _audio_env_float("WECAST_AUDIO_MAX_DURATION_HARD", 3600)
-MAX_TTS_REQUESTS_HARD = _audio_env_int("WECAST_AUDIO_MAX_TTS_REQUESTS_HARD", 260)
-MAX_ESTIMATED_MEMORY_MB_HARD = _audio_env_int("WECAST_AUDIO_MAX_MEMORY_MB_HARD", 1700)
-AUDIO_TTS_CHUNK_CHARS = _audio_env_int("WECAST_AUDIO_TTS_CHUNK_CHARS", 900)
-AUDIO_SAFE_EMERGENCY_MODE = os.getenv("WECAST_AUDIO_SAFE_EMERGENCY_MODE", "1").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
-print(
-    "Audio safety: "
-    f"hard_words={MAX_WORDS_HARD} "
-    f"hard_segments={MAX_SEGMENTS_HARD} "
-    f"hard_duration={int(MAX_DURATION_HARD)} "
-    f"hard_tts_requests={MAX_TTS_REQUESTS_HARD} "
-    f"hard_memory_mb={MAX_ESTIMATED_MEMORY_MB_HARD} "
-    f"tts_chunk_chars={AUDIO_TTS_CHUNK_CHARS} "
-    f"safe_emergency_mode={AUDIO_SAFE_EMERGENCY_MODE}",
-    flush=True,
-)
-AUDIO_SKIP_GPT_CHAPTERS = os.getenv("AUDIO_SKIP_GPT_CHAPTERS", "1").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
-WECAST_AUDIO_INCLUDE_MUSIC = os.getenv("WECAST_AUDIO_INCLUDE_MUSIC", "0").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
-WECAST_AUDIO_EFFECTIVE_INCLUDE_MUSIC = (
-    WECAST_AUDIO_INCLUDE_MUSIC and not AUDIO_SAFE_EMERGENCY_MODE
-)
-
-
-def _audio_limits_payload():
-    return {
-        "mode": "dynamic_resource_estimate",
-        "hard_words": MAX_WORDS_HARD,
-        "hard_segments": MAX_SEGMENTS_HARD,
-        "hard_duration": int(MAX_DURATION_HARD),
-        "hard_tts_requests": MAX_TTS_REQUESTS_HARD,
-        "hard_memory_mb": MAX_ESTIMATED_MEMORY_MB_HARD,
-        "tts_chunk_chars": AUDIO_TTS_CHUNK_CHARS,
-        "safe_emergency_mode": AUDIO_SAFE_EMERGENCY_MODE,
-        "music_enabled": WECAST_AUDIO_EFFECTIVE_INCLUDE_MUSIC,
-        "transcript_timing_enabled": True,
-        "chapters_enabled": not AUDIO_SKIP_GPT_CHAPTERS,
-    }
-
-
-def _audio_rss_bytes():
-    return _process_rss_bytes()
-
-
-def _audio_memory_log(stage, **details):
-    """RSS logging after every synthesis step (Render OOM diagnosis)."""
-    parts = [f"stage={stage}"]
-    rss_bytes = _audio_rss_bytes()
-    if rss_bytes is not None:
-        parts.append(f"rss_mb={rss_bytes / (1024 * 1024):.1f}")
-        print(f"Audio RSS bytes: {rss_bytes}", flush=True)
-    for key, value in details.items():
-        if value is not None:
-            parts.append(f"{key}={value}")
-    print("Audio memory:", " ".join(parts), flush=True)
-
-
-def _audio_stage_log(stage, phase="during", **details):
-    """Structured /api/audio stage logging with RSS before/after major work."""
-    label = f"{stage}_{phase}" if phase in ("before", "after") else stage
-    _audio_memory_log(label, **details)
-    if phase == "before":
-        print(f"Audio stage BEGIN: {stage}", flush=True)
-    elif phase == "after":
-        print(f"Audio stage END: {stage}", flush=True)
-    else:
-        print(f"Audio stage: {stage}", flush=True)
-
-
-def _audio_api_json_error(message, code, status=400, **extra):
-    body = {"ok": False, "error": message, "code": code}
-    body.update(extra)
-    return _apply_cors_headers(
-        _api_json_response(
-            body,
-            status=status,
-        )
-    )
-
-
-def _split_tts_text(text: str, max_chars: int = AUDIO_TTS_CHUNK_CHARS):
-    text = (text or "").strip()
-    if not text:
-        return []
-    if len(text) <= max_chars:
-        return [text]
-
-    chunks = []
-    current = ""
-    parts = re.split(r"(?<=[.!?؟。؛])\s+|\n+", text)
-    if len(parts) == 1:
-        parts = re.split(r"(\s+)", text)
-
-    for part in parts:
-        if not part:
-            continue
-        candidate = f"{current}{part}" if part.isspace() else f"{current} {part}".strip()
-        if len(candidate) <= max_chars:
-            current = candidate
-            continue
-        if current:
-            chunks.append(current.strip())
-            current = ""
-        if len(part) <= max_chars:
-            current = part.strip()
-            continue
-        for start in range(0, len(part), max_chars):
-            chunks.append(part[start : start + max_chars].strip())
-
-    if current:
-        chunks.append(current.strip())
-    return [chunk for chunk in chunks if chunk]
-
-
-def _speech_segments_for_audio(segments: list):
-    return [
-        (speaker, text)
-        for speaker, text in segments
-        if (speaker or "").strip().lower() != "__music__" and (text or "").strip()
-    ]
-
-
-def _audio_request_estimate(script: str, segments: list):
-    word_count = len(re.findall(r"\S+", script or ""))
-    speech_segments = _speech_segments_for_audio(segments)
-    speakers = {(speaker or "").strip() for speaker, _text in speech_segments}
-    speakers.discard("")
-
-    tts_requests = 0
-    tts_chars = 0
-    for speaker, text in speech_segments:
-        if is_arabic(text):
-            tts_len = len((text or "").strip())
-            tts_text = (text or "").strip()
-        else:
-            tts_text = clean_script_for_tts(text or "")
-            tts_len = len(tts_text)
-        tts_chars += tts_len
-        tts_requests += max(1, len(_split_tts_text(tts_text)))
-
-    estimated_duration_sec = word_count * 0.45
-    estimated_minutes = estimated_duration_sec / 60
-    music_segments = sum(
-        1 for speaker, _text in segments if (speaker or "").strip().lower() == "__music__"
-    )
-    estimated_memory_mb = int(
-        260
-        + (estimated_minutes * 8)
-        + (len(speech_segments) * 1.5)
-        + (tts_requests * 4)
-        + (len(speakers) * 12)
-        + (120 if WECAST_AUDIO_EFFECTIVE_INCLUDE_MUSIC and music_segments else 0)
-    )
-
-    return {
-        "words": word_count,
-        "estimated_seconds": int(estimated_duration_sec),
-        "estimated_minutes": round(estimated_minutes, 1),
-        "segments": len(speech_segments),
-        "speakers": len(speakers),
-        "tts_requests": tts_requests,
-        "tts_chars": tts_chars,
-        "music_enabled": WECAST_AUDIO_EFFECTIVE_INCLUDE_MUSIC,
-        "music_segments": music_segments,
-        "estimated_memory_mb": estimated_memory_mb,
-    }
-
-
-def _log_audio_estimate(estimate: dict):
-    print(
-        "Audio estimate: "
-        f"words={estimate.get('words')} "
-        f"estimated_minutes={estimate.get('estimated_minutes')} "
-        f"segments={estimate.get('segments')} "
-        f"estimated_memory_mb={estimate.get('estimated_memory_mb')} "
-        f"tts_requests={estimate.get('tts_requests')} "
-        f"speakers={estimate.get('speakers')} "
-        f"music_enabled={estimate.get('music_enabled')}",
-        flush=True,
-    )
-
-
-def _validate_audio_resource_estimate(script: str, segments: list):
-    estimate = _audio_request_estimate(script, segments)
-    _log_audio_estimate(estimate)
-
-    if estimate["words"] > MAX_WORDS_HARD:
-        return (
-            False,
-            "This script is too large for one audio generation request. "
-            f"Estimated words: {estimate['words']}; emergency hard limit: {MAX_WORDS_HARD}.",
-            estimate,
-        )
-
-    if estimate["segments"] > MAX_SEGMENTS_HARD:
-        return (
-            False,
-            "This script has too many speech segments for one audio generation request. "
-            f"Estimated segments: {estimate['segments']}; emergency hard limit: {MAX_SEGMENTS_HARD}.",
-            estimate,
-        )
-
-    if estimate["estimated_seconds"] > MAX_DURATION_HARD:
-        return (
-            False,
-            "This script is estimated to produce audio that is too long for one request. "
-            f"Estimated duration: {estimate['estimated_minutes']} minutes; "
-            f"emergency hard limit: {int(MAX_DURATION_HARD / 60)} minutes.",
-            estimate,
-        )
-
-    if estimate["tts_requests"] > MAX_TTS_REQUESTS_HARD:
-        return (
-            False,
-            "This script requires too many TTS streaming requests for one audio generation job. "
-            f"Estimated TTS requests: {estimate['tts_requests']}; "
-            f"emergency hard limit: {MAX_TTS_REQUESTS_HARD}.",
-            estimate,
-        )
-
-    if estimate["estimated_memory_mb"] > MAX_ESTIMATED_MEMORY_MB_HARD:
-        return (
-            False,
-            "This audio job is estimated to need more memory than this server can safely reserve. "
-            f"Estimated memory: {estimate['estimated_memory_mb']} MB; "
-            f"emergency hard limit: {MAX_ESTIMATED_MEMORY_MB_HARD} MB.",
-            estimate,
-        )
-
-    return True, "", estimate
-
-
-def _chapters_for_audio_save(word_timeline, transcript_text, language="en"):
-    """Avoid extra OpenAI work during /api/audio (reduces memory/time on Render)."""
-    if AUDIO_SKIP_GPT_CHAPTERS:
-        return fallback_time_split_chapters(word_timeline, language=language)
-    return build_chapters(word_timeline, transcript_text, language=language)
-
-
-def _estimate_word_timeline_from_text(text: str, speaker: str, start_offset: float, duration_sec: float):
-    """Linear word timings without ElevenLabs alignment (keeps RAM flat)."""
-    tokens = re.findall(r"\S+", text or "")
-    if not tokens or duration_sec <= 0:
-        return []
-
-    per_word = duration_sec / len(tokens)
-    timeline = []
-    cursor = float(start_offset)
-    for token in tokens:
-        timeline.append(
-            {
-                "w": token,
-                "start": cursor,
-                "end": cursor + per_word,
-                "speaker": speaker,
-            }
-        )
-        cursor += per_word
-    return timeline
-
-
-def _ffmpeg_run(cmd, timeout=600):
-    _memory_log("ffmpeg_subprocess_before", executable=os.path.basename(str(cmd[0] or "")))
-    stderr_path = ""
-    try:
-        with tempfile.NamedTemporaryFile(prefix="wecast_ffmpeg_", suffix=".log", delete=False) as stderr_file:
-            stderr_path = stderr_file.name
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=stderr_file,
-                timeout=timeout,
-            )
-        stderr_tail = ""
-        try:
-            with open(stderr_path, "rb") as err_file:
-                err_file.seek(0, os.SEEK_END)
-                size = err_file.tell()
-                err_file.seek(max(0, size - 4096))
-                stderr_tail = err_file.read().decode("utf-8", errors="replace")
-        except Exception:
-            stderr_tail = ""
-        _memory_log("ffmpeg_subprocess_after", returncode=result.returncode)
-        return subprocess.CompletedProcess(cmd, result.returncode, "", stderr_tail)
-    finally:
-        if stderr_path:
-            try:
-                os.remove(stderr_path)
-            except OSError:
-                pass
-        gc.collect()
-
-
-def eleven_tts_stream_to_file(
-    text: str,
-    voice_id: str,
-    output_path: str,
-    model_id=None,
-):
-    """
-    Stream MP3 from ElevenLabs directly to disk (no JSON/base64 in RAM).
-    Returns an empty word list; callers build timings from duration probes.
-    """
-    model = model_id or AUDIO_TTS_MODEL
-    url = (
-        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
-        "?optimize_streaming_latency=4"
-    )
-    headers = {
-        "xi-api-key": ELEVENLABS_API_KEY,
-        "Content-Type": "application/json",
-        "Accept": "audio/mpeg",
-    }
-    body = {
-        "text": text,
-        "model_id": model,
-        "output_format": AUDIO_TTS_OUTPUT_FORMAT,
-    }
-
-    _audio_stage_log("elevenlabs_request", phase="before", chars=len(text), voice_id=voice_id)
-    with requests.post(url, headers=headers, json=body, stream=True, timeout=180) as response:
-        _audio_stage_log(
-            "elevenlabs_request",
-            phase="after",
-            status_code=response.status_code,
-        )
-        if not response.ok:
-            err_chunks = []
-            err_size = 0
-            try:
-                for chunk in response.iter_content(chunk_size=1024):
-                    if not chunk:
-                        continue
-                    remaining = 300 - err_size
-                    if remaining <= 0:
-                        break
-                    err_chunks.append(chunk[:remaining])
-                    err_size += len(chunk[:remaining])
-            except Exception:
-                err_chunks = []
-            err_body = b"".join(err_chunks).decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"ElevenLabs error {response.status_code}: {err_body}"
-            )
-
-        bytes_written = 0
-        with open(output_path, "wb") as output_file:
-            for chunk in response.iter_content(chunk_size=4096):
-                if chunk:
-                    output_file.write(chunk)
-                    bytes_written += len(chunk)
-    _audio_stage_log("elevenlabs_file_write", phase="after", bytes=bytes_written)
-
-    gc.collect()
-    _audio_stage_log("elevenlabs_gc", phase="after")
-    _audio_stage_log("tts_segment_saved", path=output_path)
-    return []
-
-
-def _audio_ffmpeg_ready():
-    return bool(FFMPEG_EXECUTABLE and FFPROBE_EXECUTABLE)
-
-
-def _resolve_ffmpeg_executable():
-    if FFMPEG_EXECUTABLE and os.path.isfile(FFMPEG_EXECUTABLE):
-        return FFMPEG_EXECUTABLE
-    configured = (getattr(AudioSegment, "converter", None) or os.getenv("FFMPEG_PATH") or "").strip()
-    if configured and os.path.isfile(configured):
-        return configured
-    discovered = which("ffmpeg")
-    if discovered:
-        return discovered
-    raise RuntimeError("ffmpeg not installed/configured")
-
-
-def _resolve_ffprobe_executable():
-    if FFPROBE_EXECUTABLE and os.path.isfile(FFPROBE_EXECUTABLE):
-        return FFPROBE_EXECUTABLE
-    configured = (getattr(AudioSegment, "ffprobe", None) or os.getenv("FFPROBE_PATH") or "").strip()
-    if configured and os.path.isfile(configured):
-        return configured
-    discovered = which("ffprobe")
-    if discovered:
-        return discovered
-    raise RuntimeError("ffprobe not installed/configured")
-
-
-def _estimate_mp3_duration_seconds(path, bitrate_kbps=64):
-    try:
-        size_bytes = os.path.getsize(path)
-    except OSError:
-        return 0.0
-    if size_bytes <= 0:
-        return 0.0
-    return max(0.0, (size_bytes * 8) / (bitrate_kbps * 1000))
-
-
-def _pydub_probe_duration_seconds(path):
-    """Probe duration via pydub mediainfo (ffmpeg metadata, no full decode in RAM)."""
-    from pydub.utils import mediainfo
-
-    info = mediainfo(path) or {}
-    duration_ms = float(info.get("duration") or 0)
-    if duration_ms <= 0:
-        raise RuntimeError(f"invalid pydub duration for {path}")
-    return max(0.0, duration_ms / 1000.0)
-
-
-def _probe_mp3_duration_seconds(path):
-    try:
-        return _ffprobe_duration_seconds(path)
-    except Exception as probe_error:
-        print(f"WARN ffprobe duration fallback: {probe_error}", flush=True)
-    try:
-        return _pydub_probe_duration_seconds(path)
-    except Exception as pydub_error:
-        print(f"WARN pydub duration fallback: {pydub_error}", flush=True)
-    return _estimate_mp3_duration_seconds(path)
-
-
-def _ffprobe_duration_seconds(path):
-    ffprobe = _resolve_ffprobe_executable()
-    cmd = [
-        ffprobe,
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        path,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"ffprobe failed for {path}: {(result.stderr or result.stdout or '').strip()[:200]}"
-        )
-    return max(0.0, float(result.stdout.strip()))
-
-
-def _ffmpeg_create_silence_mp3(output_path, duration_ms=500):
-    ffmpeg = _resolve_ffmpeg_executable()
-    duration_sec = max(0.05, duration_ms / 1000.0)
-    cmd = [
-        ffmpeg,
-        "-y",
-        "-f",
-        "lavfi",
-        "-i",
-        f"anullsrc=r={AUDIO_FFMPEG_SAMPLE_RATE}:cl=mono",
-        "-t",
-        str(duration_sec),
-        "-c:a",
-        "libmp3lame",
-        "-b:a",
-        AUDIO_FFMPEG_BITRATE,
-        "-ar",
-        AUDIO_FFMPEG_SAMPLE_RATE,
-        "-ac",
-        AUDIO_FFMPEG_CHANNELS,
-        output_path,
-    ]
-    result = _ffmpeg_run(cmd, timeout=120)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"ffmpeg silence failed: {(result.stderr or result.stdout or '').strip()[:300]}"
-        )
-
-
-def _ffmpeg_concat_mp3_files(segment_paths, output_path):
-    """Concatenate MP3 files on disk without loading all segments into RAM."""
-    if not segment_paths:
-        raise RuntimeError("No audio segments to concatenate.")
-
-    ffmpeg = _resolve_ffmpeg_executable()
-    work_dir = os.path.dirname(output_path) or "."
-    list_path = os.path.join(work_dir, "concat_list.txt")
-
-    def _escape(path):
-        return path.replace("'", "'\\''")
-
-    with open(list_path, "w", encoding="utf-8") as list_file:
-        for segment_path in segment_paths:
-            list_file.write(f"file '{_escape(os.path.abspath(segment_path))}'\n")
-
-    def _run_concat(extra_args):
-        return _ffmpeg_run(
-            [
-                ffmpeg,
-                "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                list_path,
-                *extra_args,
-                output_path,
-            ],
-            timeout=600,
-        )
-
-    _audio_memory_log("ffmpeg_concat_start", segment_count=len(segment_paths))
-    result = _run_concat(["-c", "copy"])
-    if result.returncode != 0:
-        print(
-            "WARN ffmpeg concat copy failed, re-encoding:",
-            (result.stderr or "").strip()[:200],
-            flush=True,
-        )
-        result = _run_concat(
-            [
-                "-c:a",
-                "libmp3lame",
-                "-b:a",
-                AUDIO_FFMPEG_BITRATE,
-                "-ar",
-                AUDIO_FFMPEG_SAMPLE_RATE,
-                "-ac",
-                AUDIO_FFMPEG_CHANNELS,
-            ]
-        )
-    try:
-        os.remove(list_path)
-    except OSError:
-        pass
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"ffmpeg concat failed: {(result.stderr or '').strip()[:400]}"
-        )
-    _audio_memory_log("ffmpeg_concat_done", output_path=output_path)
-
-
-def _ffmpeg_append_mp3(master_path: str, segment_path: str, work_dir: str):
-    """Incrementally merge one segment into master (two-file concat, low RAM)."""
-    if not os.path.isfile(segment_path):
-        return
-    if not os.path.isfile(master_path):
-        shutil.copy2(segment_path, master_path)
-        return
-
-    tmp_out = os.path.join(work_dir, f"_append_{os.getpid()}_{secrets.token_hex(4)}.mp3")
-    _ffmpeg_concat_mp3_files([master_path, segment_path], tmp_out)
-    os.replace(tmp_out, master_path)
-
-
 def synthesize_audio_from_script(script: str, podcast_id: str = ""):
-    """
-    Low-memory synthesis: stream TTS to disk (no alignment JSON), incremental ffmpeg merge.
-    Background music is off by default on Render (WECAST_AUDIO_INCLUDE_MUSIC=1 to enable).
-    """
-    _audio_stage_log("synthesis_entry", phase="before")
     music_index = 0
     script = (script or "").strip()
     if not script:
         return False, "Script is empty."
 
-    _audio_stage_log("script_extracted", script_chars=len(script))
     segments = parse_script_into_segments(script)
     if not segments:
         return False, "Nothing to read after cleaning script."
 
-    ok_limits, limit_error, estimate = _validate_audio_resource_estimate(script, segments)
-    if not ok_limits:
-        _audio_stage_log("limits_rejected", error=limit_error[:120])
-        return False, {
-            "error": limit_error,
-            "code": "audio_performance_limit",
-            "estimate": estimate,
-        }
-
-    if not _audio_ffmpeg_ready():
-        _audio_stage_log("ffmpeg_ready", ready=False)
-        return False, "ffmpeg not installed/configured"
-    _audio_stage_log("ffmpeg_ready", ready=True)
-
-    if not _elevenlabs_key_ready():
-        _audio_stage_log("elevenlabs_ready", ready=False)
-        return False, "ElevenLabs API key is not configured."
-
-    if not r2_client:
-        _audio_stage_log("r2_ready", ready=False)
-        return False, "Audio storage (R2) is not configured."
-
     speaker_to_voice, default_voice = build_speaker_voice_map()
+
+    audio_parts = []
     word_timeline = []
-    timeline_offset = 0.0
-    speech_segment_count = 0
-    sync_segment = 0
+    timeline_offset = 0.0  # seconds
 
-    safe_id = re.sub(r"[^A-Za-z0-9_-]", "", podcast_id or "") or "output"
+    for speaker, text in segments:
+        # ----------------------
+        # MUSIC SEGMENT
+        # ----------------------
+        if speaker.strip().lower() == "__music__":
+            intro = session.get("introMusic", "")
+            body = session.get("bodyMusic", "")
+            outro = session.get("outroMusic", "")
+
+            if music_index == 0:
+                selected_music = intro
+            elif music_index in (1, 2):
+                selected_music = body
+            else:
+                selected_music = outro
+
+            music_index += 1
+
+            if selected_music:
+                music_path = os.path.join("static", "music", selected_music)
+                if os.path.exists(music_path):
+                    music_clip = AudioSegment.from_mp3(music_path)
+                    audio_parts.append(music_clip)
+
+                    # advance offset
+                    timeline_offset += (len(music_clip) / 1000.0)
+
+            continue
+
+        # ----------------------
+        # SPEECH SEGMENT
+        # ----------------------
+        if is_arabic(text):
+            tts_text = text.strip()
+        else:
+            tts_text = clean_script_for_tts(text)
+
+        if not tts_text.strip():
+            continue
+
+        voice_id = speaker_to_voice.get(speaker, default_voice)
+
+        try:
+            audio_bytes, segment_words = eleven_tts_with_timestamps(
+                text=tts_text,
+                voice_id=voice_id,
+                model_id="eleven_multilingual_v2",
+            )
+        except Exception as e:
+            return False, str(e)
+
+        speech_segment = AudioSegment.from_file(BytesIO(audio_bytes), format="mp3")
+        audio_parts.append(speech_segment)
+
+        # shift segment words to global timeline
+        for w in segment_words:
+            word_timeline.append({
+                "w": w["w"],
+                "start": w["start"] + timeline_offset,
+                "end": w["end"] + timeline_offset,
+                "speaker": speaker,
+            })
+
+        # advance offset by this speech duration
+        timeline_offset += (len(speech_segment) / 1000.0)
+
+    if not audio_parts:
+        return False, "No audio data generated."
+
+    final_audio = AudioSegment.silent(duration=500)
+    timeline_offset_final = 0.5  # because we added 500ms silence
+
+    for w in word_timeline:
+        w["start"] += timeline_offset_final
+        w["end"] += timeline_offset_final
+
+    for item in audio_parts:
+        final_audio += item
+
+    safe_id = re.sub(r"[^A-Za-z0-9_-]", "", podcast_id or "")
+    if not safe_id:
+        safe_id = "output"
+
     local_filename = f"output_{safe_id}.mp3"
+    buffer = BytesIO()
+    final_audio.export(buffer, format="mp3")
+    mp3_bytes = buffer.getvalue()
+
+    # Upload to R2
     object_key = f"episodes/{safe_id}/{local_filename}"
-
-    _audio_memory_log(
-        "synthesis_start",
-        podcast_id=safe_id,
-        segment_count=len(segments),
-        speech_segments=estimate.get("segments"),
-        tts_requests=estimate.get("tts_requests"),
-        estimated_memory_mb=estimate.get("estimated_memory_mb"),
-        include_music=WECAST_AUDIO_EFFECTIVE_INCLUDE_MUSIC,
-        safe_emergency_mode=AUDIO_SAFE_EMERGENCY_MODE,
-        tts_format=AUDIO_TTS_OUTPUT_FORMAT,
-    )
-
-    try:
-        _audio_stage_log("temp_workspace", phase="before")
-        with tempfile.TemporaryDirectory(prefix="wecast_audio_") as temp_dir:
-            _audio_stage_log("temp_workspace", phase="after", temp_dir=temp_dir)
-            master_path = os.path.join(temp_dir, local_filename)
-            concat_segment_paths = []
-            silence_path = os.path.join(temp_dir, "lead_silence.mp3")
-            _audio_stage_log("lead_silence_create", phase="before")
-            _ffmpeg_create_silence_mp3(silence_path, duration_ms=500)
-            _audio_stage_log("lead_silence_create", phase="after")
-            concat_segment_paths.append(silence_path)
-            lead_duration = _probe_mp3_duration_seconds(silence_path)
-            timeline_offset += lead_duration
-            print(
-                f"transcript_sync segment=lead_silence "
-                f"actual_duration={lead_duration:.3f} accumulated={timeline_offset:.3f}",
-                flush=True,
-            )
-            gc.collect()
-            _audio_memory_log("concat_queue_initialized", path=master_path)
-
-            for index, (speaker, text) in enumerate(segments):
-                if speaker.strip().lower() == "__music__":
-                    if not WECAST_AUDIO_EFFECTIVE_INCLUDE_MUSIC:
-                        _audio_memory_log("music_skipped", index=index)
-                        continue
-
-                    intro = session.get("introMusic", "")
-                    body = session.get("bodyMusic", "")
-                    outro = session.get("outroMusic", "")
-
-                    if music_index == 0:
-                        selected_music = intro
-                    elif music_index in (1, 2):
-                        selected_music = body
-                    else:
-                        selected_music = outro
-
-                    music_index += 1
-                    if not selected_music:
-                        continue
-
-                    music_path = os.path.join("static", "music", selected_music)
-                    if not os.path.exists(music_path):
-                        continue
-
-                    music_abs = os.path.abspath(music_path)
-                    _audio_memory_log(
-                        "music_append_start",
-                        index=index,
-                        music=selected_music,
-                    )
-                    concat_segment_paths.append(music_abs)
-                    music_duration = _probe_mp3_duration_seconds(music_abs)
-                    timeline_offset += music_duration
-                    print(
-                        f"transcript_sync segment=music_{index} "
-                        f"actual_duration={music_duration:.3f} accumulated={timeline_offset:.3f}",
-                        flush=True,
-                    )
-                    _audio_memory_log(
-                        "music_segment_merged",
-                        index=index,
-                        duration_sec=round(music_duration, 2),
-                    )
-                    gc.collect()
-                    continue
-
-                if is_arabic(text):
-                    tts_text = text.strip()
-                else:
-                    tts_text = clean_script_for_tts(text)
-
-                if not tts_text.strip():
-                    continue
-
-                voice_id = speaker_to_voice.get(speaker, default_voice)
-                tts_chunks = _split_tts_text(tts_text)
-
-                for chunk_index, tts_chunk in enumerate(tts_chunks):
-                    segment_path = os.path.join(temp_dir, f"speech_{index:04d}_{chunk_index:02d}.mp3")
-
-                    _audio_stage_log(
-                        "tts_stream",
-                        phase="before",
-                        index=index,
-                        chunk=chunk_index + 1,
-                        chunks=len(tts_chunks),
-                        speaker=speaker,
-                        chars=len(tts_chunk),
-                    )
-                    try:
-                        eleven_tts_stream_to_file(
-                            text=tts_chunk,
-                            voice_id=voice_id,
-                            output_path=segment_path,
-                        )
-                    except Exception as exc:
-                        return False, str(exc)
-
-                    segment_bytes = os.path.getsize(segment_path)
-                    _audio_stage_log(
-                        "tts_stream",
-                        phase="after",
-                        index=index,
-                        chunk=chunk_index + 1,
-                        bytes=segment_bytes,
-                    )
-
-                    segment_duration = _probe_mp3_duration_seconds(segment_path)
-                    word_timeline.extend(
-                        _estimate_word_timeline_from_text(
-                            tts_chunk,
-                            speaker,
-                            timeline_offset,
-                            segment_duration,
-                        )
-                    )
-                    timeline_offset += segment_duration
-                    print(
-                        f"transcript_sync segment={sync_segment} "
-                        f"actual_duration={segment_duration:.3f} accumulated={timeline_offset:.3f}",
-                        flush=True,
-                    )
-                    sync_segment += 1
-
-                    _audio_stage_log(
-                        "queue_audio_segment",
-                        phase="before",
-                        index=index,
-                        chunk=chunk_index + 1,
-                    )
-                    concat_segment_paths.append(segment_path)
-                    _audio_stage_log(
-                        "queue_audio_segment",
-                        phase="after",
-                        index=index,
-                        chunk=chunk_index + 1,
-                    )
-
-                    _audio_memory_log(
-                        "speech_chunk_queued",
-                        index=index,
-                        chunk=chunk_index + 1,
-                        duration_sec=round(segment_duration, 2),
-                        speech_segments=speech_segment_count + 1,
-                    )
-                    gc.collect()
-
-                speech_segment_count += 1
-
-            if speech_segment_count == 0:
-                return False, "No audio data generated."
-
-            _audio_stage_log(
-                "ffmpeg_final_concat",
-                phase="before",
-                segment_count=len(concat_segment_paths),
-            )
-            _ffmpeg_concat_mp3_files(concat_segment_paths, master_path)
-            _audio_stage_log(
-                "ffmpeg_final_concat",
-                phase="after",
-                segment_count=len(concat_segment_paths),
-            )
-
-            output_path = master_path
-            measured_duration = _probe_mp3_duration_seconds(output_path)
-            if measured_duration > MAX_DURATION_HARD:
-                return (
-                    False,
-                    f"Generated audio ({int(measured_duration)}s) exceeds the "
-                    f"{int(MAX_DURATION_HARD)}s emergency hard limit.",
-                )
-
-            _audio_stage_log(
-                "upload",
-                phase="before",
-                output_path=output_path,
-                duration_sec=round(measured_duration, 2),
-            )
-            upload_file_to_r2(output_path, object_key, "audio/mpeg")
-            _audio_stage_log("upload", phase="after", object_key=object_key)
-            gc.collect()
-
-    except Exception as synthesis_error:
-        print("Audio synthesis failed:", synthesis_error, flush=True)
-        traceback.print_exc()
-        _audio_stage_log("synthesis_failure", error=str(synthesis_error)[:200])
-        return False, f"Audio synthesis failed: {synthesis_error}"
-
+    upload_bytes_to_r2(mp3_bytes, object_key, "audio/mpeg")
     signed_url = build_r2_asset_url(object_key, expires_in=3600)
-    if not signed_url:
-        _audio_stage_log("signed_url_failure", object_key=object_key)
-        return False, "Audio uploaded but URL could not be generated."
-
-    _audio_stage_log("synthesis_success", object_key=object_key)
-    _audio_stage_log("synthesis_entry", phase="after")
 
     return True, {
         "url": signed_url,
@@ -8784,250 +7041,90 @@ def synthesize_audio_from_script(script: str, podcast_id: str = ""):
         "words": word_timeline,
     }
 
-
-@app.post("/api/audio/diagnostic")
-def api_audio_diagnostic():
-    """
-    Authenticated production smoke test for CORS, Flask routing, ffmpeg, R2 upload,
-    and /api/audio-style JSON shape without calling ElevenLabs.
-    """
-    user_id, err = _require_login_user()
-    if err:
-        return err
-    if not r2_client:
-        return _audio_api_json_error(
-            "Audio storage (R2) is not configured.",
-            "audio_storage_not_configured",
-            status=503,
-        )
-    if not _audio_ffmpeg_ready():
-        return _audio_api_json_error(
-            "ffmpeg not installed/configured",
-            "ffmpeg_not_configured",
-            status=503,
-        )
-
-    safe_user = re.sub(r"[^A-Za-z0-9_-]", "", user_id or "")[:48] or "user"
-    diag_id = secrets.token_hex(8)
-    object_key = f"diagnostics/audio/{safe_user}/{diag_id}.mp3"
-    started = time.monotonic()
-
-    try:
-        with tempfile.TemporaryDirectory(prefix="wecast_audio_diag_") as temp_dir:
-            output_path = os.path.join(temp_dir, "diagnostic.mp3")
-            _ffmpeg_create_silence_mp3(output_path, duration_ms=250)
-            duration_sec = _probe_mp3_duration_seconds(output_path)
-            upload_file_to_r2(output_path, object_key, "audio/mpeg")
-            signed_url = build_r2_asset_url(object_key, expires_in=300)
-    except Exception as exc:
-        print("Audio diagnostic failed:", exc, flush=True)
-        traceback.print_exc()
-        return _audio_api_json_error(
-            "Audio diagnostic failed on the server.",
-            "audio_diagnostic_failed",
-            status=500,
-        )
-
-    delete_from_r2_quietly(object_key, label="Audio diagnostic cleanup")
-    return _apply_cors_headers(
-        jsonify(
-            ok=True,
-            diagnostic=True,
-            elevenLabsCalled=False,
-            url=signed_url,
-            audioKey=object_key,
-            words=[],
-            durationSec=round(duration_sec, 3),
-            elapsedSec=round(time.monotonic() - started, 2),
-        )
-    )
-
-
 @app.post("/api/audio")
 def api_audio():
-    _audio_stage_log("api_request_received", phase="before")
-    try:
-        _audio_stage_log("payload_parse", phase="before")
-        payload = request.get_json(silent=True) or {}
-        script = (payload.get("scriptText") or request.form.get("scriptText") or "").strip()
-        podcast_id = (payload.get("podcastId") or "").strip()
-        ui_language = (payload.get("language") or "").strip().lower()
-        _audio_stage_log(
-            "payload_parsed",
-            phase="after",
-            script_chars=len(script),
-            podcast_id=podcast_id or "<missing>",
-            word_count=len(re.findall(r"\S+", script)),
-        )
+    
+    payload = request.get_json(silent=True) or {}
+    script = (payload.get("scriptText") or request.form.get("scriptText") or "").strip()
+    podcast_id = (payload.get("podcastId") or "").strip()
+    ui_language = (payload.get("language") or "").strip().lower()
 
-        incoming_speakers_info = payload.get("speakers_info")
-        if isinstance(incoming_speakers_info, list) and incoming_speakers_info:
-            draft = session.get("create_draft") or {}
-            draft["speakers_info"] = incoming_speakers_info
-            session["create_draft"] = draft
-            session.modified = True
-
-        if not podcast_id:
-            _audio_stage_log("api_failure", reason="missing_podcast_id")
-            return _audio_api_json_error(
-                "Missing podcastId",
-                "missing_podcast_id",
-                status=400,
-            )
-
-        if not script:
-            return _audio_api_json_error("Script is empty.", "empty_script", status=400)
-
-        _audio_stage_log("synthesis_invoke", phase="before")
-        ok, result = synthesize_audio_from_script(script, podcast_id)
-        _audio_stage_log("synthesis_invoke", phase="after", ok=ok)
-        if not ok:
-            error_code = ""
-            error_extra = {}
-            if isinstance(result, dict):
-                error_message = result.get("error") or "Audio generation failed."
-                error_code = result.get("code") or ""
-                if result.get("estimate"):
-                    error_extra["estimate"] = result.get("estimate")
-            else:
-                error_message = result if isinstance(result, str) else "Audio generation failed."
-            is_ffmpeg = "ffmpeg" in error_message.lower()
-            is_eleven = "elevenlabs" in error_message.lower()
-            is_r2 = "storage" in error_message.lower() or "r2" in error_message.lower()
-            is_limit = (
-                "maximum allowed" in error_message
-                or "exceeds the" in error_message
-                or "server limit" in error_message
-                or "too long" in error_message
-                or "emergency hard limit" in error_message
-                or "estimated to" in error_message
-                or "too many" in error_message.lower()
-                or "too large" in error_message.lower()
-            )
-            _audio_stage_log("api_failure", reason=error_message[:160])
-            return _audio_api_json_error(
-                error_message,
-                (
-                    error_code
-                    if error_code
-                    else "ffmpeg_not_configured"
-                    if is_ffmpeg
-                    else "elevenlabs_not_configured"
-                    if is_eleven
-                    else "audio_storage_not_configured"
-                    if is_r2
-                    else "audio_performance_limit"
-                    if is_limit
-                    else "audio_generation_failed"
-                ),
-                status=503
-                if (is_ffmpeg or is_eleven or is_r2)
-                else 400,
-                **error_extra,
-            )
-
-        session["last_audio_url"] = result["url"]
-        session["last_audio_key"] = result.get("audioKey", "")
-        session["last_word_timeline"] = result.get("words") or []
+    print("DEBUG /api/audio script length:", len(script))
+    print("DEBUG /api/audio first 200 chars:", script[:200])
+    print("DEBUG /api/audio podcastId:", podcast_id)
+    incoming_speakers_info = payload.get("speakers_info")
+    if isinstance(incoming_speakers_info, list) and incoming_speakers_info:
+        draft = session.get("create_draft") or {}
+        draft["speakers_info"] = incoming_speakers_info
+        session["create_draft"] = draft
         session.modified = True
 
-        _audio_stage_log("firestore_persist", phase="before")
-        user_id = get_current_podcast_owner_id()
-        persist_error = ""
-        if user_id and podcast_id:
-            try:
-                podcast_ref = db.collection("podcasts").document(podcast_id)
-                doc = podcast_ref.get()
+    if not podcast_id:
+        return jsonify(error="Missing podcastId"), 400
 
-                if doc.exists:
-                    pdata = doc.to_dict() or {}
-                    if _podcast_owned_by_user(pdata, user_id):
-                        words = result.get("words") or []
-                        transcript_text = ""
-                        if words:
-                            try:
-                                transcript_text = build_transcript_text_with_speakers(words)
-                            except Exception:
-                                transcript_text = ""
-                        old_audio_key = (pdata.get("audioKey") or "").strip()
-                        new_audio_key = (result.get("audioKey") or "").strip()
+    user_id = get_current_podcast_owner_id()
+    if not user_id:
+        return jsonify(error="Not logged in"), 401
 
-                        if ui_language in ("en", "ar"):
-                            podcast_ref.set({"language": ui_language}, merge=True)
+    podcast_ref = db.collection("podcasts").document(podcast_id)
+    doc = podcast_ref.get()
+    if not doc.exists:
+        return jsonify(error="Podcast not found"), 404
+    pdata = doc.to_dict() or {}
+    if not _podcast_owned_by_user(pdata, user_id):
+        return jsonify(error="Forbidden"), 403
 
-                        audio_updates = {
-                            "audioUrl": result["url"],
-                            "audioKey": new_audio_key,
-                            "audioUpdatedAt": firestore.SERVER_TIMESTAMP,
-                            "audioGenerationMode": "safe_emergency",
-                            "transcriptTimingStatus": "probed_segment_duration",
-                        }
-                        if transcript_text:
-                            audio_updates["transcriptText"] = transcript_text
-                            audio_updates["transcriptUpdatedAt"] = firestore.SERVER_TIMESTAMP
-                        podcast_ref.set(audio_updates, merge=True)
+    ok, result = synthesize_audio_from_script(script, podcast_id)
+    if not ok:
+        return jsonify(error=result), 400
 
-                        if words:
-                            podcast_ref.collection("transcripts").document("main").set(
-                                {
-                                    "words": words,
-                                    "updatedAt": firestore.SERVER_TIMESTAMP,
-                                },
-                                merge=True,
-                            )
+    # keep audio in session 
+    session["last_audio_url"] = result["url"]
+    session["last_audio_key"] = result.get("audioKey", "")
+    session.modified = True
 
-                        if words and not AUDIO_SKIP_GPT_CHAPTERS:
-                            language = ui_language or pdata.get("language") or "en"
-                            if not transcript_text:
-                                try:
-                                    transcript_text = build_transcript_text_with_speakers(words)
-                                except Exception:
-                                    transcript_text = ""
-                            chapters = _chapters_for_audio_save(
-                                words, transcript_text, language=language
-                            )
-                            podcast_ref.set(
-                                {
-                                    "chapters": chapters,
-                                    "chaptersUpdatedAt": firestore.SERVER_TIMESTAMP,
-                                    "chaptersStatus": "probed_segment_duration",
-                                },
-                                merge=True,
-                            )
+    words = result.get("words") or []
+    transcript_text = build_transcript_text_with_speakers(words)
+    old_audio_key = (pdata.get("audioKey") or "").strip()
+    new_audio_key = (result.get("audioKey") or "").strip()
 
-                        if old_audio_key and new_audio_key and old_audio_key != new_audio_key:
-                            delete_from_r2_quietly(old_audio_key, label="Audio replace")
-                    else:
-                        print("WARN: user does not own this podcast. Not saving audio metadata.")
-                else:
-                    print("WARN: podcastId not found. Not saving audio metadata.")
-            except Exception as persist_exc:
-                persist_error = str(persist_exc)
-                print("WARN /api/audio Firestore persist failed:", persist_exc, flush=True)
-                traceback.print_exc()
-        _audio_stage_log("firestore_persist", phase="after", error=persist_error or None)
+    if ui_language in ("en", "ar"):
+        podcast_ref.set({
+            "language": ui_language,
+        }, merge=True)
 
-        _audio_stage_log("api_success", phase="after", audio_key=result.get("audioKey"))
-        response_payload = {
-            "ok": True,
-            "url": result["url"],
-            "audioKey": result.get("audioKey", ""),
-            "words": result.get("words") or [],
-        }
-        if persist_error:
-            response_payload["warning"] = (
-                "Audio generated but episode metadata could not be fully saved."
-            )
-        return _apply_cors_headers(jsonify(response_payload))
-    except Exception as audio_error:
-        print("API /api/audio failed:", audio_error, flush=True)
-        traceback.print_exc()
-        _audio_stage_log("api_failure", reason=str(audio_error)[:200])
-        return _audio_api_json_error(
-            "Audio generation failed on the server. Please try again.",
-            "audio_server_error",
-            status=500,
-        )
+    # Save transcript text in main podcast doc (small)
+    podcast_ref.set({
+        "transcriptText": transcript_text,
+        "transcriptUpdatedAt": firestore.SERVER_TIMESTAMP,
+        "audioUrl": result["url"],
+        "audioKey": new_audio_key,
+        "audioUpdatedAt": firestore.SERVER_TIMESTAMP,
+    }, merge=True)
+
+    if old_audio_key and new_audio_key and old_audio_key != new_audio_key:
+        delete_from_r2_quietly(old_audio_key, label="Audio replace")
+
+    # Save full word timeline in a subcollection doc
+    podcast_ref.collection("transcripts").document("main").set({
+        "words": words,
+        "updatedAt": firestore.SERVER_TIMESTAMP,
+    }, merge=True)
+    
+    # Generate & save chapters
+    language = ui_language or pdata.get("language") or "en"
+    chapters = build_chapters(words, transcript_text, language=language)
+
+    podcast_ref.set({
+        "chapters": chapters,
+        "chaptersUpdatedAt": firestore.SERVER_TIMESTAMP,
+    }, merge=True)
+
+    return jsonify(
+        url=result["url"],
+        audioKey=result.get("audioKey", ""),
+        words=result["words"]
+    )
 
 @app.get("/api/audio/<podcast_id>")
 def get_audio(podcast_id):
@@ -9324,9 +7421,12 @@ def save_all_podcast(podcast_id):
 
     updates["status"] = "saved"
     updates["savedAt"] = firestore.SERVER_TIMESTAMP
+    updates["hasEditDraft"] = False
+    updates["editDraftUpdatedAt"] = firestore.DELETE_FIELD
 
     if updates:
         ref.set(updates, merge=True)
+        _edit_draft_ref(podcast_id).delete()
         print(f"[WeCast guest restore] title saved in Firestore: {updates.get('title') or data.get('title') or ''}")
 
     if isinstance(words, list) and words:
@@ -9393,6 +7493,8 @@ def save_preview_snapshot():
     updates = {
         "status": "saved",
         "savedAt": firestore.SERVER_TIMESTAMP,
+        "hasEditDraft": False,
+        "editDraftUpdatedAt": firestore.DELETE_FIELD,
     }
 
     if audio_url:
@@ -9502,31 +7604,6 @@ def api_username_availability():
     )
 
 
-@app.get("/api/auth/runtime-diagnostics")
-def api_auth_runtime_diagnostics():
-    """Safe production checks (no secrets) for frontend/backend auth alignment."""
-    api_key = _firebase_web_api_key()
-    admin_project = _firebase_admin_project_id()
-    return jsonify(
-        {
-            "production": _email_is_production(),
-            "frontendOrigins": FRONTEND_ORIGINS,
-            "sessionCookieSecure": bool(app.config.get("SESSION_COOKIE_SECURE")),
-            "sessionCookieSameSite": app.config.get("SESSION_COOKIE_SAMESITE"),
-            "firebaseWebApiKeyConfigured": bool(api_key),
-            "firebaseWebApiKeyPrefix": (api_key[:8] if api_key else ""),
-            "firebaseAdminProjectId": admin_project,
-            "firebaseAdminConfigured": bool(admin_project),
-            "expectedFirebaseProjectId": "wecast-e8019",
-            "firebaseProjectsMatch": admin_project == "wecast-e8019",
-            "requestOrigin": (request.headers.get("Origin") or "").strip(),
-            "corsAllowedForOrigin": _is_allowed_cors_origin(
-                request.headers.get("Origin") or ""
-            ),
-        }
-    )
-
-
 @app.post("/api/auth/resolve-identifier")
 def api_auth_resolve_identifier():
     data = request.get_json(silent=True) or {}
@@ -9548,27 +7625,13 @@ def api_auth_resolve_identifier():
                 400,
             )
         email_resolution = resolve_login_strategy_for_email(normalized_email)
-        firebase_state = email_resolution.get("firebaseState") or {}
-        user_data = email_resolution.get("userData") or {}
-        login_strategy = email_resolution.get("loginStrategy") or "firebase_email"
-        _log_auth_login_step(
-            "resolve_identifier",
-            email=normalized_email,
-            loginStrategy=login_strategy,
-            hasPasswordProvider=bool(firebase_state.get("hasPasswordProvider")),
-            hasPasswordHash=bool(user_data.get("password_hash")),
-            emailVerified=bool(firebase_state.get("emailVerified")),
-        )
         return jsonify(
             {
                 "identifierType": "email",
                 "normalizedIdentifier": normalized_email,
                 "email": normalized_email,
-                "loginStrategy": login_strategy,
+                "loginStrategy": email_resolution.get("loginStrategy") or "firebase_email",
                 "authProvider": email_resolution.get("authProvider") or "password",
-                "hasPasswordProvider": bool(firebase_state.get("hasPasswordProvider")),
-                "hasPasswordHash": bool(user_data.get("password_hash")),
-                "emailVerified": bool(firebase_state.get("emailVerified")),
             }
         )
 
@@ -9860,16 +7923,6 @@ def login():
         user_data.get("authProvider"),
         stored_hash,
     )
-    login_strategy_hint = resolve_login_strategy_for_email(user_email).get("loginStrategy")
-    _log_auth_login_step(
-        "login_entered",
-        using_email=using_email,
-        email=user_email or "<none>",
-        has_user_doc=bool(user_data),
-        has_password_hash=bool(stored_hash),
-        has_password_provider=bool(firebase_state and firebase_state.get("hasPasswordProvider")),
-        login_strategy_hint=login_strategy_hint,
-    )
 
     if not user_data:
         if firebase_state:
@@ -9901,55 +7954,57 @@ def login():
             404,
         )
 
-    if firebase_state:
-        if (
-            firebase_state.get("authProvider") in {"google", "github"}
-            and not firebase_state.get("hasPasswordProvider")
-        ):
-            provider = firebase_state.get("authProvider")
-            provider_label = _auth_provider_label(provider)
-            _log_auth_login_step("login_rejected", reason="social_only", provider=provider)
+    if stored_hash:
+        if not check_password_hash(stored_hash, password):
             return auth_error_response(
-                "provider_mismatch",
-                f"This account uses {provider_label} sign-in. Use that button to continue.",
-                409,
-                authProvider=provider,
+                "wrong_password",
+                "The password you entered is incorrect.",
+                401,
             )
 
-    password_ok, password_path = _verify_password_for_login(
-        user_email,
-        user_data,
-        user_doc,
-        password,
-        firebase_state,
-    )
-    _log_auth_login_step(
-        "password_verification",
-        ok=password_ok,
-        path=password_path,
-    )
-    if not password_ok:
-        _log_auth_login_step("login_rejected", reason="wrong_password")
-        return auth_error_response(
-            "wrong_password",
-            "The password you entered is incorrect.",
-            401,
-        )
+        if (
+            user_data.get("emailVerified") is False
+            and firebase_state
+            and firebase_state.get("hasPasswordProvider")
+            and not firebase_state.get("emailVerified", True)
+        ):
+            return auth_error_response(
+                "email_not_verified",
+                "Please verify your email first before logging in.",
+                403,
+                email=user_email,
+                emailVerified=False,
+                pendingVerification=True,
+            )
+    else:
+        if firebase_state:
+            if (
+                firebase_state.get("authProvider") in {"google", "github"}
+                and not firebase_state.get("hasPasswordProvider")
+            ):
+                provider = firebase_state.get("authProvider")
+                provider_label = _auth_provider_label(provider)
+                return auth_error_response(
+                    "provider_mismatch",
+                    f"This account uses {provider_label} sign-in. Use that button to continue.",
+                    409,
+                    authProvider=provider,
+                )
+            if auth_provider == "password" or firebase_state.get("hasPasswordProvider"):
+                return auth_error_response(
+                    "wrong_password",
+                    "The password you entered is incorrect.",
+                    401,
+                )
 
-    if (
-        user_data.get("emailVerified") is False
-        and firebase_state
-        and firebase_state.get("hasPasswordProvider")
-        and not firebase_state.get("emailVerified", True)
-    ):
-        _log_auth_login_step("login_rejected", reason="email_not_verified")
         return auth_error_response(
-            "email_not_verified",
-            "Please verify your email first before logging in.",
-            403,
-            email=user_email,
-            emailVerified=False,
-            pendingVerification=True,
+            "account_not_found",
+            (
+                "We couldn't find an account with that email address."
+                if using_email
+                else "We couldn't find an account with that username."
+            ),
+            404,
         )
 
     firebase_uid = (
@@ -9962,13 +8017,6 @@ def login():
     session["user_id"] = user_email
     session["firebase_uid"] = firebase_uid
     session.modified = True
-
-    _log_auth_login_step(
-        "session_created",
-        path=password_path,
-        email=user_email,
-        firebase_uid=bool(firebase_uid),
-    )
 
     return (
         jsonify(
@@ -9989,45 +8037,7 @@ def login():
 
 @app.post("/api/reset-password-direct")
 def reset_password_direct():
-    from services.email_service import send_password_changed_email
-
-    data = request.get_json(silent=True) or {}
-
-    email = (data.get("email") or "").strip().lower()
-    new_password = data.get("new_password") or ""
-    confirm_password = data.get("confirm_password") or ""
-
-    if not email or not new_password or not confirm_password:
-        return jsonify(error="All fields are required."), 400
-
-    if new_password != confirm_password:
-        return jsonify(error="Passwords do not match."), 400
-
-    password_error = _password_validation_error(new_password, confirm_password)
-    if password_error:
-        return jsonify(error=password_error), 400
-
-    doc = get_user_doc_by_candidates(email, email=email)
-
-    if not doc or not doc.exists:
-        return jsonify(error="Email is not registered."), 404
-
-    new_hash = generate_password_hash(new_password)
-    doc.reference.update(
-        {
-            "password_hash": new_hash,
-            "failed_attempts": 0,
-            "lock_until": None,
-        }
-    )
-
-    if is_reasonably_valid_email(email):
-        try:
-            send_password_changed_email(email)
-        except Exception as email_error:
-            print(f"Password changed confirmation email failed: {email_error}")
-
-    return jsonify(message="Password updated successfully. You can now log in."), 200
+    return jsonify(error="This password reset path is disabled. Use the email reset flow."), 410
 
 
 @app.post("/api/social-login")
@@ -10035,19 +8045,10 @@ def social_login():
     from firebase_admin import auth as fb_auth
 
     data = request.get_json(silent=True) or {}
-    id_token = (data.get("idToken") or "").strip()
+    id_token = data.get("idToken")
 
     if not id_token:
         return jsonify(error="Missing Firebase ID token"), 400
-
-    if not _looks_like_firebase_jwt(id_token):
-        _log_auth_login_step(
-            "social_login_rejected",
-            reason="malformed_id_token",
-            tokenLength=len(id_token),
-            tokenSegments=len(id_token.split(".")),
-        )
-        return jsonify(error="Invalid Firebase ID token format.", code="malformed_id_token"), 400
 
     try:
         decoded = fb_auth.verify_id_token(id_token)
@@ -10057,16 +8058,15 @@ def social_login():
         if not email:
             return jsonify(error="Unable to read email from Firebase token"), 400
 
-        sign_in_provider = decoded.get("firebase", {}).get("sign_in_provider", "oauth")
-        mapped_provider = _map_firebase_sign_in_provider(sign_in_provider)
         final_data = _upsert_firebase_user_profile(
             email=email,
             display_name=name,
-            auth_provider=mapped_provider,
+            auth_provider=decoded.get("firebase", {}).get("sign_in_provider", "oauth"),
             email_verified=bool(decoded.get("email_verified")),
             firebase_uid=decoded.get("uid") or "",
             mark_login=True,
         )
+
 
         firebase_uid = (decoded.get("uid") or "").strip()
         token = create_token(email, email, firebase_uid=firebase_uid)
@@ -10075,25 +8075,14 @@ def social_login():
         session["firebase_uid"] = firebase_uid
         session.modified = True
 
-        user_payload = _session_user_payload(final_data, email)
-        _log_auth_login_step(
-            "social_login_success",
-            email=email,
-            authProvider=user_payload.get("authProvider"),
-            signInProvider=sign_in_provider,
-        )
         return jsonify(
             message="Login successful",
             token=token,
-            user=user_payload,
+            user=_session_user_payload(final_data, email),
         )
 
     except Exception as e:
         print("Social login error:", e)
-        _log_auth_login_step(
-            "social_login_failed",
-            errorType=type(e).__name__,
-        )
         return jsonify(
             error=(
                 "We couldn't verify your Firebase sign-in. Make sure the backend "
@@ -10105,103 +8094,20 @@ def social_login():
 def firebase_email_login():
     from firebase_admin import auth as fb_auth
 
+    data = request.get_json(silent=True) or {}
+    id_token = data.get("idToken")
+
+    if not id_token:
+        return jsonify(error="Missing Firebase ID token"), 400
+
     try:
-        data = request.get_json(silent=True) or {}
-        id_token = (data.get("idToken") or "").strip()
-
-        if not id_token:
-            return _api_json_response(
-                {
-                    "error": "Missing Firebase ID token.",
-                    "code": "missing_id_token",
-                },
-                status=400,
-            )
-
-        if not _looks_like_firebase_jwt(id_token):
-            _log_auth_login_step(
-                "firebase_email_login_rejected",
-                reason="malformed_id_token",
-                tokenLength=len(id_token),
-                tokenSegments=len(id_token.split(".")),
-                origin=(request.headers.get("Origin") or "").strip(),
-            )
-            return _api_json_response(
-                {
-                    "error": (
-                        "Invalid Firebase ID token format. The client must send a JWT "
-                        "from user.getIdToken(), not a placeholder string."
-                    ),
-                    "code": "malformed_id_token",
-                },
-                status=400,
-            )
-
-        _log_auth_login_step(
-            "firebase_email_login_entered",
-            tokenLength=len(id_token),
-            origin=(request.headers.get("Origin") or "").strip(),
-        )
-
-        try:
-            decoded = fb_auth.verify_id_token(id_token)
-        except fb_auth.InvalidIdTokenError:
-            _log_auth_login_step("firebase_email_login_rejected", reason="invalid_id_token")
-            return _api_json_response(
-                {
-                    "error": "Invalid or expired login token.",
-                    "code": "invalid_token",
-                },
-                status=401,
-            )
-        except fb_auth.ExpiredIdTokenError:
-            _log_auth_login_step("firebase_email_login_rejected", reason="expired_id_token")
-            return _api_json_response(
-                {
-                    "error": "Invalid or expired login token.",
-                    "code": "expired_token",
-                },
-                status=401,
-            )
-        except fb_auth.RevokedIdTokenError:
-            _log_auth_login_step("firebase_email_login_rejected", reason="revoked_id_token")
-            return _api_json_response(
-                {
-                    "error": "Invalid or expired login token.",
-                    "code": "revoked_token",
-                },
-                status=401,
-            )
-        except Exception as verify_error:
-            print("Firebase email login verify_id_token failed:", verify_error, flush=True)
-            traceback.print_exc()
-            _log_auth_login_step(
-                "firebase_email_login_rejected",
-                reason="verify_id_token_failed",
-                errorType=type(verify_error).__name__,
-            )
-            return _api_json_response(
-                {
-                    "error": "Invalid or expired login token.",
-                    "code": "invalid_token",
-                },
-                status=401,
-            )
-
+        decoded = fb_auth.verify_id_token(id_token)
         email = (decoded.get("email") or "").strip().lower()
         name = (data.get("name") or decoded.get("name") or "").strip()
         email_verified = bool(decoded.get("email_verified"))
-        firebase_uid = (decoded.get("uid") or "").strip()
-        sign_in_provider = decoded.get("firebase", {}).get("sign_in_provider", "password")
 
         if not email:
-            return _api_json_response(
-                {
-                    "error": "Unable to read email from Firebase token.",
-                    "code": "missing_email",
-                },
-                status=400,
-            )
+            return jsonify(error="Unable to read email from Firebase token"), 400
 
         if not email_verified:
             return auth_error_response(
@@ -10213,124 +8119,41 @@ def firebase_email_login():
                 pendingVerification=True,
             )
 
-        existing_doc = get_user_doc_by_candidates(
-            email,
-            firebase_uid=firebase_uid,
+        final_data = _upsert_firebase_user_profile(
             email=email,
+            display_name=name,
+            auth_provider=decoded.get("firebase", {}).get("sign_in_provider", "password"),
+            email_verified=email_verified,
+            firebase_uid=decoded.get("uid") or "",
+            mark_login=True,
         )
-        if existing_doc and existing_doc.exists:
-            existing_data = existing_doc.to_dict() or {}
-            if _is_user_account_deleted(existing_data):
-                _log_auth_login_step(
-                    "firebase_email_login_rejected",
-                    reason="account_deleted",
-                    email=email,
-                )
-                return _api_json_response(
-                    {
-                        "error": "This account has been deleted.",
-                        "code": "account_deleted",
-                    },
-                    status=403,
-                )
 
-        try:
-            final_data = _upsert_firebase_user_profile(
-                email=email,
-                display_name=name,
-                auth_provider="password",
-                email_verified=email_verified,
-                firebase_uid=firebase_uid,
-                mark_login=True,
-            )
-        except AuthFlowError as auth_error:
-            _log_auth_login_step(
-                "firebase_email_login_rejected",
-                reason=auth_error.code,
-            )
-            return auth_error_response(
-                auth_error.code,
-                auth_error.message,
-                auth_error.status,
-                **auth_error.extra,
-            )
-        except Exception as profile_error:
-            print("Firebase email login profile upsert failed:", profile_error, flush=True)
-            traceback.print_exc()
-            _log_auth_login_step(
-                "firebase_email_login_failed",
-                reason="profile_upsert_failed",
-                errorType=type(profile_error).__name__,
-            )
-            return _api_json_response(
-                {
-                    "error": "Could not load your account profile. Please try again.",
-                    "code": "profile_sync_failed",
-                },
-                status=500,
-            )
-
-        try:
-            app_token = _encode_app_jwt_token(email, firebase_uid=firebase_uid)
-        except Exception as token_error:
-            print("Firebase email login JWT creation failed:", token_error, flush=True)
-            traceback.print_exc()
-            return _api_json_response(
-                {
-                    "error": "Could not create an application session token.",
-                    "code": "session_token_failed",
-                },
-                status=500,
-            )
-
-        if not app_token:
-            return _api_json_response(
-                {
-                    "error": "Could not create an application session token.",
-                    "code": "session_token_failed",
-                },
-                status=500,
-            )
-
+        firebase_uid = (decoded.get("uid") or "").strip()
+        token = create_token(email, email, firebase_uid=firebase_uid)
         session["user_id"] = email
         session["firebase_uid"] = firebase_uid
         session.modified = True
 
-        user_payload = _json_safe_firestore_value(_session_user_payload(final_data, email))
-        user_payload["authProvider"] = "password"
-
-        _log_auth_login_step(
-            "firebase_email_login_success",
-            email=email,
-            email_verified=email_verified,
-            authProvider=user_payload.get("authProvider"),
-            signInProvider=sign_in_provider,
-            tokenPresent=bool(app_token),
+        return jsonify(
+            message="Login successful",
+            token=token,
+            user=_session_user_payload(final_data, email),
         )
-
-        return _api_json_response(
-            {
-                "ok": True,
-                "message": "Login successful",
-                "token": app_token,
-                "user": user_payload,
-            },
-            status=200,
+    except AuthFlowError as auth_error:
+        return auth_error_response(
+            auth_error.code,
+            auth_error.message,
+            auth_error.status,
+            **auth_error.extra,
         )
     except Exception as e:
-        print("Firebase email login unhandled error:", e, flush=True)
-        traceback.print_exc()
-        _log_auth_login_step(
-            "firebase_email_login_failed",
-            errorType=type(e).__name__,
-        )
-        return _api_json_response(
-            {
-                "error": "Login failed due to a server error. Please try again.",
-                "code": "server_error",
-            },
-            status=500,
-        )
+        print("Firebase email login error:", e)
+        return jsonify(
+            error=(
+                "We couldn't verify your Firebase sign-in. Make sure the backend "
+                "Firebase service account matches the frontend Firebase project."
+            )
+        ), 401
 
 
 def _podcast_share_url(podcast_id):

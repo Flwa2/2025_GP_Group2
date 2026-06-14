@@ -77,8 +77,7 @@ function isFinalizeAuthHydrationError(error) {
 }
 
 function finalizeAuthLog(details) {
-  if (typeof console === "undefined") return;
-  console.log("[Finalize auth]", details);
+  void details;
 }
 
 function Notice({ notice, noticeType }) {

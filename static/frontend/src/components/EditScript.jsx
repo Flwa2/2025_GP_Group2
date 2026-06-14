@@ -27,11 +27,11 @@ function formatDraftSavedTime(date = new Date()) {
   });
 }
 
-/** Persists script + title to Firestore edit draft when we have a podcast id (create / episodes flow). */
+/** Persists script + title only for explicit existing-podcast edit drafts. */
 async function syncEditScriptDraftToServer(content, showTitle) {
   const editData = readEditData();
   const podcastId = String(editData.podcastId || "").trim();
-  if (!podcastId) {
+  if (!podcastId || editData.existingPodcastEditDraft !== true) {
     return { ok: true, localOnly: true };
   }
 

@@ -52,14 +52,23 @@ export const API_BASE = resolveApiBaseUrl();
 /** Read app JWT saved at login. */
 export function getStoredAuthToken() {
   if (typeof window === "undefined") return "";
-  return (window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || "").trim();
+  const sessionToken = (window.sessionStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || "").trim();
+  if (sessionToken) return sessionToken;
+
+  const legacyToken = (window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || "").trim();
+  if (legacyToken) {
+    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+    window.sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, legacyToken);
+  }
+  return legacyToken;
 }
 
-/** Save app JWT after successful login (localStorage only). */
+/** Save app JWT after successful login for this browser session only. */
 export function storeAuthToken(token) {
   const value = String(token || "").trim();
   if (!value || typeof window === "undefined") return "";
-  window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, value);
+  window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  window.sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, value);
   window.dispatchEvent(
     new StorageEvent("storage", { key: AUTH_TOKEN_STORAGE_KEY, newValue: value })
   );
@@ -76,25 +85,14 @@ export function getAuthHeaders(extraHeaders = {}) {
   return headers;
 }
 
-function logApiFetchAuth(url, token) {
-  if (typeof console === "undefined") return;
-  console.log("[apiFetch auth]", {
-    url,
-    hasToken: Boolean(token),
-    tokenPreview: token ? token.slice(0, 12) : null,
-  });
-}
-
 /**
- * Authenticated fetch: credentials + Bearer when localStorage.token exists.
+ * Authenticated fetch: credentials + Bearer when a session token exists.
  */
 export async function apiFetch(path, options = {}) {
   const { headers: optionHeaders, body, ...rest } = options;
   const headers = getAuthHeaders(optionHeaders || {});
   const token = getStoredAuthToken();
   const url = `${API_BASE}${path}`;
-
-  logApiFetchAuth(url, token);
 
   const res = await fetch(url, {
     credentials: "include",

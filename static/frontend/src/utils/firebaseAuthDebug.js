@@ -71,7 +71,7 @@ export function describeFirebaseIdToken(token) {
     tokenLength: value.length,
     segmentCount: parts.length,
     looksLikeJwt: isPlausibleFirebaseIdToken(value),
-    tokenPreview: value ? `${value.slice(0, 12)}...` : "<empty>",
+    tokenPresent: Boolean(value),
   };
 }
 
